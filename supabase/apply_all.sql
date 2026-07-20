@@ -17,6 +17,17 @@ BEGIN
     END LOOP;
 END $$;
 
+-- Safely rename campaigns.campaign_id to id if it exists from an old schema
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' AND table_name = 'campaigns' AND column_name = 'campaign_id'
+  ) THEN
+    ALTER TABLE public.campaigns RENAME COLUMN campaign_id TO id;
+  END IF;
+END $$;
+
 ---------------------------------------------------------
 -- 1. PROFILES & ROLE SETUP
 ---------------------------------------------------------
