@@ -17,8 +17,8 @@ export interface HiggsfieldCreds {
 const HIGGSFIELD_OAUTH_TOKEN_URL = "https://mcp.higgsfield.ai/oauth2/token";
 const HIGGSFIELD_MCP_URL = "https://mcp.higgsfield.ai/mcp";
 
-const CLIENT_ID = process.env.HIGGSFIELD_CLIENT_ID || "tbw_os_client";
-const CLIENT_SECRET = process.env.HIGGSFIELD_CLIENT_SECRET || "tbw_os_secret";
+const CLIENT_ID = process.env.HIGGSFIELD_CLIENT_ID || "claude";
+const CLIENT_SECRET = process.env.HIGGSFIELD_CLIENT_SECRET || "";
 
 /**
  * Fetch and decrypt the Higgsfield integration credentials from the database.
@@ -47,15 +47,20 @@ export async function getHiggsfieldCredentials(): Promise<HiggsfieldCreds | null
     console.log("🔄 Higgsfield MCP: Access token expired or close to expiry. Refreshing...");
     try {
       const decryptedRefreshToken = decrypt(creds.refresh_token_encrypted);
+      const bodyParams = new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: decryptedRefreshToken,
+        client_id: CLIENT_ID,
+      });
+
+      if (CLIENT_SECRET) {
+        bodyParams.append("client_secret", CLIENT_SECRET);
+      }
+
       const res = await fetch(HIGGSFIELD_OAUTH_TOKEN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          refresh_token: decryptedRefreshToken,
-          client_id: CLIENT_ID,
-          client_secret: CLIENT_SECRET,
-        }),
+        body: bodyParams,
       });
 
       if (!res.ok) {

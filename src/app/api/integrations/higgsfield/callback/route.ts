@@ -6,8 +6,8 @@ import { discoverHiggsfieldModels, HiggsfieldCreds } from "@/lib/higgsfield-mcp"
 export const dynamic = "force-dynamic";
 
 const HIGGSFIELD_OAUTH_TOKEN_URL = "https://mcp.higgsfield.ai/oauth2/token";
-const CLIENT_ID = process.env.HIGGSFIELD_CLIENT_ID || "tbw_os_client";
-const CLIENT_SECRET = process.env.HIGGSFIELD_CLIENT_SECRET || "tbw_os_secret";
+const CLIENT_ID = process.env.HIGGSFIELD_CLIENT_ID || "claude";
+const CLIENT_SECRET = process.env.HIGGSFIELD_CLIENT_SECRET || "";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -16,6 +16,7 @@ export async function GET(request: NextRequest) {
   const errorParam = searchParams.get("error");
 
   const stateCookie = request.cookies.get("higgsfield_oauth_state")?.value;
+  const verifierCookie = request.cookies.get("higgsfield_oauth_verifier")?.value;
 
   if (errorParam) {
     console.error("Higgsfield OAuth callback returned error:", errorParam);
@@ -35,17 +36,28 @@ export async function GET(request: NextRequest) {
   try {
     const supabase = await createClient();
 
-    // 1. Exchange Auth Code for Access Token
+    // 1. Prepare Exchange Parameters
+    const bodyParams = new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: "https://bron.digital/api/integrations/higgsfield/callback",
+      client_id: CLIENT_ID,
+    });
+
+    if (verifierCookie) {
+      bodyParams.append("code_verifier", verifierCookie);
+    }
+
+    // Include client secret only if client_id is not the public "claude" or if CLIENT_SECRET is explicitly provided
+    if (CLIENT_SECRET || CLIENT_ID !== "claude") {
+      bodyParams.append("client_secret", CLIENT_SECRET);
+    }
+
+    // 2. Exchange Auth Code for Access Token
     const res = await fetch(HIGGSFIELD_OAUTH_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: "https://bron.digital/api/integrations/higgsfield/callback",
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-      }),
+      body: bodyParams,
     });
 
     if (!res.ok) {
@@ -56,7 +68,7 @@ export async function GET(request: NextRequest) {
     const tokenData = await res.json();
     const expiresAt = new Date(Date.now() + (tokenData.expires_in || 3600) * 1000).toISOString();
 
-    // 2. Encrypt & format credentials payload
+    // 3. Encrypt & format credentials payload
     const creds: HiggsfieldCreds = {
       access_token_encrypted: encrypt(tokenData.access_token),
       refresh_token_encrypted: encrypt(tokenData.refresh_token || ""),
@@ -65,7 +77,7 @@ export async function GET(request: NextRequest) {
       status: "connected",
     };
 
-    // 3. Upsert key in agency_settings table
+    // 4. Upsert key in agency_settings table
     const { error: upsertError } = await supabase
       .from("agency_settings")
       .upsert({
@@ -77,16 +89,17 @@ export async function GET(request: NextRequest) {
       throw upsertError;
     }
 
-    // 4. Auto-discover available Higgsfield model configurations
+    // 5. Auto-discover available Higgsfield model configurations
     try {
       await discoverHiggsfieldModels(creds);
     } catch (mcpErr) {
       console.warn("MCP model discovery warning:", mcpErr);
     }
 
-    // 5. Clear state cookie and redirect back to integrations page with success flag
+    // 6. Clear oauth cookies and redirect back to integrations page with success flag
     const response = NextResponse.redirect(new URL("/dashboard/settings/integrations?success=true", request.url));
     response.cookies.delete("higgsfield_oauth_state");
+    response.cookies.delete("higgsfield_oauth_verifier");
     return response;
   } catch (err: unknown) {
     console.error("Higgsfield callback execution error:", err);
