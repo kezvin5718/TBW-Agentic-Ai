@@ -8,11 +8,11 @@ import {
   Edit2,
   Trash2,
   Filter,
-  CheckCircle2,
   Sparkles,
   Loader2,
   Lock,
-  X
+  X,
+  AlertCircle
 } from "lucide-react";
 
 interface AgencyBrainEntry {
@@ -68,9 +68,10 @@ export default function AgencyBrainPage() {
 
       setIsFounder(true);
       await fetchEntries();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      setError(err.message || "Authentication error occurred");
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg || "Authentication error occurred");
       setLoading(false);
     }
   };
@@ -86,9 +87,10 @@ export default function AgencyBrainPage() {
 
       if (fetchErr) throw fetchErr;
       setEntries(data || []);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      setError(err.message || "Failed to load agency brain entries");
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg || "Failed to load agency brain entries");
     } finally {
       setLoading(false);
     }
@@ -125,8 +127,9 @@ export default function AgencyBrainPage() {
       setFormSourceCount(1);
 
       await fetchEntries();
-    } catch (err: any) {
-      alert(`Save failed: ${err.message}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(`Save failed: ${msg}`);
     } finally {
       setSaving(false);
     }
@@ -157,8 +160,9 @@ export default function AgencyBrainPage() {
       setFormContent("");
 
       await fetchEntries();
-    } catch (err: any) {
-      alert(`Update failed: ${err.message}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(`Update failed: ${msg}`);
     } finally {
       setSaving(false);
     }
@@ -176,8 +180,9 @@ export default function AgencyBrainPage() {
 
       if (delErr) throw delErr;
       await fetchEntries();
-    } catch (err: any) {
-      alert(`Delete failed: ${err.message}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(`Delete failed: ${msg}`);
     }
   };
 
@@ -241,6 +246,17 @@ export default function AgencyBrainPage() {
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto px-4 md:px-6 py-2">
+      {/* Error Alert Box */}
+      {error && (
+        <div className="flex items-center space-x-2.5 p-3.5 bg-red-950/20 border border-red-900/50 rounded-2xl text-red-200 text-xs">
+          <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-white">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-900 pb-5">
         <div>
@@ -396,7 +412,7 @@ export default function AgencyBrainPage() {
                 <label className="block text-[10px] font-bold text-slate-400 uppercase">Category</label>
                 <select
                   value={formCategory}
-                  onChange={(e) => setFormCategory(e.target.value as any)}
+                  onChange={(e) => setFormCategory(e.target.value as AgencyBrainEntry["category"])}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs text-white focus:outline-none focus:border-indigo-500"
                 >
                   <option value="creative_patterns">Creative Patterns</option>
@@ -413,7 +429,7 @@ export default function AgencyBrainPage() {
                   <label className="block text-[10px] font-bold text-slate-400 uppercase">Confidence Level</label>
                   <select
                     value={formConfidence}
-                    onChange={(e) => setFormConfidence(e.target.value as any)}
+                    onChange={(e) => setFormConfidence(e.target.value as AgencyBrainEntry["confidence"])}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs text-white focus:outline-none focus:border-indigo-500"
                   >
                     <option value="observed_once">Observed Once</option>
@@ -497,7 +513,7 @@ export default function AgencyBrainPage() {
                 <label className="block text-[10px] font-bold text-slate-400 uppercase">Category</label>
                 <select
                   value={formCategory}
-                  onChange={(e) => setFormCategory(e.target.value as any)}
+                  onChange={(e) => setFormCategory(e.target.value as AgencyBrainEntry["category"])}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs text-white focus:outline-none focus:border-indigo-500"
                 >
                   <option value="creative_patterns">Creative Patterns</option>
@@ -514,7 +530,7 @@ export default function AgencyBrainPage() {
                   <label className="block text-[10px] font-bold text-slate-400 uppercase">Confidence Level</label>
                   <select
                     value={formConfidence}
-                    onChange={(e) => setFormConfidence(e.target.value as any)}
+                    onChange={(e) => setFormConfidence(e.target.value as AgencyBrainEntry["confidence"])}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-xs text-white focus:outline-none focus:border-indigo-500"
                   >
                     <option value="observed_once">Observed Once</option>

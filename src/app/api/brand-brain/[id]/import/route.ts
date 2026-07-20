@@ -10,7 +10,9 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id: clientId } = await params;
+    // Await params to avoid unused variable warnings while extracting parameter info
+    const resolvedParams = await params;
+    const _clientId = resolvedParams.id;
     const supabase = await createClient();
 
     // Verify Session and Role
@@ -52,8 +54,9 @@ export async function POST(
             textContent += `\n--- File: ${entry.entryName} ---\n` + entry.getData().toString("utf8");
           }
         }
-      } catch (err: any) {
-        return NextResponse.json({ error: `Failed to extract zip archive: ${err.message}` }, { status: 400 });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return NextResponse.json({ error: `Failed to extract zip archive: ${msg}` }, { status: 400 });
       }
     } else if (
       fileName.endsWith(".txt") ||
@@ -137,7 +140,14 @@ ${textContent.substring(0, 12000)}`;
         cleanText = cleanText.replace(/\s*```$/, "");
       }
 
-      const extracted = JSON.parse(cleanText);
+      interface ExtractedJSON {
+        facts?: string[];
+        preferences?: string[];
+        learnings?: string[];
+        feedback?: string[];
+      }
+
+      const extracted: ExtractedJSON = JSON.parse(cleanText);
       return NextResponse.json({
         success: true,
         fileName: file.name,
@@ -149,14 +159,31 @@ ${textContent.substring(0, 12000)}`;
           feedback: extracted.feedback || []
         }
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error("LLM Extraction failure:", err);
-      return NextResponse.json({ error: `Extraction error: ${err.message}` }, { status: 500 });
+      return NextResponse.json({ error: `Extraction error: ${msg}` }, { status: 500 });
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
     console.error("Import endpoint error:", error);
-    return NextResponse.json({ error: error.message || "Internal Server Error" }, { status: 500 });
+    return NextResponse.json({ error: msg || "Internal Server Error" }, { status: 500 });
   }
+}
+
+interface SavedJSONData {
+  facts?: string[];
+  preferences?: string[];
+  learnings?: string[];
+  feedback?: string[];
+  fileName?: string;
+  fileSize?: number;
+}
+
+interface DesignPreferencesRecord {
+  imported_facts?: Array<{ content: string; date: string; source: string }>;
+  imported_preferences?: Array<{ content: string; date: string; source: string }>;
+  [key: string]: unknown;
 }
 
 // 2. PUT: Save Approved Entries and Regenerate Brief
@@ -165,7 +192,8 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id: clientId } = await params;
+    const resolvedParams = await params;
+    const clientId = resolvedParams.id;
     const supabase = await createClient();
 
     // Verify Session and Role
@@ -179,7 +207,8 @@ export async function PUT(
       return new NextResponse("Forbidden", { status: 403 });
     }
 
-    const { facts, preferences, learnings, feedback, fileName, fileSize } = await request.json();
+    const body: SavedJSONData = await request.json();
+    const { facts, preferences, learnings, feedback, fileName, fileSize } = body;
 
     // 1. Fetch client details
     const { data: client, error: clientErr } = await supabase
@@ -216,22 +245,23 @@ export async function PUT(
     const updatedFeedbackLog = [...(brandBrain.feedback_log || []), ...newFeedback];
 
     // B. Results logs
-    const newLearnings = (learnings || []).map((l: string) => ({
+    const newLearningsList = (learnings || []).map((l: string) => ({
       date: importDate,
       learning: l,
       source: "import"
     }));
-    const updatedResultsLog = [...(brandBrain.results_log || []), ...newLearnings];
+    const updatedResultsLog = [...(brandBrain.results_log || []), ...newLearningsList];
 
     // C. Design Preferences
+    const currentPrefs = (brandBrain.design_preferences || {}) as DesignPreferencesRecord;
     const updatedDesignPrefs = {
-      ...(brandBrain.design_preferences || {}),
+      ...currentPrefs,
       imported_facts: [
-        ...(brandBrain.design_preferences?.imported_facts || []),
+        ...(currentPrefs.imported_facts || []),
         ...((facts || []).map((f: string) => ({ content: f, date: importDate, source: "import" })))
       ],
       imported_preferences: [
-        ...(brandBrain.design_preferences?.imported_preferences || []),
+        ...(currentPrefs.imported_preferences || []),
         ...((preferences || []).map((p: string) => ({ content: p, date: importDate, source: "import" })))
       ]
     };
@@ -291,7 +321,7 @@ Keep the content highly actionable, under 800 words, and formatted in clean, pro
           messages: [{ role: "user", content: userMessage }],
           maxTokens: 1000
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("Brief generation LLM failure during import:", err);
         brief = brandBrain.brand_brief || "Failed to synthesize brief.";
       }
@@ -337,8 +367,9 @@ Keep the content highly actionable, under 800 words, and formatted in clean, pro
       brandBrief: brief,
       brandBrain: finalBrain || brandBrain
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
     console.error("Confirm save error:", error);
-    return NextResponse.json({ error: error.message || "Internal Server Error" }, { status: 500 });
+    return NextResponse.json({ error: msg || "Internal Server Error" }, { status: 500 });
   }
 }

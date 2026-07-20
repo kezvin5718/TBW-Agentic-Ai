@@ -95,8 +95,22 @@ export default function KanbanBoardPage() {
   const [saveTplName, setSaveTplName] = useState("");
   const [saveTplCategory, setSaveTplCategory] = useState("Product Shot");
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
+
+  interface StudioGenerationAttempt {
+    id: string;
+    user_id: string | null;
+    task_id: string | null;
+    prompt: string;
+    model: string;
+    ratio: string;
+    reference_image_url?: string;
+    higgsfield_media_ref?: string;
+    generated_image_url: string;
+    cost: number;
+    created_at: string;
+  }
   
-  const [taskAttempts, setTaskAttempts] = useState<any[]>([]);
+  const [taskAttempts, setTaskAttempts] = useState<StudioGenerationAttempt[]>([]);
 
   const fetchTaskAttempts = async (taskId: string) => {
     try {

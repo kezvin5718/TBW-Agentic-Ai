@@ -1,11 +1,13 @@
 import cron from "node-cron";
-import { runAdsAutopilot } from "@/lib/ads-autopilot";
-import { runLearningLoop } from "@/app/api/cron/learning/route";
-import { runJarvisBriefing } from "@/app/api/cron/jarvis-briefing/route";
-import { runOverdueDigest } from "@/app/api/cron/overdue-digest/route";
-import { runPublishingScheduler } from "@/app/api/cron/publish/route";
+import {
+  runAdsAutopilot,
+  runLearningLoop,
+  runJarvisBriefing,
+  runOverdueDigest,
+  runPublishingScheduler
+} from "@/lib/cron-jobs";
 
-export let cronSchedulerStatus = {
+export const cronSchedulerStatus = {
   running: false,
   lastRun: {} as Record<string, string>,
   jobsScheduledCount: 0
@@ -27,8 +29,9 @@ export function startCronScheduler() {
       const res = await runPublishingScheduler();
       cronSchedulerStatus.lastRun["publishing"] = new Date().toISOString();
       console.log(`✅ In-App Cron: Publishing completed. Processed: ${res.processed}`);
-    } catch (err: any) {
-      console.error("❌ In-App Cron: Publishing failed:", err.message);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: Publishing failed:", msg);
     }
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;
@@ -40,8 +43,9 @@ export function startCronScheduler() {
       const res = await runAdsAutopilot();
       cronSchedulerStatus.lastRun["ads_autopilot"] = new Date().toISOString();
       console.log(`✅ In-App Cron: Ads Autopilot completed. Logs: ${JSON.stringify(res.logs)}`);
-    } catch (err: any) {
-      console.error("❌ In-App Cron: Ads Autopilot failed:", err.message);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: Ads Autopilot failed:", msg);
     }
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;
@@ -53,8 +57,9 @@ export function startCronScheduler() {
       const res = await runJarvisBriefing();
       cronSchedulerStatus.lastRun["morning_briefing"] = new Date().toISOString();
       console.log(`✅ In-App Cron: Jarvis Briefing completed. Dispatched: ${res.dispatched}`);
-    } catch (err: any) {
-      console.error("❌ In-App Cron: Jarvis Briefing failed:", err.message);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: Jarvis Briefing failed:", msg);
     }
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;
@@ -66,8 +71,9 @@ export function startCronScheduler() {
       const res = await runOverdueDigest();
       cronSchedulerStatus.lastRun["overdue_digest"] = new Date().toISOString();
       console.log(`✅ In-App Cron: Overdue Digest completed. Count: ${res.overdueCount}`);
-    } catch (err: any) {
-      console.error("❌ In-App Cron: Overdue Digest failed:", err.message);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: Overdue Digest failed:", msg);
     }
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;
@@ -79,8 +85,9 @@ export function startCronScheduler() {
       const res = await runLearningLoop();
       cronSchedulerStatus.lastRun["weekly_learning_loop"] = new Date().toISOString();
       console.log(`✅ In-App Cron: Weekly Learning Loop completed. Logs count: ${res.length}`);
-    } catch (err: any) {
-      console.error("❌ In-App Cron: Weekly Learning Loop failed:", err.message);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: Weekly Learning Loop failed:", msg);
     }
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;

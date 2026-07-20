@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { activeJobs } from "../../generate/route";
+import { activeJobs } from "@/lib/higgsfield-state";
 import { HIGGSFIELD_CONFIG } from "@/lib/higgsfield-config";
 
 const MOCK_IMAGES = [

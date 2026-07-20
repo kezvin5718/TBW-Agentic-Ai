@@ -210,4 +210,23 @@ All scheduled operational loops are executed in-app using `node-cron` with `Asia
 | **Daily Overdue Digest** | `0 9 * * *` | Daily at 9:00 AM | Scans overdue deliverables and alerts assignee / founder. |
 | **Weekly Learning Loop** | `59 23 * * 0` | Sundays at 11:59 PM | Syncs metrics, aggregates anonymized insights, and updates the Agency Brain. |
 
+---
+
+## 6. Current State & Production Fixes
+
+### Next.js Production Build Validation
+- **Status**: Checked and building with 100% success (`npm run build` exits with code 0).
+- **TypeScript & ESLint Fixes**:
+  - Removed all `any` type annotations in API routes and frontend pages, replacing them with typed records and `unknown` catch blocks.
+  - Resolved unescaped entity warnings inside client page JSX blocks.
+  - Standardized state objects (like `taskAttempts`) to match the exact Supabase schema definitions.
+- **Route Handler Constraints**:
+  - Moved custom helper exports (`runJarvisBriefing`, `runLearningLoop`, `runOverdueDigest`, and `runPublishingScheduler`) out of Next.js `route.ts` API files and into [src/lib/cron-jobs.ts](file:///Users/kezvinshikhrin/Documents/TBW%20Agentic%20AI/src/lib/cron-jobs.ts) to adhere to Next.js App Router's strict handler export guidelines.
+  - Refactored Higgsfield in-memory map `activeJobs` into a separate module [src/lib/higgsfield-state.ts](file:///Users/kezvinshikhrin/Documents/TBW%20Agentic%20AI/src/lib/higgsfield-state.ts).
+- **Cleaned Obsolete Files**:
+  - Cleaned up duplicate HTML assets (`New Project _ Supabase.html` and its subfiles).
+  - Deleted local `scratch/` script folder.
+  - Relocated isolation tests from `src/__tests__/` to a root directory [__tests__/](file:///Users/kezvinshikhrin/Documents/TBW%20Agentic%20AI/__tests__) so they are run independently from the compiler bundle checks.
+
+
 

@@ -274,9 +274,10 @@ export default function ClientBrandBrainPage({
       setSelectedPrefs(data.extracted.preferences || []);
       setSelectedLearnings(data.extracted.learnings || []);
       setSelectedFeedback(data.extracted.feedback || []);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      setImportError(err.message || "An unexpected error occurred during import extraction");
+      const msg = err instanceof Error ? err.message : String(err);
+      setImportError(msg || "An unexpected error occurred during import extraction");
     } finally {
       setImportingFile(false);
       if (e.target) e.target.value = "";
@@ -310,9 +311,10 @@ export default function ClientBrandBrainPage({
       setExtractedData(null);
       await fetchData();
       alert("Brand knowledge successfully imported and brief regenerated!");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      setImportError(err.message || "Failed to confirm and synchronize brand brain imports");
+      const msg = err instanceof Error ? err.message : String(err);
+      setImportError(msg || "Failed to confirm and synchronize brand brain imports");
     } finally {
       setConfirmingImport(false);
     }

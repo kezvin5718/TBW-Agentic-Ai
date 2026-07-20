@@ -1,18 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { HIGGSFIELD_CONFIG } from "@/lib/higgsfield-config";
-
-// Global in-memory job store for simulating asynchronous generation delays
-export const activeJobs = new Map<string, {
-  prompt: string;
-  model: string;
-  ratio: string;
-  styleReference: { mediaUrl: string; higgsfieldMediaRef: string } | null;
-  productImages: Array<{ mediaUrl: string; higgsfieldMediaRef: string }>;
-  taskId?: string | null;
-  createdAt: number;
-  duration: number; // in ms
-}>();
+import { activeJobs } from "@/lib/higgsfield-state";
 
 export async function POST(request: Request) {
   try {

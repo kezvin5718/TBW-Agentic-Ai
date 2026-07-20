@@ -189,9 +189,14 @@ function ImageStudioWorkspace() {
 
       if (!error && data && data.past_creatives) {
         const list = Array.isArray(data.past_creatives) ? data.past_creatives : [];
-        const imageUrls = list
-          .filter((item: any) => item.type === "image" && item.url)
-          .map((item: any) => item.url);
+        interface PastCreativeItem {
+          type?: string;
+          url?: string;
+          [key: string]: unknown;
+        }
+        const imageUrls = (list as PastCreativeItem[])
+          .filter((item) => item.type === "image" && item.url)
+          .map((item) => item.url as string);
         setGuidelineImages(imageUrls);
       }
     } catch (err) {
@@ -333,8 +338,9 @@ function ImageStudioWorkspace() {
 
       // Start polling for status
       pollJobStatus(data.jobId);
-    } catch (err: any) {
-      setGenerationError(err.message || "An unexpected error occurred");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setGenerationError(msg || "An unexpected error occurred");
       setGenerating(false);
     }
   };
@@ -363,9 +369,10 @@ function ImageStudioWorkspace() {
           fetchHistory();
           fetchMonthlyCredits();
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         clearInterval(interval);
-        setGenerationError(err.message || "Checking status failed");
+        const msg = err instanceof Error ? err.message : String(err);
+        setGenerationError(msg || "Checking status failed");
         setGenerating(false);
       }
     }, 2000);
@@ -446,8 +453,9 @@ function ImageStudioWorkspace() {
         setSelectedClientId("");
         setSaveSuccessMessage(null);
       }, 1800);
-    } catch (err: any) {
-      alert(`Save error: ${err.message}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(`Save error: ${msg}`);
     } finally {
       setSavingToBrain(false);
     }
@@ -486,8 +494,9 @@ function ImageStudioWorkspace() {
       }
 
       router.push("/dashboard/production");
-    } catch (err: any) {
-      alert(`Pipeline linkage failed: ${err.message}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(`Pipeline linkage failed: ${msg}`);
       setAttachingToTask(null);
     }
   };
@@ -1074,7 +1083,7 @@ function ImageStudioWorkspace() {
                 </div>
 
                 <div className="text-[10px] text-slate-500 leading-normal">
-                  Saving this asset will insert it directly into the client's permanent Brand Brain creatives list for future campaign use.
+                  Saving this asset will insert it directly into the client&apos;s permanent Brand Brain creatives list for future campaign use.
                 </div>
 
                 <div className="flex space-x-2 pt-2">

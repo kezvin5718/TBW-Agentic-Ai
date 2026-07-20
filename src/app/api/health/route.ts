@@ -18,8 +18,8 @@ export async function GET() {
     } else {
       dbStatus = "healthy";
     }
-  } catch (err: any) {
-    dbError = err.message || "Failed to initialize supabase client";
+  } catch (err: unknown) {
+    dbError = err instanceof Error ? err.message : String(err);
   }
 
   // Read app version from package.json dynamically or static fallback
