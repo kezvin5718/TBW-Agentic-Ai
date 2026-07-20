@@ -3,6 +3,20 @@
 -- Run this in your Supabase SQL Editor to configure all tables.
 --
 
+-- Clean up all existing RLS policies in the public schema to prevent stale policy compilation errors
+DO $$
+DECLARE
+    pol record;
+BEGIN
+    FOR pol IN 
+        SELECT policyname, tablename, schemaname 
+        FROM pg_policies 
+        WHERE schemaname = 'public'
+    LOOP
+        EXECUTE format('DROP POLICY IF EXISTS %I ON %I.%I', pol.policyname, pol.schemaname, pol.tablename);
+    END LOOP;
+END $$;
+
 ---------------------------------------------------------
 -- 1. PROFILES & ROLE SETUP
 ---------------------------------------------------------
