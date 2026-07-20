@@ -13,12 +13,12 @@ export async function GET(request: NextRequest) {
 
   if (errorParam) {
     console.error("❌ Higgsfield OAuth callback returned error:", errorParam);
-    return NextResponse.redirect(new URL("/dashboard/settings/integrations?error=" + errorParam, request.url));
+    return NextResponse.redirect(new URL("/dashboard/settings/integrations?error=" + errorParam, process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"));
   }
 
   if (!code) {
     console.error("❌ Higgsfield OAuth callback: missing authorization code");
-    return NextResponse.redirect(new URL("/dashboard/settings/integrations?error=missing_code", request.url));
+    return NextResponse.redirect(new URL("/dashboard/settings/integrations?error=missing_code", process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"));
   }
 
   try {
@@ -56,12 +56,12 @@ export async function GET(request: NextRequest) {
     }
 
     console.log("⚙️ Higgsfield MCP [Callback Route]: Callback completed successfully.");
-    return NextResponse.redirect(new URL("/dashboard/settings/integrations?success=true", request.url));
+    return NextResponse.redirect(new URL("/dashboard/settings/integrations?success=true", process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"));
   } catch (err: unknown) {
     console.error("❌ Higgsfield MCP [Callback Route] Failure:", err);
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.redirect(
-      new URL(`/dashboard/settings/integrations?error=exchange_failed&details=${encodeURIComponent(msg)}`, request.url)
+      new URL(`/dashboard/settings/integrations?error=exchange_failed&details=${encodeURIComponent(msg)}`, process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital")
     );
   }
 }

@@ -13,8 +13,7 @@ export async function POST(request: Request) {
     await supabase.auth.signOut();
   }
 
-  const url = new URL(request.url);
-  return NextResponse.redirect(new URL("/login", url.origin), {
+  return NextResponse.redirect(new URL("/login", process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"), {
     status: 303, // Redirect after POST
   });
 }

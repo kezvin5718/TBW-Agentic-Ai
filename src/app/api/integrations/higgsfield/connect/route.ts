@@ -34,12 +34,12 @@ export async function GET(request: NextRequest) {
     }
 
     console.log("⚙️ Higgsfield MCP [Connect Route]: Auth completed synchronously with result:", result);
-    return NextResponse.redirect(new URL("/dashboard/settings/integrations?success=true", request.url));
+    return NextResponse.redirect(new URL("/dashboard/settings/integrations?success=true", process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"));
   } catch (error: unknown) {
     console.error("❌ Higgsfield MCP [Connect Route] Failure:", error);
     const msg = error instanceof Error ? error.message : String(error);
     return NextResponse.redirect(
-      new URL(`/dashboard/settings/integrations?error=connect_failed&details=${encodeURIComponent(msg)}`, request.url)
+      new URL(`/dashboard/settings/integrations?error=connect_failed&details=${encodeURIComponent(msg)}`, process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital")
     );
   }
 }

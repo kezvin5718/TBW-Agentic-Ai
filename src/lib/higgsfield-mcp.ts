@@ -222,7 +222,7 @@ export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<
 }
 
 export class DBOAuthClientProvider implements OAuthClientProvider {
-  private redirect_uri = "https://bron.digital/api/integrations/higgsfield/callback";
+  private redirect_uri = `${process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"}/api/integrations/higgsfield/callback`;
 
   get redirectUrl(): string | URL | undefined {
     return this.redirect_uri;

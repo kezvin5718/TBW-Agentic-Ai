@@ -90,7 +90,7 @@ export async function complete({
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
-        "HTTP-Referer": "http://localhost:3000",
+        "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital",
         "X-Title": "tbw-os",
         "Content-Type": "application/json",
       },

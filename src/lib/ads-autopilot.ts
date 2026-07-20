@@ -225,7 +225,7 @@ export async function runAdsAutopilot(): Promise<{ success: boolean; logs: strin
 
           if (recApproval) {
             // Send WhatsApp report suggestion with approval link
-            const simulatorLink = `http://localhost:3000/dashboard/approvals`;
+            const simulatorLink = `${process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"}/dashboard/approvals`;
             await sendWhatsAppText({
               to: founderPhone,
               text: `🤖 Autopilot Recommendation for [${client.name}]:\n- Suggested Action: *${actionType.toUpperCase()}*\n- Reason: ${note}\n- Approve suggestion here: ${simulatorLink}`,

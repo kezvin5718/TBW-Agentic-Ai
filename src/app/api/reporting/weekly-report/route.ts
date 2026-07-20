@@ -180,7 +180,7 @@ export async function POST(request: Request) {
         `Client: *${report.clients?.name}*\n` +
         `Week Start: ${report.week_start_date}\n\n` +
         `Summary details:\n${summaryFirstLine}\n\n` +
-        `PDF Report link: http://localhost:3000/dashboard/reporting`;
+        `PDF Report link: ${process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"}/dashboard/reporting`;
 
       await sendWhatsAppText({
         to: clientGroup,
