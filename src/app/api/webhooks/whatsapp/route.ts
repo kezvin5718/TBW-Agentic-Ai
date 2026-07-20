@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/server";
 import { complete } from "@/lib/llm";
 import { MODEL_FAST } from "@/lib/llm-config";
 
@@ -25,7 +25,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const supabase = await createClient();
+    const supabase = createServiceRoleClient();
 
     let sender = "";
     let messageBody = "";

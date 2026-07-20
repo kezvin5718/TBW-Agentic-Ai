@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +13,8 @@ export async function POST() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { error } = await supabase
+    const adminSupabase = createServiceRoleClient();
+    const { error } = await adminSupabase
       .from("agency_settings")
       .delete()
       .eq("key", "higgsfield_credentials");

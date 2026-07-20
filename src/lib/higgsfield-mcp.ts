@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/server";
 import { encrypt, decrypt } from "@/lib/encryption";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -39,7 +39,7 @@ export async function getHiggsfieldCredentials(): Promise<HiggsfieldCreds | null
     };
   }
 
-  const supabase = await createClient();
+  const supabase = createServiceRoleClient();
   const { data, error } = await supabase
     .from("agency_settings")
     .select("value")
@@ -193,7 +193,7 @@ export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<
     }
 
     // Save discovered models back to config state
-    const supabase = await createClient();
+    const supabase = createServiceRoleClient();
     const updatedCreds: HiggsfieldCreds = {
       ...creds,
       available_models: discoveredModels,
@@ -254,7 +254,7 @@ export class DBOAuthClientProvider implements OAuthClientProvider {
   async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
     try {
       console.log("⚙️ Higgsfield MCP DCR [Stage: clientInformation]: Loading client credentials...");
-      const supabase = await createClient();
+      const supabase = createServiceRoleClient();
       const { data, error } = await supabase
         .from("agency_settings")
         .select("value")
@@ -281,7 +281,7 @@ export class DBOAuthClientProvider implements OAuthClientProvider {
   async saveClientInformation(clientInformation: OAuthClientInformationMixed): Promise<void> {
     try {
       console.log("⚙️ Higgsfield MCP DCR [Stage: saveClientInformation]: Saving client registration:", clientInformation);
-      const supabase = await createClient();
+      const supabase = createServiceRoleClient();
       const { error } = await supabase
         .from("agency_settings")
         .upsert({
@@ -333,7 +333,7 @@ export class DBOAuthClientProvider implements OAuthClientProvider {
         status: "connected",
       };
 
-      const supabase = await createClient();
+      const supabase = createServiceRoleClient();
       const { error } = await supabase
         .from("agency_settings")
         .upsert({
@@ -384,7 +384,7 @@ export class DBOAuthClientProvider implements OAuthClientProvider {
   async saveDiscoveryState(state: OAuthDiscoveryState): Promise<void> {
     try {
       console.log("⚙️ Higgsfield MCP [Stage: saveDiscoveryState]: Saving server discovery metadata:", state.authorizationServerUrl);
-      const supabase = await createClient();
+      const supabase = createServiceRoleClient();
       const { error } = await supabase
         .from("agency_settings")
         .upsert({
@@ -404,7 +404,7 @@ export class DBOAuthClientProvider implements OAuthClientProvider {
   async discoveryState(): Promise<OAuthDiscoveryState | undefined> {
     try {
       console.log("⚙️ Higgsfield MCP [Stage: discoveryState]: Loading server discovery metadata...");
-      const supabase = await createClient();
+      const supabase = createServiceRoleClient();
       const { data, error } = await supabase
         .from("agency_settings")
         .select("value")

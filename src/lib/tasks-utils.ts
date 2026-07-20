@@ -1,7 +1,7 @@
-import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/server";
 
 export async function generateTasksForPlan(planId: string) {
-  const supabase = await createClient();
+  const supabase = createServiceRoleClient();
 
   // 1. Fetch the plan
   const { data: plan, error: planErr } = await supabase

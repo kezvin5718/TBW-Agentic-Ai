@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { encrypt } from "@/lib/encryption";
 import { discoverHiggsfieldModels, HiggsfieldCreds } from "@/lib/higgsfield-mcp";
 
@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
       return new NextResponse("Unauthorized", { status: 401 });
     }
 
-    const { accessToken } = await request.json();
+    const accessToken = await request.json().then(b => b.accessToken);
 
     if (!accessToken || typeof accessToken !== "string") {
       return NextResponse.json({ success: false, error: "Access token is required" }, { status: 400 });
@@ -31,7 +31,8 @@ export async function POST(request: NextRequest) {
     };
 
     // 3. Save to database in agency_settings
-    const { error: upsertError } = await supabase
+    const adminSupabase = createServiceRoleClient();
+    const { error: upsertError } = await adminSupabase
       .from("agency_settings")
       .upsert({
         key: "higgsfield_credentials",

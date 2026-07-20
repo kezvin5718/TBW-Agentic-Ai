@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 
 export async function GET() {
   try {
@@ -52,7 +52,8 @@ export async function POST(request: Request) {
     }
 
     // Upsert key
-    const { error: upsertErr } = await supabase
+    const adminSupabase = createServiceRoleClient();
+    const { error: upsertErr } = await adminSupabase
       .from("agency_settings")
       .upsert({
         key: "default_assignees",
