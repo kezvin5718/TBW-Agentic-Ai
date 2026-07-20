@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/server";
 import { complete } from "@/lib/llm";
 import { MODEL_SMART } from "@/lib/llm-config";
 import { sendWhatsAppText } from "@/lib/integrations/whatsapp";
@@ -7,7 +7,7 @@ export { runAdsAutopilot } from "@/lib/ads-autopilot";
 
 // 1. Jarvis Morning Briefing
 export async function runJarvisBriefing() {
-  const supabase = await createClient();
+  const supabase = createServiceRoleClient();
 
   // Fetch pending approvals count
   const { count: pendingCount } = await supabase
@@ -80,7 +80,7 @@ Write exactly ONE message. Guidelines:
 
 // 2. Overdue Digest
 export async function runOverdueDigest() {
-  const supabase = await createClient();
+  const supabase = createServiceRoleClient();
   const now = new Date().toISOString();
 
   // Query overdue tasks (status is not done and deadline has passed)
@@ -157,7 +157,7 @@ export async function runOverdueDigest() {
 
 // 3. Publishing Scheduler
 export async function runPublishingScheduler() {
-  const supabase = await createClient();
+  const supabase = createServiceRoleClient();
   const nowStr = new Date().toISOString();
 
   // Fetch creatives where:
@@ -208,7 +208,7 @@ export async function runPublishingScheduler() {
 
 // 4. Weekly Learning Loop
 export async function runLearningLoop(): Promise<string[]> {
-  const supabase = await createClient();
+  const supabase = createServiceRoleClient();
   const logs: string[] = [];
 
   // Query all active clients

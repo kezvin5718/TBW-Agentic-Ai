@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { createServiceRoleClient } from "@/lib/supabase/server";
 import { sendWhatsAppText } from "@/lib/integrations/whatsapp";
 
 interface AutopilotRuleSet {
@@ -19,7 +19,7 @@ interface AutopilotRuleSet {
 }
 
 export async function runAdsAutopilot(): Promise<{ success: boolean; logs: string[] }> {
-  const supabase = await createClient();
+  const supabase = createServiceRoleClient();
   const logs: string[] = [];
 
   // Fetch active or paused campaigns (only Meta for now)
