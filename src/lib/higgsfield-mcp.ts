@@ -132,6 +132,62 @@ export async function getHiggsfieldCredentials(): Promise<HiggsfieldCreds | null
 }
 
 /**
+ * Force refresh Higgsfield OAuth access token using refresh token
+ */
+export async function forceRefreshHiggsfieldToken(creds: HiggsfieldCreds): Promise<HiggsfieldCreds> {
+  const decryptedRefreshToken = creds.refresh_token_encrypted ? decrypt(creds.refresh_token_encrypted) : "";
+  if (!decryptedRefreshToken) {
+    throw new Error("No refresh token available to refresh access token.");
+  }
+
+  console.log("🔄 Higgsfield MCP: Force refreshing access token...");
+  const bodyParams = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: decryptedRefreshToken,
+    client_id: CLIENT_ID,
+  });
+
+  if (CLIENT_SECRET) {
+    bodyParams.append("client_secret", CLIENT_SECRET);
+  }
+
+  const res = await fetch(HIGGSFIELD_OAUTH_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: bodyParams,
+  });
+
+  if (!res.ok) {
+    throw new Error(`Refresh request failed: ${res.statusText}`);
+  }
+
+  const tokenData = await res.json();
+  const newExpiresAt = new Date(Date.now() + (tokenData.expires_in || 3600) * 1000).toISOString();
+
+  const updatedCreds: HiggsfieldCreds = {
+    ...creds,
+    access_token_encrypted: encrypt(tokenData.access_token),
+    refresh_token_encrypted: encrypt(tokenData.refresh_token || decryptedRefreshToken),
+    expires_at: newExpiresAt,
+    status: "connected",
+    error_message: undefined,
+  };
+
+  const supabase = createServiceRoleClient();
+  const { error: saveError } = await supabase
+    .from("agency_settings")
+    .update({ value: updatedCreds })
+    .eq("key", "higgsfield_credentials");
+
+  if (saveError) {
+    throw saveError;
+  }
+
+  console.log("✅ Higgsfield MCP: Token refreshed successfully.");
+  return updatedCreds;
+}
+
+/**
  * Establishes a connected Model Context Protocol client to the Higgsfield MCP server
  */
 export async function getHiggsfieldMCPClient(creds: HiggsfieldCreds): Promise<{ client: Client; transport: SSEClientTransport }> {
@@ -151,9 +207,15 @@ export async function getHiggsfieldMCPClient(creds: HiggsfieldCreds): Promise<{ 
         headers: {
           Authorization: `Bearer ${decryptedAccessToken}`
         }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any
-    }
+      },
+      requestInit: {
+        headers: {
+          Authorization: `Bearer ${decryptedAccessToken}`,
+          "Content-Type": "application/json"
+        }
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
   );
 
   await client.connect(transport);
@@ -164,14 +226,41 @@ export async function getHiggsfieldMCPClient(creds: HiggsfieldCreds): Promise<{ 
  * Discovers available models from the Higgsfield MCP tools listing
  */
 export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<string[]> {
+  let currentCreds = creds;
   let transport: SSEClientTransport | null = null;
-  try {
-    const connection = await getHiggsfieldMCPClient(creds);
-    const client = connection.client;
-    transport = connection.transport;
+  let toolsResult;
 
-    // List available tools
-    const toolsResult = await client.listTools();
+  try {
+    const connection = await getHiggsfieldMCPClient(currentCreds);
+    transport = connection.transport;
+    toolsResult = await connection.client.listTools();
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (
+      errMsg.includes("401") ||
+      errMsg.toLowerCase().includes("unauthorized") ||
+      errMsg.includes("Non-200 status code (401)")
+    ) {
+      console.warn("⚠️ Higgsfield MCP: 401 Unauthorized during discovery. Attempting token refresh...");
+      try {
+        if (transport) {
+          try { await transport.close(); } catch {}
+          transport = null;
+        }
+        currentCreds = await forceRefreshHiggsfieldToken(currentCreds);
+        const connection = await getHiggsfieldMCPClient(currentCreds);
+        transport = connection.transport;
+        toolsResult = await connection.client.listTools();
+      } catch (retryErr) {
+        console.error("❌ Higgsfield MCP: Token refresh retry failed:", retryErr);
+        throw retryErr;
+      }
+    } else {
+      throw err;
+    }
+  }
+
+  try {
     console.log("⚙️ Higgsfield MCP: Discovered tools:", toolsResult.tools.map(t => t.name));
 
     // Discover the available image models (nano banana variants)
@@ -188,14 +277,13 @@ export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<
     }
 
     if (discoveredModels.length === 0) {
-      // Fallback if no specific model enum is described in schema
       discoveredModels = Object.keys(HIGGSFIELD_CONFIG.models);
     }
 
     // Save discovered models back to config state
     const supabase = createServiceRoleClient();
     const updatedCreds: HiggsfieldCreds = {
-      ...creds,
+      ...currentCreds,
       available_models: discoveredModels,
       status: "connected",
       error_message: undefined
@@ -208,7 +296,7 @@ export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<
 
     return discoveredModels;
   } catch (err) {
-    console.error("❌ Higgsfield MCP: Failed to discover models:", err);
+    console.error("❌ Higgsfield MCP: Failed to parse discovered models:", err);
     return Object.keys(HIGGSFIELD_CONFIG.models);
   } finally {
     if (transport) {

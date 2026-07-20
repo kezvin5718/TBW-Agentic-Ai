@@ -35,6 +35,7 @@ export default function IntegrationsPage() {
   // Testing & Disconnecting states
   const [testing, setTesting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [refreshingModels, setRefreshingModels] = useState(false);
   
   // Custom Alerts
   const [alertError, setAlertError] = useState<string | null>(null);
@@ -111,6 +112,30 @@ export default function IntegrationsPage() {
       setAlertError(`Connection test crashed: ${msg}`);
     } finally {
       setTesting(false);
+    }
+  };
+
+  // Refresh models Handler
+  const handleRefreshModels = async () => {
+    setRefreshingModels(true);
+    setAlertError(null);
+    setAlertSuccess(null);
+
+    try {
+      const res = await fetch("/api/integrations/higgsfield/discover", { method: "POST" });
+      const data = await res.json();
+
+      if (data.success) {
+        setAlertSuccess("Higgsfield models refreshed successfully! Discovered: " + (data.models?.join(", ") || "None"));
+        await fetchStatus();
+      } else {
+        setAlertError(data.error || "Model refresh returned failure");
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAlertError(`Model refresh crashed: ${msg}`);
+    } finally {
+      setRefreshingModels(false);
     }
   };
 
@@ -301,6 +326,19 @@ export default function IntegrationsPage() {
                     <ShieldCheck className="w-4 h-4 text-emerald-450" />
                   )}
                   <span>Test Connection</span>
+                </button>
+
+                <button
+                  onClick={handleRefreshModels}
+                  disabled={refreshingModels}
+                  className="flex items-center space-x-1.5 bg-slate-900 hover:bg-slate-850 border border-slate-850 text-slate-300 hover:text-white text-xs font-bold uppercase tracking-wider py-2.5 px-4 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {refreshingModels ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+                  ) : (
+                    <Activity className="w-4 h-4 text-indigo-400" />
+                  )}
+                  <span>Refresh Models</span>
                 </button>
 
                 <button
