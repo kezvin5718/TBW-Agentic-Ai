@@ -25,6 +25,17 @@ const CLIENT_SECRET = process.env.HIGGSFIELD_CLIENT_SECRET || "";
  * Auto-refreshes the access token if it has expired or is close to expiring.
  */
 export async function getHiggsfieldCredentials(): Promise<HiggsfieldCreds | null> {
+  // 1. Check if static environment token is configured
+  if (process.env.HIGGSFIELD_ACCESS_TOKEN) {
+    return {
+      access_token_encrypted: encrypt(process.env.HIGGSFIELD_ACCESS_TOKEN),
+      refresh_token_encrypted: encrypt(""),
+      expires_at: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(), // 1 year validity
+      connected_as: "Environment Token",
+      status: "connected",
+    };
+  }
+
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("agency_settings")
@@ -38,6 +49,12 @@ export async function getHiggsfieldCredentials(): Promise<HiggsfieldCreds | null
 
   const creds = data.value as HiggsfieldCreds;
 
+  // If there's no refresh token (e.g. manually set token), don't try to refresh
+  const decryptedRefreshToken = creds.refresh_token_encrypted ? decrypt(creds.refresh_token_encrypted) : "";
+  if (!decryptedRefreshToken) {
+    return creds;
+  }
+
   // Check if token needs refresh (expires within 5 minutes)
   const expiresAt = new Date(creds.expires_at).getTime();
   const now = Date.now();
@@ -46,7 +63,6 @@ export async function getHiggsfieldCredentials(): Promise<HiggsfieldCreds | null
   if (expiresAt - now < buffer) {
     console.log("🔄 Higgsfield MCP: Access token expired or close to expiry. Refreshing...");
     try {
-      const decryptedRefreshToken = decrypt(creds.refresh_token_encrypted);
       const bodyParams = new URLSearchParams({
         grant_type: "refresh_token",
         refresh_token: decryptedRefreshToken,

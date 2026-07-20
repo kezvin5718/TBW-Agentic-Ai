@@ -40,6 +40,10 @@ export default function IntegrationsPage() {
   const [alertError, setAlertError] = useState<string | null>(null);
   const [alertSuccess, setAlertSuccess] = useState<string | null>(null);
 
+  // Manual token input states
+  const [manualToken, setManualToken] = useState("");
+  const [savingManual, setSavingManual] = useState(false);
+
   // Read URL params for OAuth callbacks
   useEffect(() => {
     const success = searchParams.get("success");
@@ -107,6 +111,36 @@ export default function IntegrationsPage() {
       setAlertError(`Connection test crashed: ${msg}`);
     } finally {
       setTesting(false);
+    }
+  };
+
+  // Manual Token Save Handler
+  const handleSaveManualToken = async () => {
+    if (!manualToken.trim()) return;
+    setSavingManual(true);
+    setAlertError(null);
+    setAlertSuccess(null);
+
+    try {
+      const res = await fetch("/api/integrations/higgsfield/manual", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accessToken: manualToken }),
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        setAlertSuccess("Manual Higgsfield token saved! " + (data.models?.length ? `Discovered models: ${data.models.join(", ")}` : "No models found."));
+        setManualToken("");
+        await fetchStatus();
+      } else {
+        setAlertError(data.error || "Failed to save manual token");
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAlertError(`Error saving manual token: ${msg}`);
+    } finally {
+      setSavingManual(false);
     }
   };
 
@@ -284,6 +318,37 @@ export default function IntegrationsPage() {
               </>
             )}
           </div>
+
+          {!status?.connected && (
+            <div className="border-t border-slate-900 pt-4 mt-4 space-y-3">
+              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">
+                Or Manually Link Access Token
+              </span>
+              <div className="flex space-x-2">
+                <input
+                  type="password"
+                  placeholder="Paste Higgsfield Access Token..."
+                  value={manualToken}
+                  onChange={(e) => setManualToken(e.target.value)}
+                  className="flex-1 bg-slate-900 border border-slate-850 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-650 focus:outline-none focus:border-indigo-500 font-mono"
+                />
+                <button
+                  onClick={handleSaveManualToken}
+                  disabled={savingManual || !manualToken.trim()}
+                  className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-900 disabled:text-slate-600 text-white text-[10px] font-bold uppercase tracking-wider px-4 rounded-xl transition-all cursor-pointer flex items-center justify-center shrink-0 border border-transparent disabled:border-slate-800"
+                >
+                  {savingManual ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    "Save Token"
+                  )}
+                </button>
+              </div>
+              <p className="text-[9px] text-slate-600 font-medium">
+                Paste your Higgsfield Access Token directly to authenticate without using redirects.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Info Sidebar Card */}
