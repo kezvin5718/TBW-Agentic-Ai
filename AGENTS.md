@@ -196,3 +196,18 @@ flowchart TD
 > - **Client Brand Brains**: Isolated per client profile. Under no circumstances may client-specific guides, names, creative assets, or feedback logs belonging to Client A be accessed or injected during Client B's operational flows (strategy, calendar, media plans, tasks drafting).
 > - **Shared Agency Brain**: Aggregates generalized, anonymized patterns, benchmarks, and creative structures. All entries must be fully scrubbed of client names, brand names, or products. The Agency Brain digest feeds all client strategy, planning, and asset generators alongside the client's own isolated brief.
 
+---
+
+## 5. In-App Cron Schedules & Timezones (IST)
+
+All scheduled operational loops are executed in-app using `node-cron` with `Asia/Kolkata` (IST) timezone configuration, active when `CRON_ENABLED=true` is set.
+
+| Job Name | Schedule Expression (Cron) | Target Execution Time (IST) | Purpose |
+|---|---|---|---|
+| **Publishing Scheduler** | `*/15 * * * *` | Every 15 minutes | Scans approved queue creatives and posts due media assets. |
+| **Daily Ads Autopilot** | `0 6 * * *` | Daily at 6:00 AM | Runs performance auditing, optimizes budget thresholds, and pacing rules. |
+| **Jarvis Morning Briefing** | `0 8 * * *` | Daily at 8:00 AM | Compiles stats summary (approvals, metrics, spend) and texts the founder. |
+| **Daily Overdue Digest** | `0 9 * * *` | Daily at 9:00 AM | Scans overdue deliverables and alerts assignee / founder. |
+| **Weekly Learning Loop** | `59 23 * * 0` | Sundays at 11:59 PM | Syncs metrics, aggregates anonymized insights, and updates the Agency Brain. |
+
+

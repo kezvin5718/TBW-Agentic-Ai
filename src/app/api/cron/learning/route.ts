@@ -50,7 +50,7 @@ export async function POST() {
   }
 }
 
-async function runLearningLoop(): Promise<string[]> {
+export async function runLearningLoop(): Promise<string[]> {
   const supabase = await createClient();
   const logs: string[] = [];
 
