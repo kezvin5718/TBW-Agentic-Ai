@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { DBOAuthClientProvider, discoverHiggsfieldModels, getHiggsfieldCredentials } from "@/lib/higgsfield-mcp";
+import { DBOAuthClientProvider, discoverHiggsfieldModels, getHiggsfieldCredentials, getBaseAppUrl } from "@/lib/higgsfield-mcp";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 
 export const dynamic = "force-dynamic";
@@ -13,12 +13,12 @@ export async function GET(request: NextRequest) {
 
   if (errorParam) {
     console.error("❌ Higgsfield OAuth callback returned error:", errorParam);
-    return NextResponse.redirect(new URL("/dashboard/settings/integrations?error=" + errorParam, process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"));
+    return NextResponse.redirect(new URL("/dashboard/settings/integrations?error=" + errorParam, getBaseAppUrl()));
   }
 
   if (!code) {
     console.error("❌ Higgsfield OAuth callback: missing authorization code");
-    return NextResponse.redirect(new URL("/dashboard/settings/integrations?error=missing_code", process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"));
+    return NextResponse.redirect(new URL("/dashboard/settings/integrations?error=missing_code", getBaseAppUrl()));
   }
 
   try {
@@ -56,12 +56,12 @@ export async function GET(request: NextRequest) {
     }
 
     console.log("⚙️ Higgsfield MCP [Callback Route]: Callback completed successfully.");
-    return NextResponse.redirect(new URL("/dashboard/settings/integrations?success=true", process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"));
+    return NextResponse.redirect(new URL("/dashboard/settings/integrations?success=true", getBaseAppUrl()));
   } catch (err: unknown) {
     console.error("❌ Higgsfield MCP [Callback Route] Failure:", err);
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.redirect(
-      new URL(`/dashboard/settings/integrations?error=exchange_failed&details=${encodeURIComponent(msg)}`, process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital")
+      new URL(`/dashboard/settings/integrations?error=exchange_failed&details=${encodeURIComponent(msg)}`, getBaseAppUrl())
     );
   }
 }

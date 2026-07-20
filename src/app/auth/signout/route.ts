@@ -13,7 +13,12 @@ export async function POST(request: Request) {
     await supabase.auth.signOut();
   }
 
-  return NextResponse.redirect(new URL("/login", process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"), {
+  const envUrl = process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital";
+  const baseAppUrl = (envUrl.includes("next_public") || envUrl.includes("0.0.0.0") || envUrl.includes("localhost"))
+    ? "https://bron.digital"
+    : envUrl.trim().replace(/\/+$/, "");
+
+  return NextResponse.redirect(new URL("/login", baseAppUrl), {
     status: 303, // Redirect after POST
   });
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { DBOAuthClientProvider } from "@/lib/higgsfield-mcp";
+import { DBOAuthClientProvider, getBaseAppUrl } from "@/lib/higgsfield-mcp";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 
 export const dynamic = "force-dynamic";
@@ -34,12 +34,12 @@ export async function GET(request: NextRequest) {
     }
 
     console.log("⚙️ Higgsfield MCP [Connect Route]: Auth completed synchronously with result:", result);
-    return NextResponse.redirect(new URL("/dashboard/settings/integrations?success=true", process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"));
+    return NextResponse.redirect(new URL("/dashboard/settings/integrations?success=true", getBaseAppUrl()));
   } catch (error: unknown) {
     console.error("❌ Higgsfield MCP [Connect Route] Failure:", error);
     const msg = error instanceof Error ? error.message : String(error);
     return NextResponse.redirect(
-      new URL(`/dashboard/settings/integrations?error=connect_failed&details=${encodeURIComponent(msg)}`, process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital")
+      new URL(`/dashboard/settings/integrations?error=connect_failed&details=${encodeURIComponent(msg)}`, getBaseAppUrl())
     );
   }
 }

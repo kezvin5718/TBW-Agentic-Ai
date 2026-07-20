@@ -5,7 +5,10 @@ export async function middleware(request: NextRequest) {
   const { user, response } = await updateSession(request);
   const path = request.nextUrl.pathname;
 
-  const baseAppUrl = process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital";
+  const envUrl = process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital";
+  const baseAppUrl = (envUrl.includes("next_public") || envUrl.includes("0.0.0.0") || envUrl.includes("localhost"))
+    ? "https://bron.digital"
+    : envUrl.trim().replace(/\/+$/, "");
 
   // 1. Redirect root to /dashboard
   if (path === "/") {

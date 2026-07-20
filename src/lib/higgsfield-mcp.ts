@@ -221,16 +221,28 @@ export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<
   }
 }
 
-export class DBOAuthClientProvider implements OAuthClientProvider {
-  private redirect_uri = `${process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital"}/api/integrations/higgsfield/callback`;
+export function getBaseAppUrl(): string {
+  const envUrl = process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital";
+  if (
+    envUrl.includes("next_public") ||
+    envUrl.includes("NEXT_PUBLIC") ||
+    envUrl.includes("0.0.0.0") ||
+    envUrl.includes("localhost")
+  ) {
+    return "https://bron.digital";
+  }
+  return envUrl.trim().replace(/\/+$/, "");
+}
 
+export class DBOAuthClientProvider implements OAuthClientProvider {
   get redirectUrl(): string | URL | undefined {
-    return this.redirect_uri;
+    return `${getBaseAppUrl()}/api/integrations/higgsfield/callback`;
   }
 
   get clientMetadata(): OAuthClientMetadata {
+    const redirect = `${getBaseAppUrl()}/api/integrations/higgsfield/callback`;
     return {
-      redirect_uris: [this.redirect_uri],
+      redirect_uris: [redirect],
       client_name: "TBW-OS",
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
