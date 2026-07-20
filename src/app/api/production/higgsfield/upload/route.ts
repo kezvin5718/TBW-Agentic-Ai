@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
+import crypto from "crypto";
 
 export async function POST(request: Request) {
   try {
