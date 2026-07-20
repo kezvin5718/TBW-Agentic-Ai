@@ -18,7 +18,7 @@ export async function GET() {
     const state = Math.random().toString(36).substring(2, 15);
 
     // Build authorization URL
-    const authUrl = new URL("https://mcp.higgsfield.ai/oauth/authorize");
+    const authUrl = new URL("https://mcp.higgsfield.ai/oauth2/authorize");
     authUrl.searchParams.set("client_id", clientId);
     authUrl.searchParams.set("redirect_uri", redirectUri);
     authUrl.searchParams.set("response_type", "code");

@@ -14,7 +14,7 @@ export interface HiggsfieldCreds {
   available_models?: string[];
 }
 
-const HIGGSFIELD_OAUTH_TOKEN_URL = "https://mcp.higgsfield.ai/oauth/token";
+const HIGGSFIELD_OAUTH_TOKEN_URL = "https://mcp.higgsfield.ai/oauth2/token";
 const HIGGSFIELD_MCP_URL = "https://mcp.higgsfield.ai/mcp";
 
 const CLIENT_ID = process.env.HIGGSFIELD_CLIENT_ID || "tbw_os_client";

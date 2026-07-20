@@ -5,7 +5,7 @@ import { discoverHiggsfieldModels, HiggsfieldCreds } from "@/lib/higgsfield-mcp"
 
 export const dynamic = "force-dynamic";
 
-const HIGGSFIELD_OAUTH_TOKEN_URL = "https://mcp.higgsfield.ai/oauth/token";
+const HIGGSFIELD_OAUTH_TOKEN_URL = "https://mcp.higgsfield.ai/oauth2/token";
 const CLIENT_ID = process.env.HIGGSFIELD_CLIENT_ID || "tbw_os_client";
 const CLIENT_SECRET = process.env.HIGGSFIELD_CLIENT_SECRET || "tbw_os_secret";
 
