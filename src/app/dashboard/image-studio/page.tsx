@@ -6,7 +6,6 @@ import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Sparkles,
-  Upload,
   X,
   Image as ImageIcon,
   CheckCircle,
@@ -18,6 +17,7 @@ import {
   Cpu,
   Compass,
   ArrowLeft,
+  ArrowRight,
   Undo,
   Plus,
   Palette
@@ -95,6 +95,9 @@ function ImageStudioWorkspace() {
   const [monthlyCredits, setMonthlyCredits] = useState(0);
   const [creditAlert, setCreditAlert] = useState(false);
 
+  // Connection Tracking
+  const [higgsfieldConnected, setHiggsfieldConnected] = useState<boolean | null>(null);
+
   // Templates
   const [templates, setTemplates] = useState<PromptTemplateItem[]>([]);
 
@@ -125,6 +128,7 @@ function ImageStudioWorkspace() {
     fetchClients();
     fetchMonthlyCredits();
     fetchTemplates();
+    checkHiggsfieldConnection();
   }, []);
 
   // Fetch task-specific guidelines creatives
@@ -135,6 +139,20 @@ function ImageStudioWorkspace() {
       setGuidelineImages([]);
     }
   }, [clientId]);
+
+  const checkHiggsfieldConnection = async () => {
+    try {
+      const res = await fetch("/api/integrations/higgsfield/status");
+      if (res.ok) {
+        const data = await res.json();
+        setHiggsfieldConnected(data.connected === true);
+      } else {
+        setHiggsfieldConnected(false);
+      }
+    } catch {
+      setHiggsfieldConnected(false);
+    }
+  };
 
   const fetchHistory = async () => {
     try {
@@ -507,6 +525,26 @@ function ImageStudioWorkspace() {
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
+      {/* Connection Warning Banner */}
+      {higgsfieldConnected === false && (
+        <div className="bg-amber-950/20 border border-amber-900/60 rounded-2xl p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-3 animate-in slide-in-from-top-4 duration-300">
+          <div className="space-y-1">
+            <span className="bg-amber-500/20 text-amber-300 text-[8px] font-black uppercase px-2 py-0.5 rounded-full border border-indigo-500/30">
+              Integration Warning
+            </span>
+            <div className="text-xs text-white font-semibold">
+              Higgsfield is not connected. Connect it in settings to enable image generation.
+            </div>
+          </div>
+          <Link
+            href="/dashboard/settings/integrations"
+            className="inline-flex items-center space-x-1.5 text-[10px] text-white hover:text-white font-bold bg-amber-600 hover:bg-amber-500 px-3.5 py-2 rounded-xl transition-all shadow-md shadow-amber-950/30 cursor-pointer"
+          >
+            <span>Connect Higgsfield</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+      )}
       {/* Task Mode Context Banner */}
       {taskId && (
         <div className="bg-indigo-950/40 border border-indigo-900 rounded-2xl p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-3 animate-in slide-in-from-top-4 duration-300">
@@ -601,8 +639,12 @@ function ImageStudioWorkspace() {
 
           {!styleReference ? (
             <div
-              onClick={() => styleFileInputRef.current?.click()}
-              className="w-full border border-dashed border-purple-500/35 hover:border-purple-500/65 bg-purple-950/5 hover:bg-purple-950/10 rounded-2xl p-4 text-center cursor-pointer transition-all flex items-center justify-center space-x-2.5 group"
+              onClick={() => higgsfieldConnected === true && styleFileInputRef.current?.click()}
+              className={`w-full border border-dashed rounded-2xl p-4 text-center transition-all flex items-center justify-center space-x-2.5 group ${
+                higgsfieldConnected !== true
+                  ? "border-slate-900 bg-slate-950/20 text-slate-600 cursor-not-allowed opacity-50"
+                  : "border-purple-500/35 hover:border-purple-500/65 bg-purple-950/5 hover:bg-purple-950/10 cursor-pointer text-slate-350"
+              }`}
             >
               {uploadingStyle ? (
                 <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
@@ -690,8 +732,12 @@ function ImageStudioWorkspace() {
 
             {productImages.length < 10 && (
               <div
-                onClick={() => productFileInputRef.current?.click()}
-                className="w-16 h-16 rounded-xl border border-dashed border-slate-800 hover:border-indigo-500 bg-slate-900/10 hover:bg-indigo-950/5 flex flex-col items-center justify-center cursor-pointer transition-all duration-150 group"
+                onClick={() => higgsfieldConnected === true && productFileInputRef.current?.click()}
+                className={`w-16 h-16 rounded-xl border border-dashed flex flex-col items-center justify-center transition-all duration-150 group ${
+                  higgsfieldConnected !== true
+                    ? "border-slate-900 bg-slate-950/20 cursor-not-allowed opacity-50"
+                    : "border-slate-800 hover:border-indigo-500 bg-slate-900/10 hover:bg-indigo-950/5 cursor-pointer"
+                }`}
               >
                 {uploadingProduct ? (
                   <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
@@ -908,10 +954,12 @@ function ImageStudioWorkspace() {
 
           <button
             onClick={handleGenerate}
-            disabled={generating || !prompt.trim() || productImages.length === 0}
+            disabled={generating || !prompt.trim() || productImages.length === 0 || higgsfieldConnected !== true}
             className={`w-full py-3.5 px-6 rounded-2xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center space-x-2 ${
               generating
                 ? "bg-slate-900 border border-slate-800 text-slate-550"
+                : (higgsfieldConnected !== true)
+                ? "bg-amber-950/10 border border-amber-950/30 text-amber-500/60 cursor-not-allowed"
                 : (!prompt.trim() || productImages.length === 0)
                 ? "bg-slate-950 border border-slate-900 text-slate-650 cursor-not-allowed"
                 : "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-lg shadow-indigo-950/50 cursor-pointer"
@@ -919,9 +967,11 @@ function ImageStudioWorkspace() {
           >
             {generating ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+                <Loader2 className="w-4 h-4 animate-spin text-indigo-450" />
                 <span>Generating Batch... ({generationProgress}%)</span>
               </>
+            ) : higgsfieldConnected === false ? (
+              <span>Higgsfield Not Connected</span>
             ) : productImages.length === 0 ? (
               <span>Upload product images to begin</span>
             ) : (

@@ -18,7 +18,8 @@ import {
   User as UserIcon,
   Layers,
   Bot,
-  Image
+  Image,
+  Settings
 } from "lucide-react";
 
 export default async function DashboardLayout({
@@ -54,6 +55,7 @@ export default async function DashboardLayout({
     { name: "Meta Ads Manager", href: "/dashboard/ads", icon: Megaphone, roles: ["founder", "employee"] },
     { name: "Reporting & Analytics", href: "/dashboard/reporting", icon: LineChart, roles: ["founder", "employee", "client"] },
     { name: "Agency Brain", href: "/dashboard/agency-brain", icon: Layers, roles: ["founder"] },
+    { name: "Integrations", href: "/dashboard/settings/integrations", icon: Settings, roles: ["founder"] },
   ];
 
   const filteredNavItems = allNavItems.filter((item) => item.roles.includes(role));
