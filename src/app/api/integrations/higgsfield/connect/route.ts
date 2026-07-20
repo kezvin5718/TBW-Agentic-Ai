@@ -1,10 +1,11 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import crypto from "crypto";
+import { DBOAuthClientProvider } from "@/lib/higgsfield-mcp";
+import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -14,50 +15,31 @@ export async function GET() {
       return new NextResponse("Unauthorized", { status: 401 });
     }
 
-    const clientId = process.env.HIGGSFIELD_CLIENT_ID || "claude";
-    const redirectUri = "https://bron.digital/api/integrations/higgsfield/callback";
-    const state = Math.random().toString(36).substring(2, 15);
-
-    // 1. Generate PKCE Verifier and Challenge
-    const verifier = crypto.randomBytes(32).toString("base64url");
-    const challenge = crypto
-      .createHash("sha256")
-      .update(verifier)
-      .digest("base64url");
-
-    // 2. Build authorization URL
-    const authUrl = new URL("https://mcp.higgsfield.ai/oauth2/authorize");
-    authUrl.searchParams.set("client_id", clientId);
-    authUrl.searchParams.set("redirect_uri", redirectUri);
-    authUrl.searchParams.set("response_type", "code");
-    authUrl.searchParams.set("scope", "openid email offline_access");
-    authUrl.searchParams.set("state", state);
-    authUrl.searchParams.set("code_challenge", challenge);
-    authUrl.searchParams.set("code_challenge_method", "S256");
-
-    const response = NextResponse.redirect(authUrl.toString());
+    console.log("⚙️ Higgsfield MCP [Connect Route]: Starting DBOAuthClientProvider authorization orchestrator...");
     
-    // Save state in cookie
-    response.cookies.set("higgsfield_oauth_state", state, {
-      path: "/",
-      maxAge: 300, // 5 minutes
-      httpOnly: true,
-      secure: true,
-      sameSite: "lax",
+    const provider = new DBOAuthClientProvider();
+    
+    // Run the official SDK's built-in discovery, registration, and challenge start
+    const result = await auth(provider, {
+      serverUrl: "https://mcp.higgsfield.ai/mcp"
     });
 
-    // Save verifier in cookie
-    response.cookies.set("higgsfield_oauth_verifier", verifier, {
-      path: "/",
-      maxAge: 300, // 5 minutes
-      httpOnly: true,
-      secure: true,
-      sameSite: "lax",
-    });
+    if (result === "REDIRECT") {
+      const authRedirectUrl = provider.getAuthorizationUrl();
+      if (authRedirectUrl) {
+        console.log("⚙️ Higgsfield MCP [Connect Route]: Redirecting user to authorization URL.");
+        return NextResponse.redirect(authRedirectUrl.toString());
+      }
+      throw new Error("SDK auth returned REDIRECT but provider had no authorization URL saved.");
+    }
 
-    return response;
+    console.log("⚙️ Higgsfield MCP [Connect Route]: Auth completed synchronously with result:", result);
+    return NextResponse.redirect(new URL("/dashboard/settings/integrations?success=true", request.url));
   } catch (error: unknown) {
-    console.error("Connect redirect error:", error);
-    return new NextResponse("Failed to initiate Higgsfield OAuth flow", { status: 500 });
+    console.error("❌ Higgsfield MCP [Connect Route] Failure:", error);
+    const msg = error instanceof Error ? error.message : String(error);
+    return NextResponse.redirect(
+      new URL(`/dashboard/settings/integrations?error=connect_failed&details=${encodeURIComponent(msg)}`, request.url)
+    );
   }
 }

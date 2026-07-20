@@ -3,6 +3,9 @@ import { encrypt, decrypt } from "@/lib/encryption";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { HIGGSFIELD_CONFIG } from "@/lib/higgsfield-config";
+import { cookies } from "next/headers";
+import { OAuthClientProvider, OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
+import { OAuthClientMetadata, OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 
 export interface HiggsfieldCreds {
   access_token_encrypted: string;
@@ -215,5 +218,212 @@ export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<
         console.warn("Warn closing transport:", closeErr);
       }
     }
+  }
+}
+
+export class DBOAuthClientProvider implements OAuthClientProvider {
+  private redirect_uri = "https://bron.digital/api/integrations/higgsfield/callback";
+
+  get redirectUrl(): string | URL | undefined {
+    return this.redirect_uri;
+  }
+
+  get clientMetadata(): OAuthClientMetadata {
+    return {
+      redirect_uris: [this.redirect_uri],
+      client_name: "TBW-OS",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      token_endpoint_auth_method: "none",
+      scope: "openid email offline_access",
+    };
+  }
+
+  async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
+    try {
+      console.log("⚙️ Higgsfield MCP DCR [Stage: clientInformation]: Loading client credentials...");
+      const supabase = await createClient();
+      const { data, error } = await supabase
+        .from("agency_settings")
+        .select("value")
+        .eq("key", "higgsfield_client_info")
+        .maybeSingle();
+
+      if (error) {
+        console.error("❌ Higgsfield MCP DCR [Stage: clientInformation]: DB load error:", error);
+        return undefined;
+      }
+      
+      if (data?.value) {
+        console.log("⚙️ Higgsfield MCP DCR [Stage: clientInformation]: Successfully loaded client credentials:", data.value);
+        return data.value as OAuthClientInformationMixed;
+      }
+      console.log("⚙️ Higgsfield MCP DCR [Stage: clientInformation]: Client not registered yet. Need DCR.");
+      return undefined;
+    } catch (err) {
+      console.error("❌ Higgsfield MCP DCR [Stage: clientInformation]: Failed:", err);
+      return undefined;
+    }
+  }
+
+  async saveClientInformation(clientInformation: OAuthClientInformationMixed): Promise<void> {
+    try {
+      console.log("⚙️ Higgsfield MCP DCR [Stage: saveClientInformation]: Saving client registration:", clientInformation);
+      const supabase = await createClient();
+      const { error } = await supabase
+        .from("agency_settings")
+        .upsert({
+          key: "higgsfield_client_info",
+          value: clientInformation,
+        });
+
+      if (error) {
+        throw error;
+      }
+      console.log("⚙️ Higgsfield MCP DCR [Stage: saveClientInformation]: Saved client registration successfully.");
+    } catch (err) {
+      console.error("❌ Higgsfield MCP DCR [Stage: saveClientInformation]: Failed to save client registration:", err);
+      throw err;
+    }
+  }
+
+  async tokens(): Promise<OAuthTokens | undefined> {
+    try {
+      console.log("⚙️ Higgsfield MCP [Stage: tokens]: Loading saved tokens...");
+      const creds = await getHiggsfieldCredentials();
+      if (creds && creds.status === "connected") {
+        const accessToken = decrypt(creds.access_token_encrypted);
+        const refreshToken = creds.refresh_token_encrypted ? decrypt(creds.refresh_token_encrypted) : undefined;
+        console.log("⚙️ Higgsfield MCP [Stage: tokens]: Loaded saved tokens successfully.");
+        return {
+          access_token: accessToken,
+          refresh_token: refreshToken,
+          token_type: "Bearer",
+        };
+      }
+      console.log("⚙️ Higgsfield MCP [Stage: tokens]: No connected tokens found.");
+      return undefined;
+    } catch (err) {
+      console.error("❌ Higgsfield MCP [Stage: tokens]: Failed to load tokens:", err);
+      return undefined;
+    }
+  }
+
+  async saveTokens(tokens: OAuthTokens): Promise<void> {
+    try {
+      console.log("⚙️ Higgsfield MCP [Stage: saveTokens]: Exchanged authorization code. Saving tokens...");
+      const expiresAt = new Date(Date.now() + (tokens.expires_in || 3600) * 1000).toISOString();
+      const creds: HiggsfieldCreds = {
+        access_token_encrypted: encrypt(tokens.access_token),
+        refresh_token_encrypted: encrypt(tokens.refresh_token || ""),
+        expires_at: expiresAt,
+        connected_as: "Registered Token",
+        status: "connected",
+      };
+
+      const supabase = await createClient();
+      const { error } = await supabase
+        .from("agency_settings")
+        .upsert({
+          key: "higgsfield_credentials",
+          value: creds,
+        });
+
+      if (error) {
+        throw error;
+      }
+      console.log("⚙️ Higgsfield MCP [Stage: saveTokens]: Saved tokens successfully.");
+    } catch (err) {
+      console.error("❌ Higgsfield MCP [Stage: saveTokens]: Failed to save tokens:", err);
+      throw err;
+    }
+  }
+
+  async saveCodeVerifier(codeVerifier: string): Promise<void> {
+    try {
+      console.log("⚙️ Higgsfield MCP [Stage: saveCodeVerifier]: Saving PKCE verifier...");
+      const cookieStore = await cookies();
+      cookieStore.set("higgsfield_oauth_verifier", codeVerifier, {
+        path: "/",
+        maxAge: 300,
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+      });
+      console.log("⚙️ Higgsfield MCP [Stage: saveCodeVerifier]: Saved verifier cookie successfully.");
+    } catch (err) {
+      console.error("❌ Higgsfield MCP [Stage: saveCodeVerifier]: Failed:", err);
+    }
+  }
+
+  async codeVerifier(): Promise<string> {
+    try {
+      console.log("⚙️ Higgsfield MCP [Stage: codeVerifier]: Loading PKCE verifier...");
+      const cookieStore = await cookies();
+      const val = cookieStore.get("higgsfield_oauth_verifier")?.value || "";
+      console.log("⚙️ Higgsfield MCP [Stage: codeVerifier]: Loaded verifier cookie successfully.");
+      return val;
+    } catch (err) {
+      console.error("❌ Higgsfield MCP [Stage: codeVerifier]: Failed to load verifier:", err);
+      return "";
+    }
+  }
+
+  async saveDiscoveryState(state: OAuthDiscoveryState): Promise<void> {
+    try {
+      console.log("⚙️ Higgsfield MCP [Stage: saveDiscoveryState]: Saving server discovery metadata:", state.authorizationServerUrl);
+      const supabase = await createClient();
+      const { error } = await supabase
+        .from("agency_settings")
+        .upsert({
+          key: "higgsfield_discovery_state",
+          value: state,
+        });
+
+      if (error) {
+        throw error;
+      }
+      console.log("⚙️ Higgsfield MCP [Stage: saveDiscoveryState]: Saved discovery state successfully.");
+    } catch (err) {
+      console.error("❌ Higgsfield MCP [Stage: saveDiscoveryState]: Failed to save discovery state:", err);
+    }
+  }
+
+  async discoveryState(): Promise<OAuthDiscoveryState | undefined> {
+    try {
+      console.log("⚙️ Higgsfield MCP [Stage: discoveryState]: Loading server discovery metadata...");
+      const supabase = await createClient();
+      const { data, error } = await supabase
+        .from("agency_settings")
+        .select("value")
+        .eq("key", "higgsfield_discovery_state")
+        .maybeSingle();
+
+      if (error) {
+        console.error("❌ Higgsfield MCP [Stage: discoveryState]: DB load error:", error);
+        return undefined;
+      }
+      
+      if (data?.value) {
+        console.log("⚙️ Higgsfield MCP [Stage: discoveryState]: Loaded discovery state:", data.value);
+        return data.value as OAuthDiscoveryState;
+      }
+      console.log("⚙️ Higgsfield MCP [Stage: discoveryState]: No cached discovery state found.");
+      return undefined;
+    } catch (err) {
+      console.error("❌ Higgsfield MCP [Stage: discoveryState]: Failed to load discovery state:", err);
+      return undefined;
+    }
+  }
+
+  private authorizationUrl: URL | null = null;
+  
+  async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
+    console.log("⚙️ Higgsfield MCP [Stage: redirectToAuthorization]: Generated authorization redirect URL:", authorizationUrl.toString());
+    this.authorizationUrl = authorizationUrl;
+  }
+
+  getAuthorizationUrl(): URL | null {
+    return this.authorizationUrl;
   }
 }
