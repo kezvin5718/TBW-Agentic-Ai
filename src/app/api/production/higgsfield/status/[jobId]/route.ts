@@ -29,6 +29,22 @@ export async function GET(
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
 
+    const elapsed = Date.now() - job.createdAt;
+    const isVideo = job.model.includes("video") || job.prompt.toLowerCase().includes("video");
+    const timeoutMs = isVideo ? 8 * 60 * 1000 : 3 * 60 * 1000; // 8 mins video, 3 mins image
+
+    // Hard Timeout enforcement (Requirement 4 & 5)
+    if (elapsed > timeoutMs) {
+      console.error(`❌ Higgsfield MCP: Job ${jobId} timed out after ${Math.round(elapsed / 1000)}s! Canceling server-side polling.`);
+      activeJobs.delete(jobId);
+      return NextResponse.json({
+        status: "timed_out",
+        error: `Generation timed out after ${isVideo ? "8" : "3"} minutes.`,
+        jobId,
+        canRetry: true,
+      });
+    }
+
     const creds = await getHiggsfieldCredentials();
     const serviceSupabase = createServiceRoleClient();
     const supabase = await createClient();
@@ -40,16 +56,18 @@ export async function GET(
         const statusResult = await pollHiggsfieldJobStatus(creds, jobId);
         const currentStatus = (statusResult.status || "processing").toLowerCase();
 
-        // Failed / NSFW / IP_Detected states
+        // Failed / NSFW / IP_Detected / Rejected states (Requirement 2)
         if (
           currentStatus.includes("fail") ||
           currentStatus.includes("error") ||
           currentStatus.includes("nsfw") ||
           currentStatus.includes("ip_detected") ||
-          currentStatus.includes("reject")
+          currentStatus.includes("reject") ||
+          currentStatus.includes("cancel")
         ) {
           const failureReason = statusResult.failure_reason || statusResult.error || `Generation stopped (${currentStatus})`;
-          console.error(`❌ Polling job ${jobId}: Failed state detected (${currentStatus}):`, failureReason);
+          console.error(`❌ Polling job ${jobId}: Terminal failure state detected (${currentStatus}):`, failureReason);
+          console.error(`❌ Last raw response for ${jobId}:`, JSON.stringify(statusResult.raw, null, 2));
           activeJobs.delete(jobId);
           return NextResponse.json({
             status: "failed",
@@ -58,22 +76,22 @@ export async function GET(
           });
         }
 
-        // Terminal success state
+        // Terminal success state (Requirement 2)
         if (
           currentStatus.includes("completed") ||
           currentStatus.includes("succeeded") ||
           currentStatus.includes("done") ||
-          currentStatus === "success"
+          currentStatus === "success" ||
+          statusResult.result_url ||
+          (statusResult.result_urls && statusResult.result_urls.length > 0)
         ) {
           console.log(`✅ Polling job ${jobId}: Completed state reached.`);
-          const resultUrl = statusResult.result_url || statusResult.url;
+          const resultUrl = statusResult.result_url || statusResult.url || (statusResult.result_urls && statusResult.result_urls[0]);
 
           if (resultUrl) {
-            // Download result image/video to storage
             const savedMediaUrl = await downloadAndStoreGeneratedMedia(resultUrl, "higgsfield");
             const costPerImage = HIGGSFIELD_CONFIG.modelCosts[job.model as keyof typeof HIGGSFIELD_CONFIG.modelCosts] || 1.5;
 
-            // Save to studio_generations
             const { data: record, error: dbErr } = await serviceSupabase
               .from("studio_generations")
               .insert({
@@ -102,10 +120,9 @@ export async function GET(
           }
         }
 
-        // Job still processing
+        // Job still processing - respect poll_after_seconds (Requirement 3)
         const pollAfter = statusResult.poll_after_seconds || job.pollAfterSeconds || 3;
-        const elapsed = Date.now() - job.createdAt;
-        const progress = Math.min(Math.round((elapsed / Math.max(job.duration, 10000)) * 100), 95);
+        const progress = Math.min(Math.round((elapsed / Math.max(job.duration, 15000)) * 100), 95);
 
         return NextResponse.json({
           status: "processing",
@@ -118,7 +135,6 @@ export async function GET(
     }
 
     // 2. Local Simulation Fallback (for offline/test environments)
-    const elapsed = Date.now() - job.createdAt;
     if (elapsed < job.duration) {
       const progress = Math.min(Math.round((elapsed / job.duration) * 100), 99);
       return NextResponse.json({

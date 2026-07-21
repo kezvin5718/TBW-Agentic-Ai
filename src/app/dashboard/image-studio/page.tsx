@@ -389,38 +389,52 @@ function ImageStudioWorkspace() {
     }
   };
 
-  const pollJobStatus = (jobId: string, pollAfterSeconds: number = 3) => {
-    const intervalTime = Math.max(pollAfterSeconds * 1000, 2000);
-    const interval = setInterval(async () => {
+  const pollJobStatus = (jobId: string, initialPollAfter: number = 3) => {
+    let currentInterval = Math.max(initialPollAfter * 1000, 2000);
+    let timerId: NodeJS.Timeout | null = null;
+
+    const runPoll = async () => {
       try {
         const res = await fetch(`/api/production/higgsfield/status/${jobId}`);
         const data = await res.json();
 
-        if (!res.ok) {
-          clearInterval(interval);
-          throw new Error(data.error || "Job polling failed");
+        if (!res.ok || data.status === "failed" || data.status === "timed_out" || data.status === "nsfw" || data.status === "ip_detected") {
+          if (timerId) clearTimeout(timerId);
+          const failureMsg = data.error || `Generation ${data.status || "failed"}.`;
+          setGenerationError(failureMsg);
+          setGenerating(false);
+          return;
         }
 
-        if (data.status === "processing") {
-          setGenerationProgress(data.progress || 0);
-        } else if (data.status === "completed") {
-          clearInterval(interval);
+        if (data.status === "completed") {
+          if (timerId) clearTimeout(timerId);
           setGenerating(false);
           setPrompt("");
           setStyleReference(null);
           setProductImages([]);
           setLastPrompt(null);
-          // Reload history
           fetchHistory();
           fetchMonthlyCredits();
+          return;
+        }
+
+        // Still processing - schedule next poll respecting poll_after_seconds
+        if (data.status === "processing") {
+          setGenerationProgress(data.progress || 0);
+          if (typeof data.pollAfterSeconds === "number") {
+            currentInterval = Math.max(data.pollAfterSeconds * 1000, 2000);
+          }
+          timerId = setTimeout(runPoll, currentInterval);
         }
       } catch (err: unknown) {
-        clearInterval(interval);
+        if (timerId) clearTimeout(timerId);
         const msg = err instanceof Error ? err.message : String(err);
         setGenerationError(msg || "Checking status failed");
         setGenerating(false);
       }
-    }, intervalTime);
+    };
+
+    timerId = setTimeout(runPoll, currentInterval);
   };
 
   // Apply Prompt Template with Undo
@@ -1098,6 +1112,14 @@ function ImageStudioWorkspace() {
                     <>
                       <AlertTriangle className="w-8 h-8 text-red-400" />
                       <p className="text-xs text-red-300 font-medium max-w-sm">{generationError}</p>
+                      <button
+                        onClick={handleSyncFromHiggsfield}
+                        disabled={syncing}
+                        className="mt-2 inline-flex items-center space-x-1.5 bg-red-950/40 hover:bg-red-900/40 border border-red-800 text-red-200 text-[10px] font-bold py-1.5 px-3 rounded-xl transition-all cursor-pointer"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
+                        <span>Check Status / Sync</span>
+                      </button>
                     </>
                   )}
                 </div>

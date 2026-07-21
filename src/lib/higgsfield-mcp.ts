@@ -488,6 +488,7 @@ export interface ParsedMCPResponse {
   poll_after_seconds?: number;
   result_url?: string;
   url?: string;
+  result_urls?: string[];
   error?: string;
   failure_reason?: string;
   recovery_tool?: { name: string; arguments?: Record<string, unknown> };
@@ -505,35 +506,115 @@ export function parseMCPToolResponse(response: unknown): ParsedMCPResponse {
 
   const obj = response as Record<string, unknown>;
 
-  // Check direct object fields
-  if (obj.id || obj.job_id || obj.status || obj.result_url || obj.url) {
+  // Function to extract URLs array or single URL from any object
+  const extractUrls = (target: Record<string, unknown>): { mainUrl?: string; allUrls: string[] } => {
+    const allUrls: string[] = [];
+    let mainUrl: string | undefined = undefined;
+
+    const possibleKeys = ["result_url", "url", "image_url", "video_url", "media_url", "output_url"];
+    for (const key of possibleKeys) {
+      if (typeof target[key] === "string" && (target[key] as string).startsWith("http")) {
+        if (!mainUrl) mainUrl = target[key] as string;
+        if (!allUrls.includes(target[key] as string)) allUrls.push(target[key] as string);
+      }
+    }
+
+    const arrayKeys = ["images", "image_urls", "video_urls", "outputs", "results", "urls", "items"];
+    for (const key of arrayKeys) {
+      if (Array.isArray(target[key])) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (target[key] as any[]).forEach((item) => {
+          if (typeof item === "string" && item.startsWith("http")) {
+            if (!mainUrl) mainUrl = item;
+            if (!allUrls.includes(item)) allUrls.push(item);
+          } else if (item && typeof item === "object") {
+            for (const subKey of possibleKeys) {
+              if (typeof item[subKey] === "string" && item[subKey].startsWith("http")) {
+                if (!mainUrl) mainUrl = item[subKey];
+                if (!allUrls.includes(item[subKey])) allUrls.push(item[subKey]);
+              }
+            }
+          }
+        });
+      }
+    }
+
+    return { mainUrl, allUrls };
+  };
+
+  // Helper to extract status field from various synonyms
+  const extractStatus = (target: Record<string, unknown>): string | undefined => {
+    const statusVal = target.status || target.state || target.phase || target.job_status;
+    if (typeof statusVal === "string") return statusVal.toLowerCase();
+    return undefined;
+  };
+
+  // Helper to extract poll_after_seconds
+  const extractPollInterval = (target: Record<string, unknown>): number | undefined => {
+    const val = target.poll_after_seconds || target.poll_interval || target.poll_after || target.retry_after;
+    if (typeof val === "number") return val;
+    if (typeof val === "string") {
+      const num = parseInt(val, 10);
+      if (!isNaN(num)) return num;
+    }
+    return undefined;
+  };
+
+  // 1. Direct object inspection
+  const directStatus = extractStatus(obj);
+  const directPoll = extractPollInterval(obj);
+  const directUrls = extractUrls(obj);
+  const directError = (obj.error || obj.failure_reason || obj.message) as string | undefined;
+
+  if (directStatus || directUrls.mainUrl || directError || obj.id || obj.job_id) {
     return {
       id: (obj.id || obj.job_id) as string | undefined,
       job_id: (obj.job_id || obj.id) as string | undefined,
-      status: obj.status as string | undefined,
-      poll_after_seconds: typeof obj.poll_after_seconds === "number" ? obj.poll_after_seconds : undefined,
-      result_url: (obj.result_url || obj.url || obj.image_url || obj.video_url) as string | undefined,
-      url: (obj.url || obj.result_url) as string | undefined,
-      error: (obj.error || obj.failure_reason) as string | undefined,
-      failure_reason: (obj.failure_reason || obj.error) as string | undefined,
+      status: directStatus || (directUrls.mainUrl ? "completed" : undefined),
+      poll_after_seconds: directPoll,
+      result_url: directUrls.mainUrl,
+      url: directUrls.mainUrl,
+      result_urls: directUrls.allUrls,
+      error: directError,
+      failure_reason: (obj.failure_reason || directError) as string | undefined,
       recovery_tool: obj.recovery_tool as { name: string; arguments?: Record<string, unknown> } | undefined,
       raw: obj,
       items: Array.isArray(obj.items) || Array.isArray(obj.generations) ? ((obj.items || obj.generations) as Array<Record<string, unknown>>) : undefined,
     };
   }
 
-  // Check MCP content array wrapper
+  // 2. Check MCP content array wrapper
   if (Array.isArray(obj.content)) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const textItem = obj.content.find((c: any) => c.type === "text" && typeof c.text === "string");
-    if (textItem) {
+    if (textItem && typeof textItem.text === "string") {
       try {
         const parsed = JSON.parse(textItem.text);
         if (parsed && typeof parsed === "object") {
-          return parseMCPToolResponse(parsed);
+          const parsedResult = parseMCPToolResponse(parsed);
+          parsedResult.raw = obj;
+          return parsedResult;
         }
       } catch {
-        // Fallback text check
+        // Plain text parsing fallback
+        const rawText = textItem.text;
+        const urlMatch = rawText.match(/https?:\/\/[^\s"']+/g);
+        let textStatus: string | undefined = undefined;
+
+        if (/completed|succeeded|success|done|finished/i.test(rawText)) textStatus = "completed";
+        else if (/failed|error|rejected|canceled|cancelled/i.test(rawText)) textStatus = "failed";
+        else if (/nsfw/i.test(rawText)) textStatus = "nsfw";
+        else if (/ip_detected|copyright/i.test(rawText)) textStatus = "ip_detected";
+        else if (/processing|in_progress|pending|queued/i.test(rawText)) textStatus = "processing";
+
+        return {
+          status: textStatus,
+          result_url: urlMatch ? urlMatch[0] : undefined,
+          url: urlMatch ? urlMatch[0] : undefined,
+          result_urls: urlMatch || [],
+          error: textStatus === "failed" || textStatus === "nsfw" || textStatus === "ip_detected" ? rawText : undefined,
+          raw: obj,
+        };
       }
     }
   }
@@ -543,6 +624,7 @@ export function parseMCPToolResponse(response: unknown): ParsedMCPResponse {
 
 /**
  * Polls the 'job_status' tool respecting poll_after_seconds until terminal state
+ * Logs full raw JSON response on every poll per requirement 1
  */
 export async function pollHiggsfieldJobStatus(
   creds: HiggsfieldCreds,
@@ -557,11 +639,14 @@ export async function pollHiggsfieldJobStatus(
     rawRes = await executeHiggsfieldMCPTool(creds, "job_status", { job_id: jobId });
   }
 
+  // Requirement 1: Log full raw JSON response on every poll
+  console.log(`⚙️ Higgsfield MCP [RAW job_status Response for ${jobId}]:\n${JSON.stringify(rawRes, null, 2)}`);
+
   const parsed = parseMCPToolResponse(rawRes);
   const currentStatus = parsed.status || "processing";
   console.log(`Polling job ${jobId}: ${currentStatus}`);
 
-  // Handle recovery_tool field if returned
+  // Requirement 5: Handle recovery_tool field if returned
   if (parsed.recovery_tool && parsed.recovery_tool.name) {
     console.warn(`⚠️ Higgsfield MCP: Server returned recovery_tool '${parsed.recovery_tool.name}'. Executing recovery tool...`);
     try {
