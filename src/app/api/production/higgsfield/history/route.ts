@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { repairStudioGenerations } from "@/lib/higgsfield-mcp";
 
 export async function GET() {
   try {
@@ -9,6 +10,13 @@ export async function GET() {
     if (!user || !["founder", "employee"].includes(user.user_metadata?.role)) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    // Requirement 4: Trigger repair routine for existing studio_generations rows with temporary external URLs
+    try {
+      repairStudioGenerations().catch((repErr) => {
+        console.warn("⚠️ Background studio generations repair notice:", repErr);
+      });
+    } catch {}
 
     const { data: history, error } = await supabase
       .from("studio_generations")

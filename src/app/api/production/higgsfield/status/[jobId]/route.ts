@@ -77,6 +77,7 @@ export async function GET(
         }
 
         // Terminal success state (Requirement 2)
+        // Requirement 3: Terminal success state - log raw completed job_status response once
         if (
           currentStatus.includes("completed") ||
           currentStatus.includes("succeeded") ||
@@ -86,9 +87,27 @@ export async function GET(
           (statusResult.result_urls && statusResult.result_urls.length > 0)
         ) {
           console.log(`✅ Polling job ${jobId}: Completed state reached.`);
-          const resultUrl = statusResult.result_url || statusResult.url || (statusResult.result_urls && statusResult.result_urls[0]);
+          console.log(`⚙️ Higgsfield MCP [RAW Completed job_status Response for ${jobId}]:\n${JSON.stringify(statusResult.raw || statusResult, null, 2)}`);
+
+          // Requirement 3: Extract result URL from actual fields (result_url, results[].url, structuredContent, etc.)
+          let resultUrl = statusResult.result_url || statusResult.url;
+          if (!resultUrl && statusResult.raw && typeof statusResult.raw === "object") {
+            const rawObj = statusResult.raw as Record<string, unknown>;
+            const struct = (rawObj.structuredContent || rawObj.structured_content || rawObj) as Record<string, unknown>;
+            const resArr = (struct?.results || rawObj.results || struct?.items) as Array<Record<string, unknown>> | undefined;
+
+            if (Array.isArray(resArr) && resArr[0]) {
+              const firstItem = resArr[0];
+              resultUrl = (firstItem.result_url || firstItem.url || firstItem.output || firstItem.media_url) as string;
+            }
+          }
+
+          if (!resultUrl && statusResult.result_urls && statusResult.result_urls.length > 0) {
+            resultUrl = statusResult.result_urls[0];
+          }
 
           if (resultUrl) {
+            // Requirement 1 & 2: Download image server-side and upload to Supabase Storage
             const savedMediaUrl = await downloadAndStoreGeneratedMedia(resultUrl, "higgsfield");
             const costPerImage = HIGGSFIELD_CONFIG.modelCosts[job.model as keyof typeof HIGGSFIELD_CONFIG.modelCosts] || 1.5;
 

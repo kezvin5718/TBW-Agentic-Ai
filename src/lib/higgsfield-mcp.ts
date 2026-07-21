@@ -919,7 +919,8 @@ export async function pollHiggsfieldJobStatus(
 }
 
 /**
- * Downloads generated result image/video from result URL and stores locally/Supabase
+ * Downloads generated result image/video from result URL and stores in Supabase Storage (bucket: creatives)
+ * with local /uploads fallback. Returns permanent Supabase Storage public URL. (Requirement 1 & 2)
  */
 export async function downloadAndStoreGeneratedMedia(
   resultUrl: string,
@@ -929,22 +930,42 @@ export async function downloadAndStoreGeneratedMedia(
     console.log(`📥 Higgsfield MCP: Downloading completed media from result URL: ${resultUrl}`);
     const fetchRes = await fetch(resultUrl);
     if (!fetchRes.ok) {
-      throw new Error(`Failed to fetch media: ${fetchRes.statusText}`);
+      throw new Error(`Failed to fetch media from ${resultUrl}: status ${fetchRes.status} ${fetchRes.statusText}`);
     }
     const buffer = Buffer.from(await fetchRes.arrayBuffer());
     
     const contentType = fetchRes.headers.get("content-type") || "";
     let ext = "png";
-    if (contentType.includes("video") || resultUrl.endsWith(".mp4")) {
+    if (contentType.includes("video") || resultUrl.toLowerCase().includes(".mp4")) {
       ext = "mp4";
-    } else if (contentType.includes("jpeg") || resultUrl.endsWith(".jpg")) {
+    } else if (contentType.includes("jpeg") || resultUrl.toLowerCase().includes(".jpg")) {
       ext = "jpg";
-    } else if (contentType.includes("webp") || resultUrl.endsWith(".webp")) {
+    } else if (contentType.includes("webp") || resultUrl.toLowerCase().includes(".webp")) {
       ext = "webp";
     }
 
     const fileName = `${prefix}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`;
+    const storagePath = `studio-outputs/${fileName}`;
 
+    const supabase = createServiceRoleClient();
+    const bucket = "creatives";
+
+    // 1. Primary: Upload to Supabase Storage 'creatives' bucket (Requirement 1 & 2)
+    const { error: uploadErr } = await supabase.storage
+      .from(bucket)
+      .upload(storagePath, buffer, { contentType: contentType || `image/${ext}`, upsert: true });
+
+    if (!uploadErr) {
+      const publicData = supabase.storage.from(bucket).getPublicUrl(storagePath);
+      if (publicData?.data?.publicUrl) {
+        console.log(`✅ Higgsfield MCP: Media uploaded to Supabase Storage: ${publicData.data.publicUrl}`);
+        return publicData.data.publicUrl;
+      }
+    } else {
+      console.warn(`⚠️ Supabase storage upload notice for ${storagePath}: ${uploadErr.message}`);
+    }
+
+    // 2. Fallback: Save to local public/uploads directory
     const { writeFile, mkdir } = await import("fs/promises");
     const { join } = await import("path");
     const { existsSync } = await import("fs");
@@ -957,12 +978,56 @@ export async function downloadAndStoreGeneratedMedia(
     await writeFile(filePath, buffer);
 
     const publicPath = `/uploads/${fileName}`;
-    console.log(`✅ Higgsfield MCP: Media downloaded and saved to: ${publicPath}`);
+    console.log(`✅ Higgsfield MCP: Media saved to local uploads fallback: ${publicPath}`);
     return publicPath;
   } catch (err) {
-    console.error(`❌ Higgsfield MCP: Failed to download media from ${resultUrl}, using original URL:`, err);
+    console.error(`❌ Higgsfield MCP: Failed to download media from ${resultUrl}, keeping original URL:`, err);
     return resultUrl;
   }
+}
+
+/**
+ * Requirement 4: Repair routine for existing studio_generations rows with external Higgsfield/CloudFront URLs
+ */
+export async function repairStudioGenerations(): Promise<number> {
+  const supabase = createServiceRoleClient();
+  const { data: rows, error } = await supabase
+    .from("studio_generations")
+    .select("id, generated_image_url");
+
+  if (error || !rows || rows.length === 0) return 0;
+
+  let repairedCount = 0;
+
+  for (const row of rows) {
+    const url = row.generated_image_url;
+    if (!url) continue;
+
+    // Check if the URL is an external temporary/Higgsfield URL
+    const isExternalTemporary =
+      url.startsWith("http") &&
+      !url.includes(".supabase.co") &&
+      (url.includes("higgsfield.ai") || url.includes("cloudfront.net") || url.includes("unsplash.com"));
+
+    if (isExternalTemporary) {
+      console.log(`🔧 Higgsfield MCP [Repair]: Repairing external media URL for row ${row.id}: ${url}`);
+      try {
+        const permanentUrl = await downloadAndStoreGeneratedMedia(url, "repaired");
+        if (permanentUrl && permanentUrl !== url) {
+          await supabase
+            .from("studio_generations")
+            .update({ generated_image_url: permanentUrl })
+            .eq("id", row.id);
+          repairedCount++;
+          console.log(`✅ Higgsfield MCP [Repair]: Row ${row.id} updated to permanent storage: ${permanentUrl}`);
+        }
+      } catch (repErr) {
+        console.error(`❌ Higgsfield MCP [Repair]: Failed to repair row ${row.id}:`, repErr);
+      }
+    }
+  }
+
+  return repairedCount;
 }
 
 /**
