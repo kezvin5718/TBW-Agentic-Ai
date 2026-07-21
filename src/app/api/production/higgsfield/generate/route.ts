@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { HIGGSFIELD_CONFIG } from "@/lib/higgsfield-config";
 import { activeJobs } from "@/lib/higgsfield-state";
+import { getHiggsfieldCredentials, getHiggsfieldGenerationCost, formatPromptWithBrandElements } from "@/lib/higgsfield-mcp";
 
 export async function POST(request: Request) {
   try {
@@ -12,7 +13,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { prompt, model, ratio, styleReference, productImages, taskId } = await request.json();
+    const { prompt, model, ratio, styleReference, productImages, taskId, brandElementIds } = await request.json();
 
     if (!prompt || !prompt.trim()) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
@@ -26,12 +27,23 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Maximum batch limit is 10 product images" }, { status: 400 });
     }
 
-    const selectedModel = model || HIGGSFIELD_CONFIG.defaultModel;
+    // 1. Resolve Machine ID mapping ('nano_banana_2' = Nano Banana Pro, 'nano_banana_flash' = Nano Banana 2)
+    let selectedModel = model || HIGGSFIELD_CONFIG.defaultModel;
+    if (HIGGSFIELD_CONFIG.models[selectedModel as keyof typeof HIGGSFIELD_CONFIG.models]) {
+      selectedModel = HIGGSFIELD_CONFIG.models[selectedModel as keyof typeof HIGGSFIELD_CONFIG.models];
+    }
     const selectedRatio = ratio || "3:4";
-    
-    // Calculate cost based on model type and product count (styleReference does not add to generation cost)
-    const costPerImage = HIGGSFIELD_CONFIG.modelCosts[selectedModel as keyof typeof HIGGSFIELD_CONFIG.modelCosts] || 1.5;
-    const totalCost = costPerImage * productImages.length;
+
+    // 2. Format reusable brand elements as <<<element_id>>> placeholders inside prompt text
+    const formattedPrompt = formatPromptWithBrandElements(prompt, brandElementIds || []);
+
+    // 3. Preflight precise credit cost using params.get_cost: true
+    const creds = await getHiggsfieldCredentials();
+    const preflight = await getHiggsfieldGenerationCost(creds, selectedModel, productImages.length, {
+      prompt: formattedPrompt,
+      ratio: selectedRatio,
+    });
+    const totalCost = preflight.cost;
 
     // Verify monthly credit limit
     const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
@@ -43,11 +55,11 @@ export async function POST(request: Request) {
     const accumulatedCost = costs?.reduce((sum, item) => sum + Number(item.cost), 0) || 0;
     const limitExceeded = accumulatedCost >= HIGGSFIELD_CONFIG.monthlyLimitAlert;
 
-    // Log the cost to gen_costs table linked to the task
+    // Log accurate preflighted credit cost to gen_costs table
     const { error: costErr } = await supabase.from("gen_costs").insert({
       task_id: taskId || null,
       engine: selectedModel,
-      prompt: `[Batch: ${productImages.length} products] [Style Ref: ${styleReference ? "Yes" : "No"}] [Ratio: ${selectedRatio}] ${prompt}`,
+      prompt: `[Batch: ${productImages.length} products] [Preflighted: ${preflight.preflighted ? "Yes" : "Estimate"}] [Ratio: ${selectedRatio}] ${formattedPrompt}`,
       cost: totalCost,
     });
 
@@ -55,22 +67,36 @@ export async function POST(request: Request) {
       console.error("Failed to log Higgsfield cost:", costErr);
     }
 
-    // Generate a jobId and register in activeJobs
+    // Ensure all uploaded reference images are mapped with media_id (never passing raw URLs directly)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const processedProductImages = productImages.map((prod: any, idx: number) => ({
+      mediaUrl: prod.mediaUrl,
+      mediaId: prod.higgsfieldMediaRef || prod.mediaId || `media_id_prod_${Date.now()}_${idx}`,
+      higgsfieldMediaRef: prod.higgsfieldMediaRef || prod.mediaId || `media_id_prod_${Date.now()}_${idx}`,
+    }));
+
+    // 4. Generate jobId and register async job state (poll_after_seconds = 3)
     const jobId = crypto.randomUUID();
+    const pollAfterSeconds = 3;
+
     activeJobs.set(jobId, {
-      prompt,
+      prompt: formattedPrompt,
       model: selectedModel,
       ratio: selectedRatio,
       styleReference: styleReference || null,
-      productImages,
+      productImages: processedProductImages,
       taskId: taskId || null,
       createdAt: Date.now(),
-      duration: 4000, // 4 seconds of simulated processing
+      duration: pollAfterSeconds * 1000,
+      pollAfterSeconds,
     });
 
     return NextResponse.json({
       success: true,
       jobId,
+      pollAfterSeconds,
+      cost: totalCost,
+      preflightedCost: preflight.preflighted,
       creditWarning: limitExceeded,
       totalCredits: accumulatedCost + totalCost
     });

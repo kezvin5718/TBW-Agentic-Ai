@@ -7,6 +7,7 @@ export interface HiggsfieldJobData {
   taskId?: string;
   createdAt: number;
   duration: number;
+  pollAfterSeconds?: number;
 }
 
 export const activeJobs = new Map<string, HiggsfieldJobData>();

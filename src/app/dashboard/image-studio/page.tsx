@@ -354,8 +354,8 @@ function ImageStudioWorkspace() {
       }
       setMonthlyCredits(data.totalCredits || monthlyCredits);
 
-      // Start polling for status
-      pollJobStatus(data.jobId);
+      // Start polling for status respecting server pollAfterSeconds
+      pollJobStatus(data.jobId, data.pollAfterSeconds || 3);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setGenerationError(msg || "An unexpected error occurred");
@@ -363,7 +363,8 @@ function ImageStudioWorkspace() {
     }
   };
 
-  const pollJobStatus = (jobId: string) => {
+  const pollJobStatus = (jobId: string, pollAfterSeconds: number = 3) => {
+    const intervalTime = Math.max(pollAfterSeconds * 1000, 2000);
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/production/higgsfield/status/${jobId}`);
@@ -393,7 +394,7 @@ function ImageStudioWorkspace() {
         setGenerationError(msg || "Checking status failed");
         setGenerating(false);
       }
-    }, 2000);
+    }, intervalTime);
   };
 
   // Apply Prompt Template with Undo

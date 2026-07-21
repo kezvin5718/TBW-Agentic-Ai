@@ -226,7 +226,25 @@ All scheduled operational loops are executed in-app using `node-cron` with `Asia
 - **Cleaned Obsolete Files**:
   - Cleaned up duplicate HTML assets (`New Project _ Supabase.html` and its subfiles).
   - Deleted local `scratch/` script folder.
-  - Relocated isolation tests from `src/__tests__/` to a root directory [__tests__/](file:///Users/kezvinshikhrin/Documents/TBW%20Agentic%20AI/__tests__) so they are run independently from the compiler bundle checks.
+
+---
+
+## 7. Higgsfield MCP API Specification & Engine Rules
+
+1. **Model Machine ID Mapping**:
+   - UI Display **"Nano Banana Pro"** maps to machine ID **`nano_banana_2`** (cost = 1.5 credits).
+   - UI Display **"Nano Banana 2"** maps to machine ID **`nano_banana_flash`** (cost = 1.0 credit).
+   - *Rule*: Never guess machine IDs by display name string matching; always map per discovered models list and explicit machine ID rules.
+
+2. **Cost Preflighting (`params.get_cost: true`)**:
+   - Preflight credit costs prior to submitting generation jobs by querying tool parameters with `params: { get_cost: true }`.
+   - Use returned preflight credit numbers to display UI previews and log exact costs into `gen_costs` instead of coarse estimates.
+
+3. **Reference Images & Brand Element Placeholders**:
+   - **Reference Images**: Uploaded reference images must be registered via `media_upload` / `media_import_url` and passed as `media_id` references (never raw HTTP URLs).
+   - **Reusable Brand Elements**: Embedded inside prompt text using `<<<element_id>>>` placeholder syntax (e.g. `<<<brand_logo_123>>>`).
+   - **Async Lifecycle**: Submitting a generation job returns a `job_id` and `poll_after_seconds`. Clients must poll status respecting `poll_after_seconds`.
+
 
 
 

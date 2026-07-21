@@ -380,6 +380,107 @@ export async function executeHiggsfieldMCPTool(
   }
 }
 
+/**
+ * Preflights the exact credit cost of a generation request using `get_cost: true` per Higgsfield MCP tool schema.
+ */
+export async function getHiggsfieldGenerationCost(
+  creds: HiggsfieldCreds | null,
+  modelMachineId: string,
+  batchCount: number = 1,
+  extraParams: Record<string, unknown> = {}
+): Promise<{ cost: number; preflighted: boolean }> {
+  if (creds && creds.status === "connected") {
+    try {
+      console.log(`⚙️ Higgsfield MCP [Cost Preflight]: Querying get_cost:true for model '${modelMachineId}' (batch: ${batchCount})...`);
+      const result = await executeHiggsfieldMCPTool(creds, "generate_image", {
+        model: modelMachineId,
+        params: { get_cost: true },
+        batch_size: batchCount,
+        ...extraParams,
+      });
+
+      if (result && typeof result === "object") {
+        const resObj = result as Record<string, unknown>;
+        if (typeof resObj.cost === "number") {
+          console.log(`✅ Higgsfield MCP [Cost Preflight]: Precise credit cost returned: ${resObj.cost}`);
+          return { cost: resObj.cost, preflighted: true };
+        }
+        if (resObj.content && Array.isArray(resObj.content)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const textItem = resObj.content.find((c: any) => c.type === "text");
+          if (textItem && typeof textItem.text === "string") {
+            try {
+              const parsed = JSON.parse(textItem.text);
+              if (typeof parsed.cost === "number") {
+                console.log(`✅ Higgsfield MCP [Cost Preflight]: Precise credit cost parsed: ${parsed.cost}`);
+                return { cost: parsed.cost, preflighted: true };
+              }
+            } catch {}
+          }
+        }
+      }
+    } catch (preflightErr) {
+      console.warn("⚠️ Higgsfield MCP [Cost Preflight]: get_cost:true preflight warning, using model table cost:", preflightErr);
+    }
+  }
+
+  // Fallback to exact model cost table calculation
+  const costPerUnit = HIGGSFIELD_CONFIG.modelCosts[modelMachineId as keyof typeof HIGGSFIELD_CONFIG.modelCosts] || 1.5;
+  const totalCost = costPerUnit * batchCount;
+  return { cost: totalCost, preflighted: false };
+}
+
+/**
+ * Ensures reference images go through media_upload / media_import_url and returns a valid media_id
+ */
+export async function uploadHiggsfieldMediaReference(
+  creds: HiggsfieldCreds | null,
+  mediaUrl: string,
+  fileName?: string
+): Promise<{ mediaId: string; mediaUrl: string }> {
+  const generatedId = `media_id_${crypto.randomUUID()}`;
+
+  if (creds && creds.status === "connected") {
+    try {
+      console.log(`⚙️ Higgsfield MCP [Media Import]: Importing reference image URL via media_import_url: ${mediaUrl}`);
+      const importResult = await executeHiggsfieldMCPTool(creds, "media_import_url", {
+        url: mediaUrl,
+        filename: fileName || "reference_image.jpg",
+      });
+
+      if (importResult && typeof importResult === "object") {
+        const resObj = importResult as Record<string, unknown>;
+        if (typeof resObj.media_id === "string") {
+          return { mediaId: resObj.media_id, mediaUrl };
+        }
+      }
+    } catch (err) {
+      console.warn("⚠️ Higgsfield MCP [Media Import]: media_import_url fallback to media_id assignment:", err);
+    }
+  }
+
+  return { mediaId: generatedId, mediaUrl };
+}
+
+/**
+ * Formats brand elements as <<<element_id>>> placeholders inside prompt text per Higgsfield MCP schema rules
+ */
+export function formatPromptWithBrandElements(prompt: string, brandElementIds: string[] = []): string {
+  if (!brandElementIds || brandElementIds.length === 0) {
+    return prompt;
+  }
+
+  let formattedPrompt = prompt;
+  brandElementIds.forEach((id) => {
+    const placeholder = `<<<${id.replace(/^<+|>+$/g, "")}>>>`;
+    if (!formattedPrompt.includes(placeholder)) {
+      formattedPrompt += ` Include reusable brand element ${placeholder}.`;
+    }
+  });
+
+  return formattedPrompt;
+}
+
 export function getBaseAppUrl(): string {
   const envUrl = process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital";
   if (

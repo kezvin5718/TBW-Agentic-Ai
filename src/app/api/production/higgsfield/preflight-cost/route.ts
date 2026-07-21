@@ -1,0 +1,35 @@
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { getHiggsfieldCredentials, getHiggsfieldGenerationCost } from "@/lib/higgsfield-mcp";
+import { HIGGSFIELD_CONFIG } from "@/lib/higgsfield-config";
+
+export async function POST(request: Request) {
+  try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user || !["founder", "employee"].includes(user.user_metadata?.role)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const { model, batchCount, prompt } = await request.json();
+
+    // Resolve model machine ID
+    let modelMachineId = model || HIGGSFIELD_CONFIG.defaultModel;
+    if (HIGGSFIELD_CONFIG.models[modelMachineId as keyof typeof HIGGSFIELD_CONFIG.models]) {
+      modelMachineId = HIGGSFIELD_CONFIG.models[modelMachineId as keyof typeof HIGGSFIELD_CONFIG.models];
+    }
+
+    const creds = await getHiggsfieldCredentials();
+    const preflight = await getHiggsfieldGenerationCost(creds, modelMachineId, batchCount || 1, { prompt });
+
+    return NextResponse.json({
+      success: true,
+      cost: preflight.cost,
+      preflighted: preflight.preflighted,
+    });
+  } catch (error) {
+    console.error("Higgsfield preflight cost error:", error);
+    return NextResponse.json({ error: "Failed to fetch preflight cost" }, { status: 500 });
+  }
+}
