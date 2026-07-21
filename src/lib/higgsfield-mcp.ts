@@ -398,6 +398,21 @@ export async function executeHiggsfieldMCPTool(
 }
 
 /**
+ * Executes generation tools (generate_image, generate_video, generate_audio, generate_3d)
+ * wrapping arguments inside the required `{ params: { ... } }` object per schema requirement 1.
+ */
+export async function executeHiggsfieldGenerationTool(
+  creds: HiggsfieldCreds,
+  toolName: string,
+  params: Record<string, unknown>
+): Promise<unknown> {
+  console.log(`⚙️ Higgsfield MCP [Generation Submit]: Invoking '${toolName}' with wrapped params object...`);
+  return executeHiggsfieldMCPTool(creds, toolName, {
+    params: params
+  });
+}
+
+/**
  * Preflights the exact credit cost of a generation request using `get_cost: true` per Higgsfield MCP tool schema.
  */
 export async function getHiggsfieldGenerationCost(
@@ -410,10 +425,12 @@ export async function getHiggsfieldGenerationCost(
     try {
       console.log(`⚙️ Higgsfield MCP [Cost Preflight]: Querying get_cost:true for model '${modelMachineId}' (batch: ${batchCount})...`);
       const result = await executeHiggsfieldMCPTool(creds, "generate_image", {
-        model: modelMachineId,
-        params: { get_cost: true },
-        batch_size: batchCount,
-        ...extraParams,
+        params: {
+          model: modelMachineId,
+          get_cost: true,
+          batch_size: batchCount,
+          ...extraParams,
+        }
       });
 
       if (result && typeof result === "object") {

@@ -6,7 +6,7 @@ import {
   getHiggsfieldCredentials,
   getHiggsfieldGenerationCost,
   formatPromptWithBrandElements,
-  executeHiggsfieldMCPTool,
+  executeHiggsfieldGenerationTool,
   parseMCPToolResponse,
 } from "@/lib/higgsfield-mcp";
 
@@ -33,18 +33,26 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Maximum batch limit is 10 product images" }, { status: 400 });
     }
 
-    // 1. Resolve Machine ID mapping ('nano_banana_2' = Nano Banana Pro, 'nano_banana_flash' = Nano Banana 2)
+    // 1. Connection check - fail loudly if Higgsfield is not connected
+    const creds = await getHiggsfieldCredentials();
+    if (!creds || creds.status !== "connected") {
+      return NextResponse.json(
+        { error: "Higgsfield MCP is not connected. Please connect Higgsfield in Settings -> Integrations first." },
+        { status: 400 }
+      );
+    }
+
+    // 2. Resolve Machine ID mapping ('nano_banana_2' = Nano Banana Pro, 'nano_banana_flash' = Nano Banana 2)
     let selectedModel = model || HIGGSFIELD_CONFIG.defaultModel;
     if (HIGGSFIELD_CONFIG.models[selectedModel as keyof typeof HIGGSFIELD_CONFIG.models]) {
       selectedModel = HIGGSFIELD_CONFIG.models[selectedModel as keyof typeof HIGGSFIELD_CONFIG.models];
     }
     const selectedRatio = ratio || "3:4";
 
-    // 2. Format reusable brand elements as <<<element_id>>> placeholders inside prompt text
+    // 3. Format reusable brand elements as <<<element_id>>> placeholders inside prompt text
     const formattedPrompt = formatPromptWithBrandElements(prompt, brandElementIds || []);
 
-    // 3. Preflight precise credit cost using params.get_cost: true
-    const creds = await getHiggsfieldCredentials();
+    // 4. Preflight precise credit cost using params.get_cost: true
     const preflight = await getHiggsfieldGenerationCost(creds, selectedModel, productImages.length, {
       prompt: formattedPrompt,
       ratio: selectedRatio,
@@ -81,43 +89,51 @@ export async function POST(request: Request) {
       higgsfieldMediaRef: prod.higgsfieldMediaRef || prod.mediaId || `media_id_prod_${Date.now()}_${idx}`,
     }));
 
-    let realJobId = crypto.randomUUID();
-    let pollAfterSeconds = 3;
-
-    // Submit generation job via MCP if connected
-    if (creds && creds.status === "connected") {
-      try {
-        console.log(`⚙️ Higgsfield MCP [Generation Submit]: Calling generate_image tool via MCP...`);
-        const toolRes = await executeHiggsfieldMCPTool(creds, "generate_image", {
-          prompt: formattedPrompt,
-          model: selectedModel,
-          ratio: selectedRatio,
-          aspect_ratio: selectedRatio,
-          reference_images: processedProductImages.map((p: { mediaId: string }) => p.mediaId),
-          product_images: processedProductImages.map((p: { mediaId: string }) => p.mediaId),
-          style_reference: styleReference?.higgsfieldMediaRef || null,
-        });
-
-        // Requirement 1: Log raw submission response once to confirm correct field
-        console.log(`⚙️ Higgsfield MCP [RAW Submission Response]:\n${JSON.stringify(toolRes, null, 2)}`);
-
-        const parsedTool = parseMCPToolResponse(toolRes);
-        if (parsedTool.jobId || parsedTool.id || parsedTool.job_id) {
-          realJobId = (parsedTool.jobId || parsedTool.id || parsedTool.job_id) as string;
-        }
-        if (parsedTool.poll_after_seconds) {
-          pollAfterSeconds = parsedTool.poll_after_seconds;
-        }
-        console.log(`Job submitted: ${realJobId}`);
-      } catch (submitErr) {
-        console.warn("⚠️ Higgsfield MCP: generate_image tool call warning, falling back to job tracker:", submitErr);
-        console.log(`Job submitted: ${realJobId}`);
-      }
-    } else {
-      console.log(`Job submitted: ${realJobId}`);
+    // 5. Submit generation job via MCP wrapping arguments in { params: { ... } } (Requirement 1)
+    console.log(`⚙️ Higgsfield MCP [Generation Submit]: Invoking generate_image tool with params wrapper...`);
+    let toolRes: unknown;
+    try {
+      toolRes = await executeHiggsfieldGenerationTool(creds, "generate_image", {
+        model: selectedModel,
+        prompt: formattedPrompt,
+        aspect_ratio: selectedRatio,
+        ratio: selectedRatio,
+        resolution: HIGGSFIELD_CONFIG.resolution || "1K",
+        medias: processedProductImages.map((p: { mediaId: string }) => p.mediaId),
+        reference_images: processedProductImages.map((p: { mediaId: string }) => p.mediaId),
+        product_images: processedProductImages.map((p: { mediaId: string }) => p.mediaId),
+        style_reference: styleReference?.higgsfieldMediaRef || null,
+      });
+    } catch (submitErr: unknown) {
+      // Requirement 2: NO FAKE-JOB FALLBACK — fail loudly!
+      const submitMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
+      console.error(`❌ Higgsfield MCP: generate_image tool submission failed: ${submitMsg}`);
+      return NextResponse.json(
+        { error: `Higgsfield generation failed: ${submitMsg}` },
+        { status: 500 }
+      );
     }
 
-    // Register active job state
+    // Requirement 1: Log raw submission response once to confirm correct field
+    console.log(`⚙️ Higgsfield MCP [RAW Submission Response]:\n${JSON.stringify(toolRes, null, 2)}`);
+
+    const parsedTool = parseMCPToolResponse(toolRes);
+    const realJobId = parsedTool.jobId || parsedTool.id || parsedTool.job_id;
+
+    // Requirement 2: If no valid job ID returned, fail loudly!
+    if (!realJobId) {
+      const errMsg = parsedTool.error || parsedTool.failure_reason || "Higgsfield server returned no valid job ID";
+      console.error(`❌ Higgsfield MCP: Submission returned no job ID: ${errMsg}`);
+      return NextResponse.json(
+        { error: `Generation failed: ${errMsg}` },
+        { status: 500 }
+      );
+    }
+
+    const pollAfterSeconds = parsedTool.poll_after_seconds || 3;
+    console.log(`Job submitted: ${realJobId}`);
+
+    // Register active job state only on genuine submission success
     activeJobs.set(realJobId, {
       prompt: formattedPrompt,
       model: selectedModel,
@@ -139,8 +155,9 @@ export async function POST(request: Request) {
       creditWarning: limitExceeded,
       totalCredits: accumulatedCost + totalCost
     });
-  } catch (error) {
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
     console.error("Higgsfield generate error:", error);
-    return NextResponse.json({ error: "Generation failed" }, { status: 500 });
+    return NextResponse.json({ error: `Generation failed: ${msg}` }, { status: 500 });
   }
 }
