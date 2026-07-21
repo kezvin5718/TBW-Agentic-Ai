@@ -731,9 +731,17 @@ function ImageStudioWorkspace() {
                   alt="Style Reference"
                   className="w-full h-full object-cover"
                 />
+                <div className="absolute bottom-0.5 left-0.5 bg-slate-950/80 backdrop-blur-md rounded-full p-0.5" title="Imported & Ready">
+                  <CheckCircle className="w-3 h-3 text-emerald-400" />
+                </div>
               </div>
               <div className="pr-2">
-                <p className="text-[10px] font-bold text-purple-400 uppercase tracking-wider">Style Reference Applied</p>
+                <div className="flex items-center space-x-1.5">
+                  <p className="text-[10px] font-bold text-purple-400 uppercase tracking-wider">Style Reference Applied</p>
+                  <span className="text-[8px] bg-emerald-500/20 text-emerald-300 font-bold px-1.5 py-0.5 rounded-full border border-emerald-500/30">
+                    Ready
+                  </span>
+                </div>
                 <span className="text-[9px] font-mono text-slate-500 mt-0.5 block truncate max-w-[150px]">
                   {styleReference.higgsfieldMediaRef}
                 </span>
@@ -789,8 +797,9 @@ function ImageStudioWorkspace() {
                   alt={prodImg.fileName}
                   className="w-full h-full object-cover"
                 />
-                <div className="absolute bottom-1 left-1 bg-slate-950/80 backdrop-blur-md rounded-full p-0.5" title="Higgsfield Media Ready">
-                  <CheckCircle className="w-3 h-3 text-emerald-400" />
+                <div className="absolute bottom-1 left-1 bg-slate-950/80 backdrop-blur-md rounded-full px-1.5 py-0.5 flex items-center space-x-0.5 border border-emerald-500/30" title="Imported & Ready">
+                  <CheckCircle className="w-2.5 h-2.5 text-emerald-400" />
+                  <span className="text-[8px] font-bold text-emerald-400 uppercase">Ready</span>
                 </div>
                 <button
                   onClick={() => removeProductImage(index)}

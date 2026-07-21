@@ -669,6 +669,8 @@ export interface ParsedMCPResponse {
   id?: string;
   job_id?: string;
   jobId?: string;
+  media_id?: string;
+  mediaId?: string;
   status?: string;
   poll_after_seconds?: number;
   result_url?: string;
@@ -694,6 +696,7 @@ export function parseMCPToolResponse(response: unknown): ParsedMCPResponse {
 
   // Extract job ID from jobId, id, job_id, etc.
   const extractedJobId = (obj.jobId || obj.id || obj.job_id || obj.id_ || obj.job_id_) as string | undefined;
+  const extractedMediaId = (obj.media_id || obj.mediaId || obj.media_uuid) as string | undefined;
 
   // Function to extract URLs array or single URL from any object
   const extractUrls = (target: Record<string, unknown>): { mainUrl?: string; allUrls: string[] } => {
@@ -760,6 +763,8 @@ export function parseMCPToolResponse(response: unknown): ParsedMCPResponse {
       id: extractedJobId,
       job_id: extractedJobId,
       jobId: extractedJobId,
+      media_id: extractedMediaId,
+      mediaId: extractedMediaId,
       status: directStatus || (directUrls.mainUrl ? "completed" : undefined),
       poll_after_seconds: directPoll,
       result_url: directUrls.mainUrl,

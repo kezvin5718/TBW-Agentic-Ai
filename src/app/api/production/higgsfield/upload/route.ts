@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     const serviceSupabase = createServiceRoleClient();
     let fullPublicUrl: string | null = null;
 
-    // 1. Try Supabase Storage upload first
+    // 1. Try Supabase Storage upload and generate a signed URL (expiry = 24 hours / 86400s) (Requirement 2)
     try {
       const bucket = "brand-assets";
       const storagePath = `higgsfield-refs/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
@@ -44,12 +44,16 @@ export async function POST(request: Request) {
         .upload(storagePath, buffer, { contentType: file.type || "image/jpeg", upsert: true });
 
       if (!uploadErr) {
-        const publicData = serviceSupabase.storage.from(bucket).getPublicUrl(storagePath);
-        if (publicData?.data?.publicUrl) {
-          fullPublicUrl = publicData.data.publicUrl;
+        // Generate signed URL with 24h validity for Higgsfield import access
+        const { data: signedData, error: signedErr } = await serviceSupabase.storage
+          .from(bucket)
+          .createSignedUrl(storagePath, 86400);
+
+        if (!signedErr && signedData?.signedUrl) {
+          fullPublicUrl = signedData.signedUrl;
         } else {
-          const { data: signedData } = await serviceSupabase.storage.from(bucket).createSignedUrl(storagePath, 86400);
-          fullPublicUrl = signedData?.signedUrl || null;
+          const publicData = serviceSupabase.storage.from(bucket).getPublicUrl(storagePath);
+          fullPublicUrl = publicData?.data?.publicUrl || null;
         }
       }
     } catch (stErr) {
@@ -71,10 +75,10 @@ export async function POST(request: Request) {
       fullPublicUrl = `${protocol}://${hostHeader}/uploads/${uniqueName}`;
     }
 
-    console.log(`⚙️ Higgsfield MCP [media_import_url]: Importing reference image via media_import_url tool...`);
-    console.log(`📍 Public URL: ${fullPublicUrl}`);
+    // Log exact URL per Requirement 1
+    console.log(`⚙️ Higgsfield MCP [media_import_url Request URL]: ${fullPublicUrl}`);
 
-    // 3. Call Higgsfield MCP media_import_url tool with public HTTPS URL (Requirement 1)
+    // 3. Call Higgsfield MCP media_import_url tool
     let importRes: unknown;
     try {
       importRes = await executeHiggsfieldMCPTool(creds, "media_import_url", {
@@ -92,15 +96,34 @@ export async function POST(request: Request) {
       });
     }
 
-    // Log raw response per Requirement 1
+    // Log full raw response per Requirement 1
     console.log(`⚙️ Higgsfield MCP [media_import_url RAW RESPONSE]:\n${JSON.stringify(importRes, null, 2)}`);
 
     const parsedImport = parseMCPToolResponse(importRes);
-    const confirmedMediaId = (parsedImport.raw?.media_id || parsedImport.raw?.id || parsedImport.id || parsedImport.job_id) as string | undefined;
+    console.log(`⚙️ Higgsfield MCP [media_import_url PARSED OBJECT]:\n${JSON.stringify(parsedImport, null, 2)}`);
 
-    // Requirement 2: Never fabricate placeholder IDs — fail loudly if import failed
+    let confirmedMediaId: string | undefined = undefined;
+
+    // Requirement 3: Robust media_id extraction without field guessing
+    if (parsedImport.raw && typeof parsedImport.raw === "object") {
+      const rawObj = parsedImport.raw as Record<string, unknown>;
+      confirmedMediaId = (rawObj.media_id || rawObj.mediaId || rawObj.id || rawObj.media_uuid) as string;
+    }
+
     if (!confirmedMediaId) {
-      const errMsg = parsedImport.error || parsedImport.failure_reason || "media_import_url failed to return a confirmed media_id";
+      confirmedMediaId = (parsedImport.media_id || parsedImport.id || parsedImport.job_id) as string;
+    }
+
+    if (!confirmedMediaId && importRes && typeof importRes === "object") {
+      const resStr = JSON.stringify(importRes);
+      const match = resStr.match(/"(media_id|mediaId|id|media_uuid)"\s*:\s*"([^"]+)"/i);
+      if (match && match[2]) {
+        confirmedMediaId = match[2];
+      }
+    }
+
+    if (!confirmedMediaId) {
+      const errMsg = parsedImport.error || parsedImport.failure_reason || "media_import_url returned no confirmed media_id";
       console.error(`❌ Higgsfield MCP: Media import failed: ${errMsg}`);
       return NextResponse.json(
         { error: `Higgsfield media import failed: ${errMsg}` },
