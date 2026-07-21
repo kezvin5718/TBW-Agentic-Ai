@@ -14,6 +14,6 @@ export const HIGGSFIELD_CONFIG = {
   },
   defaultModel: "nano_banana_pro",
   defaultModelDisplayName: "Nano Banana Pro",
-  resolution: "1K",
+  resolution: "1k",
   monthlyLimitAlert: 100, // Credit warning threshold
 };

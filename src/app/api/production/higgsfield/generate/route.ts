@@ -40,7 +40,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // 2. Resolve Machine ID mapping ('nano_banana_2' = Nano Banana Pro, 'nano_banana_flash' = Nano Banana 2)
+    // 2. Resolve Machine ID mapping ('nano_banana_pro', 'nano_banana_2')
     let selectedModel = model || HIGGSFIELD_CONFIG.defaultModel;
     if (HIGGSFIELD_CONFIG.models[selectedModel as keyof typeof HIGGSFIELD_CONFIG.models]) {
       selectedModel = HIGGSFIELD_CONFIG.models[selectedModel as keyof typeof HIGGSFIELD_CONFIG.models];
@@ -115,20 +115,19 @@ export async function POST(request: Request) {
       model: selectedModel,
       prompt: formattedPrompt,
       aspect_ratio: selectedRatio,
-      resolution: HIGGSFIELD_CONFIG.resolution || "1K",
+      resolution: "1k", // Schema requires lowercase "1k"
     };
 
     if (formattedMedias && formattedMedias.length > 0) {
       generationParams.medias = formattedMedias;
     }
 
-    // 5. Submit generation job via MCP wrapping arguments in { params: { ... } } (Requirement 1 & 2)
+    // 5. Submit generation job via MCP wrapping arguments in { params: { ... } }
     console.log(`⚙️ Higgsfield MCP [Generation Submit]: Invoking generate_image tool with params wrapper...`);
     let toolRes: unknown;
     try {
       toolRes = await executeHiggsfieldGenerationTool(creds, "generate_image", generationParams);
     } catch (submitErr: unknown) {
-      // Requirement 2: NO FAKE-JOB FALLBACK — fail loudly!
       const submitMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
       console.error(`❌ Higgsfield MCP: generate_image tool submission failed: ${submitMsg}`);
       return NextResponse.json(
@@ -137,13 +136,12 @@ export async function POST(request: Request) {
       );
     }
 
-    // Requirement 1: Log raw submission response once to confirm correct field
+    // Log raw submission response once to confirm correct field
     console.log(`⚙️ Higgsfield MCP [RAW Submission Response]:\n${JSON.stringify(toolRes, null, 2)}`);
 
     const parsedTool = parseMCPToolResponse(toolRes);
     const realJobId = parsedTool.jobId || parsedTool.id || parsedTool.job_id;
 
-    // Requirement 2: If no valid job ID returned, fail loudly!
     if (!realJobId) {
       const errMsg = parsedTool.error || parsedTool.failure_reason || "Higgsfield server returned no valid job ID";
       console.error(`❌ Higgsfield MCP: Submission returned no job ID: ${errMsg}`);

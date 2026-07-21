@@ -59,6 +59,7 @@ export async function GET() {
       model: proModelId,
       prompt: "A modern high-tech AI advertising studio billboard with vibrant indigo glow, 8k render",
       aspect_ratio: "16:9",
+      resolution: "1k",
     };
     addLog(`⚙️ [Request Payload (a)]:\n${JSON.stringify({ params: textOnlyParams }, null, 2)}`);
 
@@ -102,7 +103,6 @@ export async function GET() {
     // CASE (b): ONE REFERENCE IMAGE WITH ROLE "IMAGE"
     // ==========================================
     addLog("--- TEST CASE (b): ONE REFERENCE IMAGE (ROLE: 'IMAGE') ---");
-    // Ensure media import reference image
     const dummyRefId = `media_id_ref_test_${Date.now()}`;
     const formattedMediasB = formatHiggsfieldMedias([dummyRefId], null, []);
 
@@ -110,6 +110,7 @@ export async function GET() {
       model: proModelId,
       prompt: "Photorealistic luxury product showcase featuring reference image 1, studio lighting",
       aspect_ratio: "16:9",
+      resolution: "1k",
       medias: formattedMediasB,
     };
     addLog(`⚙️ [Request Payload (b)]:\n${JSON.stringify({ params: imageRefParams }, null, 2)}`);
