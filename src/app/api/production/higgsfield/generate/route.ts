@@ -156,9 +156,10 @@ export async function POST(request: Request) {
     console.log(`⚙️ Higgsfield MCP [RAW Submission Response]:\n${JSON.stringify(toolRes, null, 2)}`);
 
     const parsedTool = parseMCPToolResponse(toolRes);
-    const realJobId = parsedTool.jobId || parsedTool.id || parsedTool.job_id;
+    const extractedJobIds = parsedTool.jobIds || [];
+    const realJobId = parsedTool.jobId || parsedTool.id || parsedTool.job_id || extractedJobIds[0];
 
-    if (!realJobId) {
+    if (!realJobId && extractedJobIds.length === 0) {
       const errMsg = parsedTool.error || parsedTool.failure_reason || "Higgsfield server returned no valid job ID";
       console.error(`❌ Higgsfield MCP: Submission returned no job ID: ${errMsg}`);
       return NextResponse.json(
@@ -168,24 +169,28 @@ export async function POST(request: Request) {
     }
 
     const pollAfterSeconds = parsedTool.poll_after_seconds || 3;
-    console.log(`Job submitted: ${realJobId}`);
+    const allSubmittedJobIds = extractedJobIds.length > 0 ? extractedJobIds : [realJobId];
+    console.log(`Job(s) submitted successfully: [${allSubmittedJobIds.join(", ")}]`);
 
-    // Register active job state only on genuine submission success
-    activeJobs.set(realJobId, {
-      prompt: formattedPrompt,
-      model: selectedModel,
-      ratio: selectedRatio,
-      styleReference: styleReference || null,
-      productImages: processedProductImages,
-      taskId: taskId || null,
-      createdAt: Date.now(),
-      duration: pollAfterSeconds * 1000,
-      pollAfterSeconds,
+    // Register active job state for every job in batch submission
+    allSubmittedJobIds.forEach((jid: string) => {
+      activeJobs.set(jid, {
+        prompt: formattedPrompt,
+        model: selectedModel,
+        ratio: selectedRatio,
+        styleReference: styleReference || null,
+        productImages: processedProductImages,
+        taskId: taskId || null,
+        createdAt: Date.now(),
+        duration: pollAfterSeconds * 1000,
+        pollAfterSeconds,
+      });
     });
 
     return NextResponse.json({
       success: true,
       jobId: realJobId,
+      jobIds: allSubmittedJobIds,
       pollAfterSeconds,
       cost: totalCost,
       preflightedCost: preflight.preflighted,

@@ -669,6 +669,8 @@ export interface ParsedMCPResponse {
   id?: string;
   job_id?: string;
   jobId?: string;
+  jobIds?: string[];
+  results?: Array<{ id: string; status?: string; type?: string }>;
   media_id?: string;
   mediaId?: string;
   status?: string;
@@ -695,8 +697,40 @@ export function parseMCPToolResponse(response: unknown): ParsedMCPResponse {
   const obj = response as Record<string, unknown>;
 
   // Extract job ID from jobId, id, job_id, etc.
-  const extractedJobId = (obj.jobId || obj.id || obj.job_id || obj.id_ || obj.job_id_) as string | undefined;
+  let extractedJobId = (obj.jobId || obj.id || obj.job_id || obj.id_ || obj.job_id_) as string | undefined;
   const extractedMediaId = (obj.media_id || obj.mediaId || obj.media_uuid) as string | undefined;
+
+  // Requirement 1: Extract all job IDs from structuredContent.results array (batch & single)
+  const extractedJobIds: string[] = [];
+  const extractedResults: Array<{ id: string; status?: string; type?: string }> = [];
+
+  const inspectResultsArray = (target: Record<string, unknown>) => {
+    const struct = (target.structuredContent || target.structured_content || target) as Record<string, unknown>;
+    const resArr = (struct?.results || target.results || struct?.items || target.items) as Array<Record<string, unknown>> | undefined;
+
+    if (Array.isArray(resArr)) {
+      resArr.forEach((r) => {
+        const itemJobId = (r.id || r.job_id || r.jobId || r.media_id) as string | undefined;
+        if (itemJobId && typeof itemJobId === "string" && !extractedJobIds.includes(itemJobId)) {
+          extractedJobIds.push(itemJobId);
+          extractedResults.push({
+            id: itemJobId,
+            status: (r.status || r.state) as string | undefined,
+            type: (r.type || r.kind) as string | undefined,
+          });
+        }
+      });
+    }
+  };
+
+  inspectResultsArray(obj);
+  if (obj.raw && typeof obj.raw === "object") {
+    inspectResultsArray(obj.raw as Record<string, unknown>);
+  }
+
+  if (!extractedJobId && extractedJobIds.length > 0) {
+    extractedJobId = extractedJobIds[0];
+  }
 
   // Function to extract URLs array or single URL from any object
   const extractUrls = (target: Record<string, unknown>): { mainUrl?: string; allUrls: string[] } => {
@@ -763,6 +797,8 @@ export function parseMCPToolResponse(response: unknown): ParsedMCPResponse {
       id: extractedJobId,
       job_id: extractedJobId,
       jobId: extractedJobId,
+      jobIds: extractedJobIds.length > 0 ? extractedJobIds : (extractedJobId ? [extractedJobId] : undefined),
+      results: extractedResults.length > 0 ? extractedResults : undefined,
       media_id: extractedMediaId,
       mediaId: extractedMediaId,
       status: directStatus || (directUrls.mainUrl ? "completed" : undefined),
@@ -825,26 +861,29 @@ export async function pollHiggsfieldJobStatus(
   creds: HiggsfieldCreds,
   jobId: string
 ): Promise<ParsedMCPResponse> {
-  console.log(`⚙️ Higgsfield MCP [Polling]: Querying job_status with { jobId: "${jobId}" }...`);
+  console.log(`⚙️ Higgsfield MCP [Polling]: Querying job_status with { jobId: "${jobId}", sync: true }...`);
   
   let rawRes: unknown = null;
   try {
-    // Requirement 1: Pass exact schema parameter key { jobId: jobId }
-    rawRes = await executeHiggsfieldMCPTool(creds, "job_status", { jobId: jobId });
-  } catch (err: unknown) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    console.error(`❌ Higgsfield MCP [Polling Error for ${jobId}]: ${errMsg}`);
-    // Requirement 2: ABORT loop immediately on MCP error (-32602 etc.) — never treat as processing!
-    return {
-      id: jobId,
-      job_id: jobId,
-      jobId: jobId,
-      status: "failed",
-      error: errMsg,
-      failure_reason: errMsg,
-      isError: true,
-      raw: { isError: true, error: errMsg },
-    };
+    // Requirement 2: Pass exact schema parameter key { jobId: jobId, sync: true } for text-only clients
+    rawRes = await executeHiggsfieldMCPTool(creds, "job_status", { jobId: jobId, sync: true });
+  } catch {
+    try {
+      rawRes = await executeHiggsfieldMCPTool(creds, "job_status", { params: { jobId: jobId, sync: true } });
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`❌ Higgsfield MCP [Polling Error for ${jobId}]: ${errMsg}`);
+      return {
+        id: jobId,
+        job_id: jobId,
+        jobId: jobId,
+        status: "failed",
+        error: errMsg,
+        failure_reason: errMsg,
+        isError: true,
+        raw: { isError: true, error: errMsg },
+      };
+    }
   }
 
   // Requirement 1: Log full raw JSON response on every poll
