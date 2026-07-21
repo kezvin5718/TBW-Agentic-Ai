@@ -15,7 +15,14 @@ export interface HiggsfieldCreds {
   status: "connected" | "disconnected" | "error";
   error_message?: string;
   available_models?: string[];
-  available_models_info?: Array<{ id: string; name?: string; aspect_ratios?: string[]; params?: Record<string, unknown> }>;
+  available_models_info?: Array<{
+    id: string;
+    name?: string;
+    allowed_roles?: string[];
+    allowed_aspect_ratios?: string[];
+    aspect_ratios?: string[];
+    params?: Record<string, unknown>;
+  }>;
 }
 
 const HIGGSFIELD_OAUTH_TOKEN_URL = "https://mcp.higgsfield.ai/oauth2/token";
@@ -220,9 +227,6 @@ export async function getHiggsfieldMCPClient(creds: HiggsfieldCreds): Promise<{ 
   return { client, transport };
 }
 
-/**
- * Discovers available models from the Higgsfield MCP tools listing using StreamableHTTPClientTransport
- */
 export interface HiggsfieldMediaItem {
   value: string;
   role: string;
@@ -230,8 +234,8 @@ export interface HiggsfieldMediaItem {
 }
 
 /**
- * Formats media references into schema-compliant objects per Requirement 2:
- * { value: <media_id or job_id>, role: 'image', type: 'media_input' }
+ * Formats media references into schema-compliant objects per Requirement 1:
+ * ALL image-generation media entries use role: "image" (the only allowed role for these models).
  * Returns undefined when no media items are provided so `medias` field is omitted entirely.
  */
 export function formatHiggsfieldMedias(
@@ -241,31 +245,38 @@ export function formatHiggsfieldMedias(
 ): HiggsfieldMediaItem[] | undefined {
   const items: HiggsfieldMediaItem[] = [];
 
-  productImageMediaIds.forEach((mediaId) => {
-    if (mediaId && typeof mediaId === "string" && mediaId.trim()) {
-      items.push({
-        value: mediaId.trim(),
-        role: "image",
-        type: "media_input",
-      });
-    }
-  });
-
+  // Style reference image first (using role "image")
   if (styleMediaId && typeof styleMediaId === "string" && styleMediaId.trim()) {
     items.push({
       value: styleMediaId.trim(),
-      role: "style",
+      role: "image",
       type: "media_input",
     });
   }
 
+  // Product / Reference images (using role "image")
+  productImageMediaIds.forEach((mediaId) => {
+    if (mediaId && typeof mediaId === "string" && mediaId.trim()) {
+      if (!items.some(i => i.value === mediaId.trim())) {
+        items.push({
+          value: mediaId.trim(),
+          role: "image",
+          type: "media_input",
+        });
+      }
+    }
+  });
+
+  // Reusable brand element references (using role "image")
   brandElementIds.forEach((elementId) => {
     if (elementId && typeof elementId === "string" && elementId.trim()) {
-      items.push({
-        value: elementId.trim(),
-        role: "brand_element",
-        type: "media_input",
-      });
+      if (!items.some(i => i.value === elementId.trim())) {
+        items.push({
+          value: elementId.trim(),
+          role: "image",
+          type: "media_input",
+        });
+      }
     }
   });
 
@@ -275,6 +286,39 @@ export function formatHiggsfieldMedias(
   }
 
   return items;
+}
+
+/**
+ * Validates request parameters against discovered model constraints locally before sending to server (Requirement 2)
+ */
+export function validateGenerationParamsLocally(
+  modelInfo: { allowed_roles?: string[]; allowed_aspect_ratios?: string[] } | undefined,
+  aspectRatio: string,
+  mediaRoles: string[] = []
+): { valid: boolean; error?: string } {
+  if (!modelInfo) return { valid: true };
+
+  if (modelInfo.allowed_aspect_ratios && modelInfo.allowed_aspect_ratios.length > 0) {
+    if (!modelInfo.allowed_aspect_ratios.includes(aspectRatio)) {
+      return {
+        valid: false,
+        error: `Aspect ratio '${aspectRatio}' is not supported by model. Allowed aspect ratios: [${modelInfo.allowed_aspect_ratios.join(", ")}]`,
+      };
+    }
+  }
+
+  if (modelInfo.allowed_roles && modelInfo.allowed_roles.length > 0) {
+    for (const role of mediaRoles) {
+      if (!modelInfo.allowed_roles.includes(role)) {
+        return {
+          valid: false,
+          error: `Media role '${role}' is not supported by model. Allowed media roles: [${modelInfo.allowed_roles.join(", ")}]`,
+        };
+      }
+    }
+  }
+
+  return { valid: true };
 }
 
 export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<string[]> {

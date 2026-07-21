@@ -9,6 +9,7 @@ import {
   executeHiggsfieldGenerationTool,
   parseMCPToolResponse,
   formatHiggsfieldMedias,
+  validateGenerationParamsLocally,
 } from "@/lib/higgsfield-mcp";
 
 export async function POST(request: Request) {
@@ -47,7 +48,10 @@ export async function POST(request: Request) {
     const selectedRatio = ratio || "3:4";
 
     // 3. Format reusable brand elements as <<<element_id>>> placeholders inside prompt text
-    const formattedPrompt = formatPromptWithBrandElements(prompt, brandElementIds || []);
+    let formattedPrompt = formatPromptWithBrandElements(prompt, brandElementIds || []);
+    if (styleReference?.mediaUrl) {
+      formattedPrompt = `In the visual style and setting of reference image 1, featuring: ${formattedPrompt}`;
+    }
 
     const batchCount = Array.isArray(productImages) && productImages.length > 0 ? productImages.length : 1;
 
@@ -87,12 +91,25 @@ export async function POST(request: Request) {
       higgsfieldMediaRef: prod.higgsfieldMediaRef || prod.mediaId || `media_id_prod_${Date.now()}_${idx}`,
     }));
 
-    // Requirement 2: Format medias as array of objects { value, role, type }. OMIT field when empty.
+    // Requirement 1 & 2: Format medias using role: "image" for all media items. OMIT field when empty.
     const formattedMedias = formatHiggsfieldMedias(
       processedProductImages.map((p: { mediaId: string }) => p.mediaId),
       styleReference?.higgsfieldMediaRef || null,
       brandElementIds || []
     );
+
+    // Requirement 2: Validate request parameters against model constraints locally before sending
+    const modelInfo = creds.available_models_info?.find(m => m.id === selectedModel);
+    const mediaRoles = formattedMedias ? formattedMedias.map(m => m.role) : [];
+    const validation = validateGenerationParamsLocally(modelInfo, selectedRatio, mediaRoles);
+
+    if (!validation.valid) {
+      console.error(`❌ Higgsfield Local Model Validation Failed for '${selectedModel}': ${validation.error}`);
+      return NextResponse.json(
+        { error: `Validation Error: ${validation.error}` },
+        { status: 400 }
+      );
+    }
 
     const generationParams: Record<string, unknown> = {
       model: selectedModel,
