@@ -1,7 +1,7 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { encrypt, decrypt } from "@/lib/encryption";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { HIGGSFIELD_CONFIG } from "@/lib/higgsfield-config";
 import { cookies } from "next/headers";
 import { OAuthClientProvider, OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -188,9 +188,9 @@ export async function forceRefreshHiggsfieldToken(creds: HiggsfieldCreds): Promi
 }
 
 /**
- * Establishes a connected Model Context Protocol client to the Higgsfield MCP server
+ * Establishes a connected Model Context Protocol client to the Higgsfield MCP server using StreamableHTTPClientTransport
  */
-export async function getHiggsfieldMCPClient(creds: HiggsfieldCreds): Promise<{ client: Client; transport: SSEClientTransport }> {
+export async function getHiggsfieldMCPClient(creds: HiggsfieldCreds): Promise<{ client: Client; transport: StreamableHTTPClientTransport }> {
   const decryptedAccessToken = decrypt(creds.access_token_encrypted);
 
   const client = new Client({
@@ -200,22 +200,19 @@ export async function getHiggsfieldMCPClient(creds: HiggsfieldCreds): Promise<{ 
     capabilities: {}
   });
 
-  const transport = new SSEClientTransport(
+  const provider = new DBOAuthClientProvider();
+
+  const transport = new StreamableHTTPClientTransport(
     new URL(HIGGSFIELD_MCP_URL),
     {
-      eventSourceInit: {
-        headers: {
-          Authorization: `Bearer ${decryptedAccessToken}`
-        }
-      },
+      authProvider: provider,
       requestInit: {
         headers: {
           Authorization: `Bearer ${decryptedAccessToken}`,
           "Content-Type": "application/json"
         }
       }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any
+    }
   );
 
   await client.connect(transport);
@@ -223,14 +220,15 @@ export async function getHiggsfieldMCPClient(creds: HiggsfieldCreds): Promise<{ 
 }
 
 /**
- * Discovers available models from the Higgsfield MCP tools listing
+ * Discovers available models from the Higgsfield MCP tools listing using StreamableHTTPClientTransport
  */
 export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<string[]> {
   let currentCreds = creds;
-  let transport: SSEClientTransport | null = null;
+  let transport: StreamableHTTPClientTransport | null = null;
   let toolsResult;
 
   try {
+    console.log("⚙️ Higgsfield MCP [Discovery]: Connecting via StreamableHTTPClientTransport to https://mcp.higgsfield.ai/mcp ...");
     const connection = await getHiggsfieldMCPClient(currentCreds);
     transport = connection.transport;
     toolsResult = await connection.client.listTools();
@@ -252,16 +250,20 @@ export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<
         transport = connection.transport;
         toolsResult = await connection.client.listTools();
       } catch (retryErr) {
-        console.error("❌ Higgsfield MCP: Token refresh retry failed:", retryErr);
-        throw retryErr;
+        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        console.error("❌ Higgsfield MCP: Token refresh retry failed:", retryMsg);
+        throw new Error(`Higgsfield MCP StreamableHTTP Discovery Failed (401 Unauthorized): ${retryMsg}`);
       }
     } else {
-      throw err;
+      console.error("❌ Higgsfield MCP: StreamableHTTP Discovery error:", errMsg);
+      throw new Error(`Higgsfield MCP StreamableHTTP Discovery Failed: ${errMsg}`);
     }
   }
 
   try {
-    console.log("⚙️ Higgsfield MCP: Discovered tools:", toolsResult.tools.map(t => t.name));
+    const toolsSummary = toolsResult.tools.map(t => ({ name: t.name, description: t.description || "" }));
+    console.log("✅ Higgsfield MCP [Discovery Handshake Success]: Connected via StreamableHTTPClientTransport!");
+    console.log("⚙️ Higgsfield MCP [Discovered Tools]:", JSON.stringify(toolsSummary, null, 2));
 
     // Discover the available image models (nano banana variants)
     const generateTool = toolsResult.tools.find(t => t.name === "generate_image" || t.name === "generate");
@@ -279,6 +281,8 @@ export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<
     if (discoveredModels.length === 0) {
       discoveredModels = Object.keys(HIGGSFIELD_CONFIG.models);
     }
+
+    console.log("⚙️ Higgsfield MCP [Discovered Models]:", JSON.stringify(discoveredModels, null, 2));
 
     // Save discovered models back to config state
     const supabase = createServiceRoleClient();
@@ -298,6 +302,73 @@ export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<
   } catch (err) {
     console.error("❌ Higgsfield MCP: Failed to parse discovered models:", err);
     return Object.keys(HIGGSFIELD_CONFIG.models);
+  } finally {
+    if (transport) {
+      try {
+        await transport.close();
+      } catch (closeErr) {
+        console.warn("Warn closing transport:", closeErr);
+      }
+    }
+  }
+}
+
+/**
+ * Executes a tool on the Higgsfield MCP server using StreamableHTTPClientTransport.
+ */
+export async function executeHiggsfieldMCPTool(
+  creds: HiggsfieldCreds,
+  toolName: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  let currentCreds = creds;
+  let transport: StreamableHTTPClientTransport | null = null;
+
+  try {
+    const connection = await getHiggsfieldMCPClient(currentCreds);
+    transport = connection.transport;
+
+    console.log(`⚙️ Higgsfield MCP [Tool Call]: Executing tool '${toolName}' via StreamableHTTPClientTransport...`);
+    const result = await connection.client.callTool({
+      name: toolName,
+      arguments: args,
+    });
+
+    console.log(`✅ Higgsfield MCP [Tool Call]: Executed tool '${toolName}' successfully.`);
+    return result;
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (
+      errMsg.includes("401") ||
+      errMsg.toLowerCase().includes("unauthorized") ||
+      errMsg.includes("Non-200 status code (401)")
+    ) {
+      console.warn(`⚠️ Higgsfield MCP: 401 Unauthorized during tool call '${toolName}'. Attempting token refresh...`);
+      try {
+        if (transport) {
+          try { await transport.close(); } catch {}
+          transport = null;
+        }
+        currentCreds = await forceRefreshHiggsfieldToken(currentCreds);
+        const connection = await getHiggsfieldMCPClient(currentCreds);
+        transport = connection.transport;
+
+        const result = await connection.client.callTool({
+          name: toolName,
+          arguments: args,
+        });
+
+        console.log(`✅ Higgsfield MCP [Tool Call Retry]: Executed tool '${toolName}' successfully after token refresh.`);
+        return result;
+      } catch (retryErr: unknown) {
+        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        console.error(`❌ Higgsfield MCP: Tool call '${toolName}' retry failed: ${retryMsg}`);
+        throw new Error(`Higgsfield MCP Tool Call Failed: ${retryMsg}`);
+      }
+    } else {
+      console.error(`❌ Higgsfield MCP: Tool call '${toolName}' failed via StreamableHTTPClientTransport: ${errMsg}`);
+      throw new Error(`Higgsfield MCP Tool Call Failed: ${errMsg}`);
+    }
   } finally {
     if (transport) {
       try {
