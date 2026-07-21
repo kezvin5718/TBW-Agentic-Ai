@@ -789,6 +789,9 @@ function ImageStudioWorkspace() {
                   alt={prodImg.fileName}
                   className="w-full h-full object-cover"
                 />
+                <div className="absolute bottom-1 left-1 bg-slate-950/80 backdrop-blur-md rounded-full p-0.5" title="Higgsfield Media Ready">
+                  <CheckCircle className="w-3 h-3 text-emerald-400" />
+                </div>
                 <button
                   onClick={() => removeProductImage(index)}
                   className="absolute top-1 right-1 w-4 h-4 bg-red-600/90 border border-red-500/30 rounded flex items-center justify-center text-white cursor-pointer opacity-80 group-hover:opacity-100 transition-opacity"

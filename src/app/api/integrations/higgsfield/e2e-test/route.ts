@@ -18,7 +18,7 @@ export async function GET() {
   };
 
   try {
-    addLog("🚀 Starting Automated Higgsfield MCP End-to-End Test (Dual Test: Text-Only & Reference Image)...\n");
+    addLog("🚀 Starting Automated Higgsfield MCP End-to-End Test (Dual Test: Text-Only & Media Import Reference Image)...\n");
 
     const creds = await getHiggsfieldCredentials();
     if (!creds || creds.status !== "connected") {
@@ -100,11 +100,40 @@ export async function GET() {
     }
 
     // ==========================================
-    // CASE (b): ONE REFERENCE IMAGE WITH ROLE "IMAGE"
+    // CASE (b): REAL MEDIA_IMPORT_URL + REFERENCE IMAGE (ROLE: "IMAGE")
     // ==========================================
-    addLog("--- TEST CASE (b): ONE REFERENCE IMAGE (ROLE: 'IMAGE') ---");
-    const dummyRefId = `media_id_ref_test_${Date.now()}`;
-    const formattedMediasB = formatHiggsfieldMedias([dummyRefId], null, []);
+    addLog("--- TEST CASE (b): REAL MEDIA_IMPORT_URL + REFERENCE IMAGE (ROLE: 'IMAGE') ---");
+    const samplePublicUrl = "https://picsum.photos/800/800";
+    addLog(`⚙️ Importing sample public image via media_import_url tool: ${samplePublicUrl}...`);
+
+    let importRes: unknown;
+    try {
+      importRes = await executeHiggsfieldMCPTool(creds, "media_import_url", {
+        url: samplePublicUrl,
+        filename: "sample_ref.jpg",
+        file_name: "sample_ref.jpg",
+      });
+    } catch {
+      importRes = await executeHiggsfieldMCPTool(creds, "media_import_url", {
+        params: {
+          url: samplePublicUrl,
+          filename: "sample_ref.jpg",
+          file_name: "sample_ref.jpg",
+        }
+      });
+    }
+    addLog(`⚙️ [RAW Response - media_import_url]:\n${JSON.stringify(importRes, null, 2)}`);
+
+    const parsedImport = parseMCPToolResponse(importRes);
+    const confirmedMediaId = (parsedImport.raw?.media_id || parsedImport.raw?.id || parsedImport.id || parsedImport.job_id) as string;
+
+    if (!confirmedMediaId) {
+      addLog("❌ media_import_url failed to return a confirmed media_id for Case (b).");
+      return NextResponse.json({ success: false, error: "Case (b) media import failed", logs }, { status: 500 });
+    }
+
+    addLog(`✅ Confirmed Media ID obtained from Higgsfield: '${confirmedMediaId}'`);
+    const formattedMediasB = formatHiggsfieldMedias([confirmedMediaId], null, []);
 
     const imageRefParams: Record<string, unknown> = {
       model: proModelId,
@@ -155,7 +184,7 @@ export async function GET() {
     return NextResponse.json({
       success: completedA && completedB,
       caseA: { jobId: jobIdA, resultUrl: urlA, completed: completedA },
-      caseB: { jobId: jobIdB, resultUrl: urlB, completed: completedB },
+      caseB: { mediaId: confirmedMediaId, jobId: jobIdB, resultUrl: urlB, completed: completedB },
       logs,
     });
   } catch (error: unknown) {

@@ -85,11 +85,27 @@ export async function POST(request: Request) {
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const processedProductImages = (productImages || []).map((prod: any, idx: number) => ({
+    const processedProductImages = (productImages || []).map((prod: any) => ({
       mediaUrl: prod.mediaUrl,
-      mediaId: prod.higgsfieldMediaRef || prod.mediaId || `media_id_prod_${Date.now()}_${idx}`,
-      higgsfieldMediaRef: prod.higgsfieldMediaRef || prod.mediaId || `media_id_prod_${Date.now()}_${idx}`,
+      mediaId: prod.higgsfieldMediaRef || prod.mediaId,
+      higgsfieldMediaRef: prod.higgsfieldMediaRef || prod.mediaId,
     }));
+
+    // Requirement 2: Block generation if any reference image lacks a confirmed Higgsfield media_id
+    const unconfirmed = processedProductImages.find((p: { mediaId: string }) => !p.mediaId || p.mediaId.startsWith("higgs-media-ref") || p.mediaId.startsWith("media_id_prod"));
+    if (unconfirmed) {
+      return NextResponse.json(
+        { error: "One or more reference images have not completed Higgsfield media import. Please re-upload the image." },
+        { status: 400 }
+      );
+    }
+
+    if (styleReference && (!styleReference.higgsfieldMediaRef || styleReference.higgsfieldMediaRef.startsWith("higgs-media-ref"))) {
+      return NextResponse.json(
+        { error: "Style reference image has not completed Higgsfield media import. Please re-upload the style image." },
+        { status: 400 }
+      );
+    }
 
     // Requirement 1 & 2: Format medias using role: "image" for all media items. OMIT field when empty.
     const formattedMedias = formatHiggsfieldMedias(
@@ -115,7 +131,7 @@ export async function POST(request: Request) {
       model: selectedModel,
       prompt: formattedPrompt,
       aspect_ratio: selectedRatio,
-      resolution: "1k", // Schema requires lowercase "1k"
+      resolution: "1k",
     };
 
     if (formattedMedias && formattedMedias.length > 0) {
