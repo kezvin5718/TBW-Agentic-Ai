@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
-import { getHiggsfieldCredentials, executeHiggsfieldMCPTool, parseMCPToolResponse } from "@/lib/higgsfield-mcp";
+import { createClient } from "@/lib/supabase/server";
+import { getHiggsfieldCredentials, executeHiggsfieldMCPTool, parseMCPToolResponse, uploadToSupabaseStorageDirect } from "@/lib/higgsfield-mcp";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
@@ -32,41 +32,17 @@ export async function POST(request: Request) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    const serviceSupabase = createServiceRoleClient();
-    let fullPublicUrl: string | null = null;
+    const uniqueName = `ref-${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
 
-    // 1. Try Supabase Storage upload and generate a signed URL (expiry = 24 hours / 86400s) (Requirement 2)
-    try {
-      const bucket = "brand-assets";
-      const storagePath = `higgsfield-refs/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
-      const { error: uploadErr } = await serviceSupabase.storage
-        .from(bucket)
-        .upload(storagePath, buffer, { contentType: file.type || "image/jpeg", upsert: true });
+    // 1. Direct Supabase Storage REST API Upload (Requirement 1 & 2)
+    let fullPublicUrl = await uploadToSupabaseStorageDirect(uniqueName, buffer, file.type || "image/jpeg");
 
-      if (!uploadErr) {
-        // Generate signed URL with 24h validity for Higgsfield import access
-        const { data: signedData, error: signedErr } = await serviceSupabase.storage
-          .from(bucket)
-          .createSignedUrl(storagePath, 86400);
-
-        if (!signedErr && signedData?.signedUrl) {
-          fullPublicUrl = signedData.signedUrl;
-        } else {
-          const publicData = serviceSupabase.storage.from(bucket).getPublicUrl(storagePath);
-          fullPublicUrl = publicData?.data?.publicUrl || null;
-        }
-      }
-    } catch (stErr) {
-      console.warn("⚠️ Supabase storage upload warning, fallback to local uploads:", stErr);
-    }
-
-    // 2. Fallback local public/uploads directory if storage upload unconfigured
+    // 2. Fallback local public/uploads directory if direct storage upload unconfigured
     if (!fullPublicUrl) {
       const uploadDir = join(process.cwd(), "public", "uploads");
       if (!existsSync(uploadDir)) {
         await mkdir(uploadDir, { recursive: true });
       }
-      const uniqueName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
       const filePath = join(uploadDir, uniqueName);
       await writeFile(filePath, buffer);
 

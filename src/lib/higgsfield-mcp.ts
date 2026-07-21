@@ -919,8 +919,70 @@ export async function pollHiggsfieldJobStatus(
 }
 
 /**
- * Downloads generated result image/video from result URL and stores in Supabase Storage (bucket: creatives)
- * with local /uploads fallback. Returns permanent Supabase Storage public URL. (Requirement 1 & 2)
+ * Requirement 1 & 2: Uploads binary buffer directly via Supabase Storage REST API
+ * POST {SUPABASE_URL}/storage/v1/object/studio-outputs/{filename}
+ * Headers: apikey + Authorization: Bearer {SUPABASE_SERVICE_ROLE_KEY}
+ * Public URL: {SUPABASE_URL}/storage/v1/object/public/studio-outputs/{filename}
+ */
+export async function uploadToSupabaseStorageDirect(
+  fileName: string,
+  buffer: Buffer,
+  contentType: string
+): Promise<string | null> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  // Requirement 3: Log loudly if environment variables are undefined at call site
+  if (!supabaseUrl) {
+    console.error("❌ CRITICAL ENVIRONMENT ERROR: NEXT_PUBLIC_SUPABASE_URL / SUPABASE_URL is UNDEFINED in process.env at call site!");
+  }
+  if (!serviceRoleKey) {
+    console.error("❌ CRITICAL ENVIRONMENT ERROR: SUPABASE_SERVICE_ROLE_KEY is UNDEFINED in process.env at call site!");
+  }
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    return null;
+  }
+
+  const cleanBaseUrl = supabaseUrl.trim().replace(/\/+$/, "");
+  const uploadApiUrl = `${cleanBaseUrl}/storage/v1/object/studio-outputs/${fileName}`;
+  const publicUrl = `${cleanBaseUrl}/storage/v1/object/public/studio-outputs/${fileName}`;
+
+  const maskedKey = serviceRoleKey.substring(0, 6) + "..." + serviceRoleKey.substring(serviceRoleKey.length - 4);
+  console.log(`⚙️ Direct Storage REST Upload Target URL: ${uploadApiUrl}`);
+  console.log(`⚙️ Using Service Role Key (masked): ${maskedKey} (Length: ${serviceRoleKey.length})`);
+
+  try {
+    const res = await fetch(uploadApiUrl, {
+      method: "POST",
+      headers: {
+        "apikey": serviceRoleKey,
+        "Authorization": `Bearer ${serviceRoleKey}`,
+        "Content-Type": contentType || "image/png",
+        "x-upsert": "true",
+      },
+      body: new Uint8Array(buffer),
+    });
+
+    if (res.ok) {
+      const jsonRes = await res.json().catch(() => ({}));
+      console.log(`✅ Direct Supabase Storage REST Upload Succeeded! Key: ${jsonRes.Key || jsonRes.id || fileName}`);
+      console.log(`📍 Public Storage Gallery URL: ${publicUrl}`);
+      return publicUrl;
+    } else {
+      const errText = await res.text();
+      console.error(`❌ Direct Supabase Storage REST Upload Failed (${res.status} ${res.statusText}): ${errText}`);
+      return null;
+    }
+  } catch (err) {
+    console.error("❌ Direct Supabase Storage REST Upload Exception:", err);
+    return null;
+  }
+}
+
+/**
+ * Downloads generated result image/video from result URL and stores via direct Storage REST API.
+ * Returns permanent Supabase Storage public URL: {SUPABASE_URL}/storage/v1/object/public/studio-outputs/{filename} (Requirement 1 & 2)
  */
 export async function downloadAndStoreGeneratedMedia(
   resultUrl: string,
@@ -945,27 +1007,14 @@ export async function downloadAndStoreGeneratedMedia(
     }
 
     const fileName = `${prefix}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`;
-    const storagePath = `studio-outputs/${fileName}`;
 
-    const supabase = createServiceRoleClient();
-    const bucket = "creatives";
-
-    // 1. Primary: Upload to Supabase Storage 'creatives' bucket (Requirement 1 & 2)
-    const { error: uploadErr } = await supabase.storage
-      .from(bucket)
-      .upload(storagePath, buffer, { contentType: contentType || `image/${ext}`, upsert: true });
-
-    if (!uploadErr) {
-      const publicData = supabase.storage.from(bucket).getPublicUrl(storagePath);
-      if (publicData?.data?.publicUrl) {
-        console.log(`✅ Higgsfield MCP: Media uploaded to Supabase Storage: ${publicData.data.publicUrl}`);
-        return publicData.data.publicUrl;
-      }
-    } else {
-      console.warn(`⚠️ Supabase storage upload notice for ${storagePath}: ${uploadErr.message}`);
+    // Requirement 1: Upload via direct HTTP POST request to Storage REST API
+    const directStorageUrl = await uploadToSupabaseStorageDirect(fileName, buffer, contentType || `image/${ext}`);
+    if (directStorageUrl) {
+      return directStorageUrl;
     }
 
-    // 2. Fallback: Save to local public/uploads directory
+    // Fallback: Save to local public/uploads directory if storage upload unavailable
     const { writeFile, mkdir } = await import("fs/promises");
     const { join } = await import("path");
     const { existsSync } = await import("fs");
@@ -978,7 +1027,7 @@ export async function downloadAndStoreGeneratedMedia(
     await writeFile(filePath, buffer);
 
     const publicPath = `/uploads/${fileName}`;
-    console.log(`✅ Higgsfield MCP: Media saved to local uploads fallback: ${publicPath}`);
+    console.log(`✅ Higgsfield MCP: Saved to local uploads fallback: ${publicPath}`);
     return publicPath;
   } catch (err) {
     console.error(`❌ Higgsfield MCP: Failed to download media from ${resultUrl}, keeping original URL:`, err);
@@ -987,7 +1036,8 @@ export async function downloadAndStoreGeneratedMedia(
 }
 
 /**
- * Requirement 4: Repair routine for existing studio_generations rows with external Higgsfield/CloudFront URLs
+ * Requirement 4: Migrate local /uploads/ fallback files and repair external temporary URLs into the bucket
+ * via direct Storage REST API, updating studio_generations DB rows.
  */
 export async function repairStudioGenerations(): Promise<number> {
   const supabase = createServiceRoleClient();
@@ -998,32 +1048,54 @@ export async function repairStudioGenerations(): Promise<number> {
   if (error || !rows || rows.length === 0) return 0;
 
   let repairedCount = 0;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const cleanBaseUrl = (supabaseUrl || "").trim().replace(/\/+$/, "");
+  const targetPrefix = `${cleanBaseUrl}/storage/v1/object/public/studio-outputs/`;
 
   for (const row of rows) {
     const url = row.generated_image_url;
-    if (!url) continue;
+    if (!url || (cleanBaseUrl && url.startsWith(targetPrefix))) {
+      continue;
+    }
 
-    // Check if the URL is an external temporary/Higgsfield URL
-    const isExternalTemporary =
-      url.startsWith("http") &&
-      !url.includes(".supabase.co") &&
-      (url.includes("higgsfield.ai") || url.includes("cloudfront.net") || url.includes("unsplash.com"));
+    console.log(`🔧 Higgsfield MCP [Migrate/Repair]: Migrating gallery row ${row.id} URL: ${url}`);
+    try {
+      let permanentUrl: string | null = null;
 
-    if (isExternalTemporary) {
-      console.log(`🔧 Higgsfield MCP [Repair]: Repairing external media URL for row ${row.id}: ${url}`);
-      try {
-        const permanentUrl = await downloadAndStoreGeneratedMedia(url, "repaired");
-        if (permanentUrl && permanentUrl !== url) {
-          await supabase
-            .from("studio_generations")
-            .update({ generated_image_url: permanentUrl })
-            .eq("id", row.id);
-          repairedCount++;
-          console.log(`✅ Higgsfield MCP [Repair]: Row ${row.id} updated to permanent storage: ${permanentUrl}`);
+      // Requirement 4: Migrate local /uploads/ fallback files into bucket
+      if (url.startsWith("/uploads/") || url.includes("/uploads/")) {
+        const fileName = url.split("/uploads/").pop()?.split("?")[0];
+        if (fileName) {
+          const { readFile } = await import("fs/promises");
+          const { join } = await import("path");
+          const localFilePath = join(process.cwd(), "public", "uploads", fileName);
+          
+          try {
+            const fileBuffer = await readFile(localFilePath);
+            const ext = fileName.split(".").pop() || "png";
+            const contentType = ext === "mp4" ? "video/mp4" : `image/${ext}`;
+            permanentUrl = await uploadToSupabaseStorageDirect(fileName, fileBuffer, contentType);
+          } catch (fileErr) {
+            console.warn(`⚠️ Could not read local fallback file ${localFilePath}:`, fileErr);
+          }
         }
-      } catch (repErr) {
-        console.error(`❌ Higgsfield MCP [Repair]: Failed to repair row ${row.id}:`, repErr);
       }
+
+      // Handle external temporary URLs
+      if (!permanentUrl && url.startsWith("http")) {
+        permanentUrl = await downloadAndStoreGeneratedMedia(url, "migrated");
+      }
+
+      if (permanentUrl && permanentUrl !== url) {
+        await supabase
+          .from("studio_generations")
+          .update({ generated_image_url: permanentUrl })
+          .eq("id", row.id);
+        repairedCount++;
+        console.log(`✅ Higgsfield MCP [Migrate/Repair]: Row ${row.id} updated to: ${permanentUrl}`);
+      }
+    } catch (repErr) {
+      console.error(`❌ Higgsfield MCP [Migrate/Repair]: Failed to migrate row ${row.id}:`, repErr);
     }
   }
 
