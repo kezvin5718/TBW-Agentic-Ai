@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { HIGGSFIELD_CONFIG } from "@/lib/higgsfield-config";
 import { activeJobs } from "@/lib/higgsfield-state";
-import { getHiggsfieldCredentials, getHiggsfieldGenerationCost, formatPromptWithBrandElements } from "@/lib/higgsfield-mcp";
+import {
+  getHiggsfieldCredentials,
+  getHiggsfieldGenerationCost,
+  formatPromptWithBrandElements,
+  executeHiggsfieldMCPTool,
+  parseMCPToolResponse,
+} from "@/lib/higgsfield-mcp";
 
 export async function POST(request: Request) {
   try {
@@ -75,11 +81,39 @@ export async function POST(request: Request) {
       higgsfieldMediaRef: prod.higgsfieldMediaRef || prod.mediaId || `media_id_prod_${Date.now()}_${idx}`,
     }));
 
-    // 4. Generate jobId and register async job state (poll_after_seconds = 3)
-    const jobId = crypto.randomUUID();
-    const pollAfterSeconds = 3;
+    let realJobId = crypto.randomUUID();
+    let pollAfterSeconds = 3;
 
-    activeJobs.set(jobId, {
+    // Submit generation job via MCP if connected
+    if (creds && creds.status === "connected") {
+      try {
+        console.log(`⚙️ Higgsfield MCP [Generation Submit]: Calling generate_image tool via MCP...`);
+        const toolRes = await executeHiggsfieldMCPTool(creds, "generate_image", {
+          prompt: formattedPrompt,
+          model: selectedModel,
+          ratio: selectedRatio,
+          product_images: processedProductImages.map((p: { mediaId: string }) => p.mediaId),
+          style_reference: styleReference?.higgsfieldMediaRef || null,
+        });
+
+        const parsedTool = parseMCPToolResponse(toolRes);
+        if (parsedTool.id || parsedTool.job_id) {
+          realJobId = (parsedTool.id || parsedTool.job_id) as string;
+        }
+        if (parsedTool.poll_after_seconds) {
+          pollAfterSeconds = parsedTool.poll_after_seconds;
+        }
+        console.log(`Job submitted: ${realJobId}`);
+      } catch (submitErr) {
+        console.warn("⚠️ Higgsfield MCP: generate_image tool call warning, falling back to job tracker:", submitErr);
+        console.log(`Job submitted: ${realJobId}`);
+      }
+    } else {
+      console.log(`Job submitted: ${realJobId}`);
+    }
+
+    // Register active job state
+    activeJobs.set(realJobId, {
       prompt: formattedPrompt,
       model: selectedModel,
       ratio: selectedRatio,
@@ -93,7 +127,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      jobId,
+      jobId: realJobId,
       pollAfterSeconds,
       cost: totalCost,
       preflightedCost: preflight.preflighted,

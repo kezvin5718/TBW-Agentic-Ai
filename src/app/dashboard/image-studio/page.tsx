@@ -20,7 +20,8 @@ import {
   ArrowRight,
   Undo,
   Plus,
-  Palette
+  Palette,
+  RefreshCw
 } from "lucide-react";
 import { HIGGSFIELD_CONFIG } from "@/lib/higgsfield-config";
 
@@ -112,6 +113,31 @@ function ImageStudioWorkspace() {
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
 
   const [attachingToTask, setAttachingToTask] = useState<string | null>(null);
+
+  // Sync state
+  const [syncing, setSyncing] = useState(false);
+  const [syncSuccessMessage, setSyncSuccessMessage] = useState<string | null>(null);
+
+  const handleSyncFromHiggsfield = async () => {
+    setSyncing(true);
+    setSyncSuccessMessage(null);
+    setGenerationError(null);
+    try {
+      const res = await fetch("/api/production/higgsfield/sync", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Sync failed");
+      }
+      setSyncSuccessMessage(`Successfully synced ${data.importedCount || 0} generation(s) from Higgsfield!`);
+      await fetchHistory();
+      await fetchMonthlyCredits();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setGenerationError(`Sync error: ${msg}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const supabase = createClient();
 
@@ -585,31 +611,58 @@ function ImageStudioWorkspace() {
           </p>
         </div>
 
-        {/* Credit Alert Metric Box */}
-        <div className="bg-slate-950/60 border border-slate-900 rounded-xl p-3 flex flex-col justify-center min-w-[200px]">
-          <div className="flex items-center justify-between text-[10px] font-bold tracking-wider text-slate-500 uppercase">
-            <span>Higgsfield Credits Usage</span>
-            {creditAlert && (
-              <span className="flex items-center space-x-1 text-amber-500">
-                <AlertTriangle className="w-3 h-3" />
-                <span>Limit warning</span>
-              </span>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={handleSyncFromHiggsfield}
+            disabled={syncing}
+            className="flex items-center space-x-1.5 bg-slate-900 hover:bg-slate-850 border border-indigo-900/50 hover:border-indigo-500/50 text-indigo-300 hover:text-white text-xs font-bold py-3 px-4 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+          >
+            {syncing ? (
+              <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+            ) : (
+              <RefreshCw className="w-4 h-4 text-indigo-400" />
             )}
-          </div>
-          <div className="flex items-baseline space-x-1 mt-1.5">
-            <span className="text-2xl font-black text-white">{monthlyCredits.toFixed(1)}</span>
-            <span className="text-[10px] font-semibold text-slate-500">/ {HIGGSFIELD_CONFIG.monthlyLimitAlert} credits</span>
-          </div>
-          <div className="w-full bg-slate-900 rounded-full h-1 mt-2 overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${
-                creditAlert ? "bg-amber-500" : "bg-indigo-600"
-              }`}
-              style={{ width: `${Math.min((monthlyCredits / HIGGSFIELD_CONFIG.monthlyLimitAlert) * 100, 100)}%` }}
-            />
+            <span>Sync from Higgsfield</span>
+          </button>
+
+          {/* Credit Alert Metric Box */}
+          <div className="bg-slate-950/60 border border-slate-900 rounded-xl p-3 flex flex-col justify-center min-w-[200px]">
+            <div className="flex items-center justify-between text-[10px] font-bold tracking-wider text-slate-500 uppercase">
+              <span>Higgsfield Credits Usage</span>
+              {creditAlert && (
+                <span className="flex items-center space-x-1 text-amber-500">
+                  <AlertTriangle className="w-3 h-3" />
+                  <span>Limit warning</span>
+                </span>
+              )}
+            </div>
+            <div className="flex items-baseline space-x-1 mt-1.5">
+              <span className="text-2xl font-black text-white">{monthlyCredits.toFixed(1)}</span>
+              <span className="text-[10px] font-semibold text-slate-500">/ {HIGGSFIELD_CONFIG.monthlyLimitAlert} credits</span>
+            </div>
+            <div className="w-full bg-slate-900 rounded-full h-1 mt-2 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${
+                  creditAlert ? "bg-amber-500" : "bg-indigo-600"
+                }`}
+                style={{ width: `${Math.min((monthlyCredits / HIGGSFIELD_CONFIG.monthlyLimitAlert) * 100, 100)}%` }}
+              />
+            </div>
           </div>
         </div>
       </div>
+
+      {syncSuccessMessage && (
+        <div className="bg-emerald-950/20 border border-emerald-900/60 rounded-2xl p-4 flex items-center justify-between text-xs text-emerald-300 animate-in fade-in duration-200">
+          <div className="flex items-center space-x-2">
+            <CheckCircle className="w-4 h-4 text-emerald-400" />
+            <span>{syncSuccessMessage}</span>
+          </div>
+          <button onClick={() => setSyncSuccessMessage(null)} className="text-slate-400 hover:text-white">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Main Form Glassmorphic Card */}
       <div className="bg-slate-950/40 border border-slate-900 backdrop-blur-md rounded-3xl p-6 space-y-6 shadow-2xl relative overflow-hidden">
@@ -1009,6 +1062,52 @@ function ImageStudioWorkspace() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Active Generating or Error Card Tile */}
+            {(generating || generationError) && (
+              <div className={`p-6 rounded-3xl border flex flex-col justify-between space-y-4 animate-in fade-in duration-200 ${
+                generationError ? "bg-red-950/20 border-red-900/60" : "bg-indigo-950/20 border-indigo-900/60"
+              }`}>
+                <div className="flex items-center justify-between">
+                  <span className={`text-[9px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border ${
+                    generationError ? "bg-red-500/20 text-red-300 border-red-500/30" : "bg-indigo-500/20 text-indigo-300 border-indigo-500/30"
+                  }`}>
+                    {generationError ? "Generation Failed / Flagged" : `Generating (${selectedModel})`}
+                  </span>
+                  {generationError && (
+                    <button onClick={() => setGenerationError(null)} className="text-slate-400 hover:text-white">
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex flex-col items-center justify-center py-6 text-center space-y-3">
+                  {generating ? (
+                    <>
+                      <Loader2 className="w-8 h-8 text-indigo-400 animate-spin" />
+                      <div className="w-full space-y-1">
+                        <div className="flex justify-between text-[10px] text-slate-400 font-bold">
+                          <span>Polling job_status...</span>
+                          <span>{generationProgress}%</span>
+                        </div>
+                        <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
+                          <div className="bg-indigo-500 h-full transition-all duration-300" style={{ width: `${generationProgress}%` }} />
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="w-8 h-8 text-red-400" />
+                      <p className="text-xs text-red-300 font-medium max-w-sm">{generationError}</p>
+                    </>
+                  )}
+                </div>
+
+                <p className="text-xs text-slate-400 line-clamp-2 italic">
+                  &ldquo;{prompt || "Active Higgsfield Job"}&rdquo;
+                </p>
+              </div>
+            )}
+
             {history.map((record) => (
               <div
                 key={record.id}

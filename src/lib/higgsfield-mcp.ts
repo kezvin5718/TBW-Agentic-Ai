@@ -481,6 +481,212 @@ export function formatPromptWithBrandElements(prompt: string, brandElementIds: s
   return formattedPrompt;
 }
 
+export interface ParsedMCPResponse {
+  id?: string;
+  job_id?: string;
+  status?: string;
+  poll_after_seconds?: number;
+  result_url?: string;
+  url?: string;
+  error?: string;
+  failure_reason?: string;
+  recovery_tool?: { name: string; arguments?: Record<string, unknown> };
+  raw?: Record<string, unknown>;
+  items?: Array<Record<string, unknown>>;
+}
+
+/**
+ * Parses MCP tool responses to extract standard job IDs, status, URLs, and errors
+ */
+export function parseMCPToolResponse(response: unknown): ParsedMCPResponse {
+  if (!response || typeof response !== "object") {
+    return {};
+  }
+
+  const obj = response as Record<string, unknown>;
+
+  // Check direct object fields
+  if (obj.id || obj.job_id || obj.status || obj.result_url || obj.url) {
+    return {
+      id: (obj.id || obj.job_id) as string | undefined,
+      job_id: (obj.job_id || obj.id) as string | undefined,
+      status: obj.status as string | undefined,
+      poll_after_seconds: typeof obj.poll_after_seconds === "number" ? obj.poll_after_seconds : undefined,
+      result_url: (obj.result_url || obj.url || obj.image_url || obj.video_url) as string | undefined,
+      url: (obj.url || obj.result_url) as string | undefined,
+      error: (obj.error || obj.failure_reason) as string | undefined,
+      failure_reason: (obj.failure_reason || obj.error) as string | undefined,
+      recovery_tool: obj.recovery_tool as { name: string; arguments?: Record<string, unknown> } | undefined,
+      raw: obj,
+      items: Array.isArray(obj.items) || Array.isArray(obj.generations) ? ((obj.items || obj.generations) as Array<Record<string, unknown>>) : undefined,
+    };
+  }
+
+  // Check MCP content array wrapper
+  if (Array.isArray(obj.content)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const textItem = obj.content.find((c: any) => c.type === "text" && typeof c.text === "string");
+    if (textItem) {
+      try {
+        const parsed = JSON.parse(textItem.text);
+        if (parsed && typeof parsed === "object") {
+          return parseMCPToolResponse(parsed);
+        }
+      } catch {
+        // Fallback text check
+      }
+    }
+  }
+
+  return { raw: obj };
+}
+
+/**
+ * Polls the 'job_status' tool respecting poll_after_seconds until terminal state
+ */
+export async function pollHiggsfieldJobStatus(
+  creds: HiggsfieldCreds,
+  jobId: string
+): Promise<ParsedMCPResponse> {
+  console.log(`⚙️ Higgsfield MCP [Polling]: Querying job_status for job '${jobId}'...`);
+  
+  let rawRes;
+  try {
+    rawRes = await executeHiggsfieldMCPTool(creds, "job_status", { id: jobId });
+  } catch {
+    rawRes = await executeHiggsfieldMCPTool(creds, "job_status", { job_id: jobId });
+  }
+
+  const parsed = parseMCPToolResponse(rawRes);
+  const currentStatus = parsed.status || "processing";
+  console.log(`Polling job ${jobId}: ${currentStatus}`);
+
+  // Handle recovery_tool field if returned
+  if (parsed.recovery_tool && parsed.recovery_tool.name) {
+    console.warn(`⚠️ Higgsfield MCP: Server returned recovery_tool '${parsed.recovery_tool.name}'. Executing recovery tool...`);
+    try {
+      await executeHiggsfieldMCPTool(
+        creds,
+        parsed.recovery_tool.name,
+        parsed.recovery_tool.arguments || {}
+      );
+      console.log(`✅ Higgsfield MCP: Executed recovery tool '${parsed.recovery_tool.name}' successfully.`);
+    } catch (recErr) {
+      console.error(`❌ Higgsfield MCP: Recovery tool '${parsed.recovery_tool.name}' failed:`, recErr);
+    }
+  }
+
+  return parsed;
+}
+
+/**
+ * Downloads generated result image/video from result URL and stores locally/Supabase
+ */
+export async function downloadAndStoreGeneratedMedia(
+  resultUrl: string,
+  prefix: string = "generation"
+): Promise<string> {
+  try {
+    console.log(`📥 Higgsfield MCP: Downloading completed media from result URL: ${resultUrl}`);
+    const fetchRes = await fetch(resultUrl);
+    if (!fetchRes.ok) {
+      throw new Error(`Failed to fetch media: ${fetchRes.statusText}`);
+    }
+    const buffer = Buffer.from(await fetchRes.arrayBuffer());
+    
+    const contentType = fetchRes.headers.get("content-type") || "";
+    let ext = "png";
+    if (contentType.includes("video") || resultUrl.endsWith(".mp4")) {
+      ext = "mp4";
+    } else if (contentType.includes("jpeg") || resultUrl.endsWith(".jpg")) {
+      ext = "jpg";
+    } else if (contentType.includes("webp") || resultUrl.endsWith(".webp")) {
+      ext = "webp";
+    }
+
+    const fileName = `${prefix}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`;
+
+    const { writeFile, mkdir } = await import("fs/promises");
+    const { join } = await import("path");
+    const { existsSync } = await import("fs");
+
+    const uploadDir = join(process.cwd(), "public", "uploads");
+    if (!existsSync(uploadDir)) {
+      await mkdir(uploadDir, { recursive: true });
+    }
+    const filePath = join(uploadDir, fileName);
+    await writeFile(filePath, buffer);
+
+    const publicPath = `/uploads/${fileName}`;
+    console.log(`✅ Higgsfield MCP: Media downloaded and saved to: ${publicPath}`);
+    return publicPath;
+  } catch (err) {
+    console.error(`❌ Higgsfield MCP: Failed to download media from ${resultUrl}, using original URL:`, err);
+    return resultUrl;
+  }
+}
+
+/**
+ * Syncs completed generations from Higgsfield via 'show_generations' tool
+ */
+export async function syncHiggsfieldGenerations(
+  creds: HiggsfieldCreds,
+  userId?: string
+): Promise<{ importedCount: number; records: unknown[] }> {
+  console.log("⚙️ Higgsfield MCP [Sync]: Querying 'show_generations' tool via MCP...");
+  const rawRes = await executeHiggsfieldMCPTool(creds, "show_generations", {});
+  const parsed = parseMCPToolResponse(rawRes);
+  const items = parsed.items || (parsed.raw && Array.isArray(parsed.raw.generations) ? (parsed.raw.generations as Array<Record<string, unknown>>) : []);
+
+  console.log(`⚙️ Higgsfield MCP [Sync]: Found ${items.length} generations on Higgsfield server.`);
+  const supabase = createServiceRoleClient();
+  const importedRecords: unknown[] = [];
+
+  for (const item of items) {
+    const rawUrl = (item.result_url || item.url || item.image_url || item.video_url) as string | undefined;
+    if (!rawUrl) continue;
+
+    const itemJobId = (item.id || item.job_id || `sync-${crypto.randomUUID()}`) as string;
+    const model = (item.model || HIGGSFIELD_CONFIG.defaultModel) as string;
+    const promptText = (item.prompt || "Imported from Higgsfield Sync") as string;
+    const ratio = (item.ratio || "3:4") as string;
+
+    const { data: existing } = await supabase
+      .from("studio_generations")
+      .select("id")
+      .eq("higgsfield_media_ref", itemJobId)
+      .maybeSingle();
+
+    if (existing) {
+      continue;
+    }
+
+    const savedUrl = await downloadAndStoreGeneratedMedia(rawUrl, "synced");
+
+    const { data: inserted, error: insertErr } = await supabase
+      .from("studio_generations")
+      .insert({
+        user_id: userId || null,
+        prompt: promptText,
+        model,
+        ratio,
+        reference_image_url: rawUrl,
+        higgsfield_media_ref: itemJobId,
+        generated_image_url: savedUrl,
+        cost: HIGGSFIELD_CONFIG.modelCosts[model as keyof typeof HIGGSFIELD_CONFIG.modelCosts] || 1.5,
+      })
+      .select()
+      .single();
+
+    if (!insertErr && inserted) {
+      importedRecords.push(inserted);
+    }
+  }
+
+  console.log(`✅ Higgsfield MCP [Sync]: Imported ${importedRecords.length} missing generations.`);
+  return { importedCount: importedRecords.length, records: importedRecords };
+}
+
 export function getBaseAppUrl(): string {
   const envUrl = process.env.NEXT_PUBLIC_APP_URL || "https://bron.digital";
   if (
