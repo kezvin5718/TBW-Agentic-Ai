@@ -92,13 +92,18 @@ export async function POST(request: Request) {
           prompt: formattedPrompt,
           model: selectedModel,
           ratio: selectedRatio,
+          aspect_ratio: selectedRatio,
+          reference_images: processedProductImages.map((p: { mediaId: string }) => p.mediaId),
           product_images: processedProductImages.map((p: { mediaId: string }) => p.mediaId),
           style_reference: styleReference?.higgsfieldMediaRef || null,
         });
 
+        // Requirement 1: Log raw submission response once to confirm correct field
+        console.log(`⚙️ Higgsfield MCP [RAW Submission Response]:\n${JSON.stringify(toolRes, null, 2)}`);
+
         const parsedTool = parseMCPToolResponse(toolRes);
-        if (parsedTool.id || parsedTool.job_id) {
-          realJobId = (parsedTool.id || parsedTool.job_id) as string;
+        if (parsedTool.jobId || parsedTool.id || parsedTool.job_id) {
+          realJobId = (parsedTool.jobId || parsedTool.id || parsedTool.job_id) as string;
         }
         if (parsedTool.poll_after_seconds) {
           pollAfterSeconds = parsedTool.poll_after_seconds;
