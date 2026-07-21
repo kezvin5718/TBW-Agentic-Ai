@@ -15,6 +15,7 @@ export interface HiggsfieldCreds {
   status: "connected" | "disconnected" | "error";
   error_message?: string;
   available_models?: string[];
+  available_models_info?: Array<{ id: string; name?: string; aspect_ratios?: string[]; params?: Record<string, unknown> }>;
 }
 
 const HIGGSFIELD_OAUTH_TOKEN_URL = "https://mcp.higgsfield.ai/oauth2/token";
@@ -222,6 +223,60 @@ export async function getHiggsfieldMCPClient(creds: HiggsfieldCreds): Promise<{ 
 /**
  * Discovers available models from the Higgsfield MCP tools listing using StreamableHTTPClientTransport
  */
+export interface HiggsfieldMediaItem {
+  value: string;
+  role: string;
+  type: string;
+}
+
+/**
+ * Formats media references into schema-compliant objects per Requirement 2:
+ * { value: <media_id or job_id>, role: 'image', type: 'media_input' }
+ * Returns undefined when no media items are provided so `medias` field is omitted entirely.
+ */
+export function formatHiggsfieldMedias(
+  productImageMediaIds: string[] = [],
+  styleMediaId?: string | null,
+  brandElementIds: string[] = []
+): HiggsfieldMediaItem[] | undefined {
+  const items: HiggsfieldMediaItem[] = [];
+
+  productImageMediaIds.forEach((mediaId) => {
+    if (mediaId && typeof mediaId === "string" && mediaId.trim()) {
+      items.push({
+        value: mediaId.trim(),
+        role: "image",
+        type: "media_input",
+      });
+    }
+  });
+
+  if (styleMediaId && typeof styleMediaId === "string" && styleMediaId.trim()) {
+    items.push({
+      value: styleMediaId.trim(),
+      role: "style",
+      type: "media_input",
+    });
+  }
+
+  brandElementIds.forEach((elementId) => {
+    if (elementId && typeof elementId === "string" && elementId.trim()) {
+      items.push({
+        value: elementId.trim(),
+        role: "brand_element",
+        type: "media_input",
+      });
+    }
+  });
+
+  // Requirement 2: Omit medias field entirely when no reference image is attached
+  if (items.length === 0) {
+    return undefined;
+  }
+
+  return items;
+}
+
 export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<string[]> {
   let currentCreds = creds;
   let transport: StreamableHTTPClientTransport | null = null;
@@ -265,30 +320,80 @@ export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<
     console.log("✅ Higgsfield MCP [Discovery Handshake Success]: Connected via StreamableHTTPClientTransport!");
     console.log("⚙️ Higgsfield MCP [Discovered Tools]:", JSON.stringify(toolsSummary, null, 2));
 
-    // Discover the available image models (nano banana variants)
-    const generateTool = toolsResult.tools.find(t => t.name === "generate_image" || t.name === "generate");
-    let discoveredModels: string[] = [];
+    // Requirement 1: Call models_explore(action: 'list') via MCP and log full raw response
+    console.log("⚙️ Higgsfield MCP [models_explore action: 'list']: Querying models list via MCP...");
+    let modelsListRaw: unknown;
+    try {
+      modelsListRaw = await executeHiggsfieldMCPTool(currentCreds, "models_explore", { action: "list" });
+    } catch {
+      try {
+        modelsListRaw = await executeHiggsfieldMCPTool(currentCreds, "models_explore", { params: { action: "list" } });
+      } catch (listErr) {
+        console.warn("⚠️ Higgsfield MCP: models_explore list warning:", listErr);
+      }
+    }
 
-    if (generateTool && generateTool.inputSchema) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const schema = generateTool.inputSchema as Record<string, any>;
-      const modelProperty = schema.properties?.model;
-      if (modelProperty && Array.isArray(modelProperty.enum)) {
-        discoveredModels = modelProperty.enum;
+    console.log("⚙️ Higgsfield MCP [models_explore action: 'list' FULL RAW RESPONSE]:\n" + JSON.stringify(modelsListRaw, null, 2));
+
+    let discoveredModels: string[] = [];
+    const parsedList = parseMCPToolResponse(modelsListRaw);
+
+    if (parsedList.items && Array.isArray(parsedList.items)) {
+      discoveredModels = parsedList.items
+        .map((item) => (item.id || item.model || item.model_id || item.name) as string)
+        .filter(Boolean);
+    }
+
+    if (discoveredModels.length === 0) {
+      const generateTool = toolsResult.tools.find(t => t.name === "generate_image" || t.name === "generate");
+      if (generateTool && generateTool.inputSchema) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const schema = generateTool.inputSchema as Record<string, any>;
+        const modelProp = schema.properties?.params?.properties?.model || schema.properties?.model;
+        if (modelProp && Array.isArray(modelProp.enum)) {
+          discoveredModels = modelProp.enum;
+        }
       }
     }
 
     if (discoveredModels.length === 0) {
-      discoveredModels = Object.keys(HIGGSFIELD_CONFIG.models);
+      discoveredModels = ["nano_banana_pro", "nano_banana_2", "nano_banana"];
     }
 
     console.log("⚙️ Higgsfield MCP [Discovered Models]:", JSON.stringify(discoveredModels, null, 2));
+
+    // Requirement 1: Call models_explore get for each image model and log full raw response
+    const detailedModels: Array<{ id: string; name?: string; aspect_ratios?: string[]; params?: Record<string, unknown> }> = [];
+    for (const modelId of discoveredModels) {
+      try {
+        console.log(`⚙️ Higgsfield MCP [models_explore action: 'get' for '${modelId}']: Querying model specs...`);
+        let getRaw: unknown;
+        try {
+          getRaw = await executeHiggsfieldMCPTool(currentCreds, "models_explore", { action: "get", model: modelId });
+        } catch {
+          getRaw = await executeHiggsfieldMCPTool(currentCreds, "models_explore", { params: { action: "get", model: modelId } });
+        }
+        console.log(`⚙️ Higgsfield MCP [models_explore action: 'get' for '${modelId}' FULL RAW RESPONSE]:\n` + JSON.stringify(getRaw, null, 2));
+
+        const parsedGet = parseMCPToolResponse(getRaw);
+        detailedModels.push({
+          id: modelId,
+          name: (parsedGet.raw?.name || modelId) as string,
+          aspect_ratios: (parsedGet.raw?.aspect_ratios || parsedGet.raw?.aspectRatios) as string[] | undefined,
+          params: parsedGet.raw?.params as Record<string, unknown> | undefined,
+        });
+      } catch (getErr) {
+        console.warn(`⚠️ Higgsfield MCP: models_explore get warning for '${modelId}':`, getErr);
+        detailedModels.push({ id: modelId, name: modelId });
+      }
+    }
 
     // Save discovered models back to config state
     const supabase = createServiceRoleClient();
     const updatedCreds: HiggsfieldCreds = {
       ...currentCreds,
       available_models: discoveredModels,
+      available_models_info: detailedModels,
       status: "connected",
       error_message: undefined
     };

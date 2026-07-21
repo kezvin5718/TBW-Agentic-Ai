@@ -8,6 +8,7 @@ import {
   formatPromptWithBrandElements,
   executeHiggsfieldGenerationTool,
   parseMCPToolResponse,
+  formatHiggsfieldMedias,
 } from "@/lib/higgsfield-mcp";
 
 export async function POST(request: Request) {
@@ -25,11 +26,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
     }
 
-    if (!productImages || !Array.isArray(productImages) || productImages.length === 0) {
-      return NextResponse.json({ error: "At least one product image is required for generation" }, { status: 400 });
-    }
-
-    if (productImages.length > 10) {
+    if (productImages && Array.isArray(productImages) && productImages.length > 10) {
       return NextResponse.json({ error: "Maximum batch limit is 10 product images" }, { status: 400 });
     }
 
@@ -52,8 +49,10 @@ export async function POST(request: Request) {
     // 3. Format reusable brand elements as <<<element_id>>> placeholders inside prompt text
     const formattedPrompt = formatPromptWithBrandElements(prompt, brandElementIds || []);
 
+    const batchCount = Array.isArray(productImages) && productImages.length > 0 ? productImages.length : 1;
+
     // 4. Preflight precise credit cost using params.get_cost: true
-    const preflight = await getHiggsfieldGenerationCost(creds, selectedModel, productImages.length, {
+    const preflight = await getHiggsfieldGenerationCost(creds, selectedModel, batchCount, {
       prompt: formattedPrompt,
       ratio: selectedRatio,
     });
@@ -73,7 +72,7 @@ export async function POST(request: Request) {
     const { error: costErr } = await supabase.from("gen_costs").insert({
       task_id: taskId || null,
       engine: selectedModel,
-      prompt: `[Batch: ${productImages.length} products] [Preflighted: ${preflight.preflighted ? "Yes" : "Estimate"}] [Ratio: ${selectedRatio}] ${formattedPrompt}`,
+      prompt: `[Batch: ${batchCount}] [Preflighted: ${preflight.preflighted ? "Yes" : "Estimate"}] [Ratio: ${selectedRatio}] ${formattedPrompt}`,
       cost: totalCost,
     });
 
@@ -81,29 +80,36 @@ export async function POST(request: Request) {
       console.error("Failed to log Higgsfield cost:", costErr);
     }
 
-    // Ensure all uploaded reference images are mapped with media_id (never passing raw URLs directly)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const processedProductImages = productImages.map((prod: any, idx: number) => ({
+    const processedProductImages = (productImages || []).map((prod: any, idx: number) => ({
       mediaUrl: prod.mediaUrl,
       mediaId: prod.higgsfieldMediaRef || prod.mediaId || `media_id_prod_${Date.now()}_${idx}`,
       higgsfieldMediaRef: prod.higgsfieldMediaRef || prod.mediaId || `media_id_prod_${Date.now()}_${idx}`,
     }));
 
-    // 5. Submit generation job via MCP wrapping arguments in { params: { ... } } (Requirement 1)
+    // Requirement 2: Format medias as array of objects { value, role, type }. OMIT field when empty.
+    const formattedMedias = formatHiggsfieldMedias(
+      processedProductImages.map((p: { mediaId: string }) => p.mediaId),
+      styleReference?.higgsfieldMediaRef || null,
+      brandElementIds || []
+    );
+
+    const generationParams: Record<string, unknown> = {
+      model: selectedModel,
+      prompt: formattedPrompt,
+      aspect_ratio: selectedRatio,
+      resolution: HIGGSFIELD_CONFIG.resolution || "1K",
+    };
+
+    if (formattedMedias && formattedMedias.length > 0) {
+      generationParams.medias = formattedMedias;
+    }
+
+    // 5. Submit generation job via MCP wrapping arguments in { params: { ... } } (Requirement 1 & 2)
     console.log(`⚙️ Higgsfield MCP [Generation Submit]: Invoking generate_image tool with params wrapper...`);
     let toolRes: unknown;
     try {
-      toolRes = await executeHiggsfieldGenerationTool(creds, "generate_image", {
-        model: selectedModel,
-        prompt: formattedPrompt,
-        aspect_ratio: selectedRatio,
-        ratio: selectedRatio,
-        resolution: HIGGSFIELD_CONFIG.resolution || "1K",
-        medias: processedProductImages.map((p: { mediaId: string }) => p.mediaId),
-        reference_images: processedProductImages.map((p: { mediaId: string }) => p.mediaId),
-        product_images: processedProductImages.map((p: { mediaId: string }) => p.mediaId),
-        style_reference: styleReference?.higgsfieldMediaRef || null,
-      });
+      toolRes = await executeHiggsfieldGenerationTool(creds, "generate_image", generationParams);
     } catch (submitErr: unknown) {
       // Requirement 2: NO FAKE-JOB FALLBACK — fail loudly!
       const submitMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
