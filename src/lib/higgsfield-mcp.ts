@@ -924,6 +924,7 @@ export async function pollHiggsfieldJobStatus(
  * Headers: apikey + Authorization: Bearer {SUPABASE_SERVICE_ROLE_KEY}
  * Public URL: {SUPABASE_URL}/storage/v1/object/public/studio-outputs/{filename}
  */
+// Verified Direct Storage REST API POST upload flow: POST {SUPABASE_URL}/storage/v1/object/studio-outputs/{filename}
 export async function uploadToSupabaseStorageDirect(
   fileName: string,
   buffer: Buffer,
