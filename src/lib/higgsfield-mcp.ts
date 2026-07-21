@@ -689,6 +689,7 @@ export async function pollHiggsfieldJobStatus(
       error: errMsg,
       failure_reason: errMsg,
       isError: true,
+      raw: { isError: true, error: errMsg },
     };
   }
 
