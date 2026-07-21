@@ -16,4 +16,5 @@ export const HIGGSFIELD_CONFIG = {
   defaultModelDisplayName: "Nano Banana Pro",
   resolution: "1k",
   monthlyLimitAlert: 100, // Credit warning threshold
+  referenceCleanupTemplate: "Recreate the style/scene from the reference, but render a completely clean image — do not reproduce any text, watermarks, logos, or labels present in the reference.",
 };

@@ -114,6 +114,17 @@ function ImageStudioWorkspace() {
 
   const [attachingToTask, setAttachingToTask] = useState<string | null>(null);
 
+  // Client Branding Overlay states (Requirement 2)
+  const [selectedBrandingClient, setSelectedBrandingClient] = useState<string>(clientId || "");
+  const [brandingEnabled, setBrandingEnabled] = useState<boolean>(false);
+  const [includeLogo, setIncludeLogo] = useState<boolean>(true);
+  const [includeAddress, setIncludeAddress] = useState<boolean>(true);
+  const [brandingAssetStatus, setBrandingAssetStatus] = useState<{
+    hasLogo: boolean;
+    hasAddress: boolean;
+    loading: boolean;
+  }>({ hasLogo: false, hasAddress: false, loading: false });
+
   // Sync state
   const [syncing, setSyncing] = useState(false);
   const [syncSuccessMessage, setSyncSuccessMessage] = useState<string | null>(null);
@@ -165,6 +176,53 @@ function ImageStudioWorkspace() {
       setGuidelineImages([]);
     }
   }, [clientId]);
+
+  // Requirement 2.b: Check client brand_brain assets (logo PNG & address) for branding overlay
+  useEffect(() => {
+    if (!selectedBrandingClient) {
+      setBrandingAssetStatus({ hasLogo: false, hasAddress: false, loading: false });
+      return;
+    }
+
+    const checkClientAssets = async () => {
+      setBrandingAssetStatus((prev) => ({ ...prev, loading: true }));
+      try {
+        const { data: clientData } = await supabase
+          .from("clients")
+          .select("id, logo_url")
+          .eq("id", selectedBrandingClient)
+          .single();
+
+        const { data: brainData } = await supabase
+          .from("brand_brain")
+          .select("addresses")
+          .eq("client_id", selectedBrandingClient)
+          .maybeSingle();
+
+        const hasLogo = !!clientData?.logo_url;
+        let hasAddress = false;
+        if (brainData?.addresses) {
+          if (typeof brainData.addresses === "string" && brainData.addresses.trim()) {
+            hasAddress = true;
+          } else if (Array.isArray(brainData.addresses) && brainData.addresses.length > 0) {
+            hasAddress = true;
+          } else if (typeof brainData.addresses === "object" && Object.keys(brainData.addresses).length > 0) {
+            hasAddress = true;
+          }
+        }
+
+        setBrandingAssetStatus({
+          hasLogo,
+          hasAddress,
+          loading: false,
+        });
+      } catch {
+        setBrandingAssetStatus({ hasLogo: false, hasAddress: false, loading: false });
+      }
+    };
+
+    checkClientAssets();
+  }, [selectedBrandingClient]);
 
   const checkHiggsfieldConnection = async () => {
     try {
@@ -367,6 +425,12 @@ function ImageStudioWorkspace() {
           styleReference, // Shared style reference input
           productImages, // Product images driving the batch count
           taskId: taskId || null,
+          branding: brandingEnabled && selectedBrandingClient ? {
+            enabled: true,
+            includeLogo,
+            includeAddress,
+            clientId: selectedBrandingClient,
+          } : undefined,
         }),
       });
 
@@ -961,6 +1025,103 @@ function ImageStudioWorkspace() {
               <span className="font-bold text-slate-300">1K (Fixed)</span>
             </div>
           </div>
+        </div>
+
+        {/* CLIENT BRANDING OVERLAY (Requirement 2) */}
+        <div className="space-y-3 border-t border-slate-900/60 pt-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
+                Client Branding Overlay
+              </label>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                Server-side compositing (Sharp) — stamps clean logo &amp; address line onto output
+              </p>
+            </div>
+            <div className="flex items-center space-x-3">
+              <select
+                value={selectedBrandingClient}
+                onChange={(e) => setSelectedBrandingClient(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-xl text-xs text-white px-3 py-1.5 focus:outline-none"
+              >
+                <option value="">-- Select Brand --</option>
+                {clients.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+
+              {selectedBrandingClient && (
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={brandingEnabled}
+                    onChange={(e) => setBrandingEnabled(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-8 h-4.5 bg-slate-900 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-indigo-600"></div>
+                  <span className="ml-2 text-xs font-bold text-indigo-400">Apply Branding</span>
+                </label>
+              )}
+            </div>
+          </div>
+
+          {selectedBrandingClient && brandingEnabled && (
+            <div className="bg-slate-900/40 border border-slate-850 rounded-2xl p-4 space-y-3 animate-in fade-in duration-200">
+              {brandingAssetStatus.loading ? (
+                <div className="flex items-center space-x-2 text-xs text-slate-400">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                  <span>Loading brand assets...</span>
+                </div>
+              ) : (
+                <>
+                  {(!brandingAssetStatus.hasLogo || !brandingAssetStatus.hasAddress) && (
+                    <div className="p-2.5 bg-amber-950/20 border border-amber-900/40 rounded-xl text-[10px] text-amber-300 flex items-center justify-between">
+                      <span>Some branding assets are missing in Brand Brain.</span>
+                      <Link
+                        href={`/dashboard/brand-brain/${selectedBrandingClient}`}
+                        className="font-bold text-amber-400 hover:underline flex items-center space-x-1"
+                      >
+                        <span>Add in Brand Brain first</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </Link>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-5 pt-1">
+                    <label className="flex items-center space-x-2 text-xs font-semibold text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={includeLogo}
+                        onChange={(e) => setIncludeLogo(e.target.checked)}
+                        disabled={!brandingAssetStatus.hasLogo}
+                        className="rounded border-slate-700 bg-slate-950 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span>Logo (center top)</span>
+                      {!brandingAssetStatus.hasLogo && (
+                        <span className="text-[9px] text-slate-500">(No logo uploaded)</span>
+                      )}
+                    </label>
+
+                    <label className="flex items-center space-x-2 text-xs font-semibold text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={includeAddress}
+                        onChange={(e) => setIncludeAddress(e.target.checked)}
+                        disabled={!brandingAssetStatus.hasAddress}
+                        className="rounded border-slate-700 bg-slate-950 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span>Address line (bottom)</span>
+                      {!brandingAssetStatus.hasAddress && (
+                        <span className="text-[9px] text-slate-500">(No address configured)</span>
+                      )}
+                    </label>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Active prompt templates chips library */}

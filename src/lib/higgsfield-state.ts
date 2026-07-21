@@ -8,6 +8,12 @@ export interface HiggsfieldJobData {
   createdAt: number;
   duration: number;
   pollAfterSeconds?: number;
+  branding?: {
+    enabled: boolean;
+    includeLogo?: boolean;
+    includeAddress?: boolean;
+    clientId?: string;
+  };
 }
 
 export const activeJobs = new Map<string, HiggsfieldJobData>();

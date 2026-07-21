@@ -6,7 +6,9 @@ import {
   getHiggsfieldCredentials,
   pollHiggsfieldJobStatus,
   downloadAndStoreGeneratedMedia,
+  uploadToSupabaseStorageDirect,
 } from "@/lib/higgsfield-mcp";
+import { applyClientBrandingOverlay } from "@/lib/branding-composite";
 
 const MOCK_IMAGES = [
   "https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=800&auto=format&fit=crop",
@@ -107,7 +109,7 @@ export async function GET(
           }
 
           if (resultUrl) {
-            // Requirement 1 & 2: Download image server-side and upload to Supabase Storage
+            // Requirement 1 & 2: Download image server-side and upload clean original to Supabase Storage
             const savedMediaUrl = await downloadAndStoreGeneratedMedia(resultUrl, "higgsfield");
             const costPerImage = HIGGSFIELD_CONFIG.modelCosts[job.model as keyof typeof HIGGSFIELD_CONFIG.modelCosts] || 1.5;
 
@@ -123,6 +125,7 @@ export async function GET(
                 higgsfield_media_ref: jobId,
                 generated_image_url: savedMediaUrl,
                 cost: costPerImage,
+                is_branded: false,
               })
               .select()
               .single();
@@ -131,10 +134,95 @@ export async function GET(
               console.error("Failed to insert studio generation row:", dbErr);
             }
 
+            const returnRecords: unknown[] = record ? [record] : [];
+
+            // Requirement 2: SERVER-SIDE Client Branding Composite (Optional)
+            if (job.branding?.enabled && job.branding.clientId && record) {
+              try {
+                console.log(`🎨 Server Branding: Applying branding for client ID: ${job.branding.clientId}`);
+                const { data: clientData } = await serviceSupabase
+                  .from("clients")
+                  .select("logo_url, name")
+                  .eq("id", job.branding.clientId)
+                  .single();
+
+                const { data: brainData } = await serviceSupabase
+                  .from("brand_brain")
+                  .select("addresses, design_preferences")
+                  .eq("client_id", job.branding.clientId)
+                  .maybeSingle();
+
+                const logoUrl = clientData?.logo_url || null;
+                let addressText: string | null = null;
+                if (brainData?.addresses) {
+                  if (typeof brainData.addresses === "string") {
+                    addressText = brainData.addresses;
+                  } else if (Array.isArray(brainData.addresses) && brainData.addresses[0]) {
+                    const first = brainData.addresses[0];
+                    addressText = typeof first === "string" ? first : (first.address || first.text || JSON.stringify(first));
+                  } else if (typeof brainData.addresses === "object") {
+                    const obj = brainData.addresses as Record<string, unknown>;
+                    addressText = (obj.primary || obj.address || obj.text) as string;
+                  }
+                }
+
+                const brandingConfig = (brainData?.design_preferences as Record<string, unknown>)?.branding_config as Record<string, unknown> | undefined;
+
+                // Download clean original binary for sharp compositing
+                const cleanRes = await fetch(resultUrl);
+                if (cleanRes.ok) {
+                  const cleanBuffer = Buffer.from(await cleanRes.arrayBuffer());
+                  const brandedBuffer = await applyClientBrandingOverlay(cleanBuffer, {
+                    logoUrl,
+                    addressText,
+                    includeLogo: job.branding.includeLogo !== false,
+                    includeAddress: job.branding.includeAddress !== false,
+                    config: brandingConfig,
+                  });
+
+                  const brandedFileName = `branded-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.png`;
+                  const brandedPublicUrl = await uploadToSupabaseStorageDirect(brandedFileName, brandedBuffer, "image/png");
+
+                  if (brandedPublicUrl) {
+                    // Requirement 2.d: Save BOTH files (clean original + linked branded variant)
+                    const { data: brandedRecord } = await serviceSupabase
+                      .from("studio_generations")
+                      .insert({
+                        user_id: user?.id || null,
+                        task_id: job.taskId || null,
+                        prompt: `${job.prompt} [Client Branded]`,
+                        model: job.model,
+                        ratio: job.ratio,
+                        reference_image_url: job.productImages[0]?.mediaUrl || null,
+                        higgsfield_media_ref: `${jobId}-branded`,
+                        generated_image_url: brandedPublicUrl,
+                        cost: 0, // Variant cost zero
+                        parent_generation_id: record.id,
+                        branded_variant_url: brandedPublicUrl,
+                        is_branded: true,
+                      })
+                      .select()
+                      .single();
+
+                    if (brandedRecord) {
+                      returnRecords.unshift(brandedRecord);
+                    }
+
+                    await serviceSupabase
+                      .from("studio_generations")
+                      .update({ branded_variant_url: brandedPublicUrl })
+                      .eq("id", record.id);
+                  }
+                }
+              } catch (brandErr) {
+                console.error("❌ Server Branding Overlay Error:", brandErr);
+              }
+            }
+
             activeJobs.delete(jobId);
             return NextResponse.json({
               status: "completed",
-              records: record ? [record] : [],
+              records: returnRecords,
             });
           }
         }

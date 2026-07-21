@@ -10,6 +10,7 @@ import {
   parseMCPToolResponse,
   formatHiggsfieldMedias,
   validateGenerationParamsLocally,
+  getReferenceCleanupTemplate,
 } from "@/lib/higgsfield-mcp";
 
 export async function POST(request: Request) {
@@ -21,7 +22,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { prompt, model, ratio, styleReference, productImages, taskId, brandElementIds } = await request.json();
+    const { prompt, model, ratio, styleReference, productImages, taskId, brandElementIds, branding } = await request.json();
 
     if (!prompt || !prompt.trim()) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
@@ -51,6 +52,16 @@ export async function POST(request: Request) {
     let formattedPrompt = formatPromptWithBrandElements(prompt, brandElementIds || []);
     if (styleReference?.mediaUrl) {
       formattedPrompt = `In the visual style and setting of reference image 1, featuring: ${formattedPrompt}`;
+    }
+
+    // Requirement 1: Reference Cleanup (always on when reference attached)
+    // Fetch editable template from prompt-templates config/DB instead of hardcoding
+    const hasReference = !!styleReference?.mediaUrl || (productImages && productImages.length > 0);
+    if (hasReference) {
+      const cleanupTemplate = await getReferenceCleanupTemplate();
+      if (cleanupTemplate && !formattedPrompt.toLowerCase().includes("completely clean image")) {
+        formattedPrompt = `${formattedPrompt} ${cleanupTemplate}`;
+      }
     }
 
     const batchCount = Array.isArray(productImages) && productImages.length > 0 ? productImages.length : 1;
@@ -184,6 +195,7 @@ export async function POST(request: Request) {
         createdAt: Date.now(),
         duration: pollAfterSeconds * 1000,
         pollAfterSeconds,
+        branding: branding || undefined,
       });
     });
 

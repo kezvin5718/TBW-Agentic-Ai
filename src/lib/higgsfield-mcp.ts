@@ -665,6 +665,30 @@ export function formatPromptWithBrandElements(prompt: string, brandElementIds: s
   return formattedPrompt;
 }
 
+/**
+ * Fetches the reference cleanup prompt template from agency_settings DB or HIGGSFIELD_CONFIG
+ * (Requirement 1: Store as editable template in prompt-templates config, not hardcoded)
+ */
+export async function getReferenceCleanupTemplate(): Promise<string> {
+  try {
+    const supabase = createServiceRoleClient();
+    const { data } = await supabase
+      .from("agency_settings")
+      .select("value")
+      .eq("key", "reference_cleanup_template")
+      .maybeSingle();
+
+    if (data?.value && typeof data.value === "string" && data.value.trim()) {
+      return data.value.trim();
+    }
+    if (data?.value && typeof data.value === "object" && (data.value as Record<string, unknown>).template) {
+      return ((data.value as Record<string, unknown>).template as string).trim();
+    }
+  } catch {}
+
+  return HIGGSFIELD_CONFIG.referenceCleanupTemplate || "Recreate the style/scene from the reference, but render a completely clean image — do not reproduce any text, watermarks, logos, or labels present in the reference.";
+}
+
 export interface ParsedMCPResponse {
   id?: string;
   job_id?: string;
