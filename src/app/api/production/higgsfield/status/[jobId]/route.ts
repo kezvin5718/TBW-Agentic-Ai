@@ -118,6 +118,8 @@ export async function GET(
               .insert({
                 user_id: user?.id || null,
                 task_id: job.taskId || null,
+                category_id: job.categoryId || null,
+                raw_input: job.rawInput || null,
                 prompt: job.prompt,
                 model: job.model,
                 ratio: job.ratio,
@@ -190,6 +192,8 @@ export async function GET(
                       .insert({
                         user_id: user?.id || null,
                         task_id: job.taskId || null,
+                        category_id: job.categoryId || null,
+                        raw_input: job.rawInput || null,
                         prompt: `${job.prompt} [Client Branded]`,
                         model: job.model,
                         ratio: job.ratio,

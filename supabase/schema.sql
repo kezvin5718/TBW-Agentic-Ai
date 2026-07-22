@@ -727,11 +727,44 @@ CREATE POLICY "Employee and Client read prompt templates"
   USING (true);
 
 
+-- 12. GENERATION_CATEGORIES TABLE FOR IMAGE STUDIO
+---------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.generation_categories (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  description TEXT,
+  prompt_prefix TEXT DEFAULT '',
+  prompt_suffix TEXT DEFAULT '',
+  default_model TEXT,
+  default_aspect_ratio TEXT,
+  sort_order INTEGER DEFAULT 0,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+ALTER TABLE public.generation_categories ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Anyone read active categories" ON public.generation_categories;
+CREATE POLICY "Anyone read active categories"
+  ON public.generation_categories FOR SELECT TO authenticated
+  USING (true);
+
+DROP POLICY IF EXISTS "Founder manage categories" ON public.generation_categories;
+CREATE POLICY "Founder manage categories"
+  ON public.generation_categories FOR ALL TO authenticated
+  USING (
+    (auth.jwt() -> 'user_metadata' ->> 'role') = 'founder'
+  );
+
+
 -- 5. Standalone Studio generations history
 CREATE TABLE IF NOT EXISTS public.studio_generations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   task_id UUID REFERENCES public.tasks(id) ON DELETE CASCADE,
+  category_id UUID REFERENCES public.generation_categories(id) ON DELETE SET NULL,
+  raw_input TEXT,
   prompt TEXT NOT NULL,
   model TEXT NOT NULL,
   ratio TEXT NOT NULL,

@@ -13,7 +13,8 @@ import {
   Trash2,
   ArrowUp,
   ArrowDown,
-  Sparkles
+  Sparkles,
+  X
 } from "lucide-react";
 
 interface UserProfileListItem {
@@ -33,9 +34,21 @@ interface PromptTemplateItem {
   is_active: boolean;
 }
 
+interface GenerationCategoryItem {
+  id: string;
+  name: string;
+  description?: string;
+  prompt_prefix?: string;
+  prompt_suffix?: string;
+  default_model?: string;
+  default_aspect_ratio?: string;
+  sort_order: number;
+  is_active: boolean;
+}
+
 export default function ProductionSettingsPage() {
-  // Tabs: assignees (all), templates (founder-only)
-  const [activeTab, setActiveTab] = useState<"assignees" | "templates">("assignees");
+  // Tabs: assignees (all), templates (founder-only), categories (founder-only)
+  const [activeTab, setActiveTab] = useState<"assignees" | "templates" | "categories">("assignees");
   const [userRole, setUserRole] = useState<string | null>(null);
 
   // Assignee states
@@ -49,6 +62,10 @@ export default function ProductionSettingsPage() {
   // Template states
   const [templates, setTemplates] = useState<PromptTemplateItem[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
+
+  // Categories states
+  const [categories, setCategories] = useState<GenerationCategoryItem[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
   
   // Loader & Alert states
   const [loading, setLoading] = useState(true);
@@ -65,6 +82,17 @@ export default function ProductionSettingsPage() {
   const [tplDefaultModel, setTplDefaultModel] = useState<"nano_banana" | "gpt_image" | "both">("nano_banana");
   const [tplDefaultRatio, setTplDefaultRatio] = useState("1:1");
   const [tplIsActive, setTplIsActive] = useState(true);
+
+  // Form states for Generation Categories CRUD
+  const [isCategoryFormOpen, setIsCategoryFormOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<GenerationCategoryItem | null>(null);
+  const [catName, setCatName] = useState("");
+  const [catDescription, setCatDescription] = useState("");
+  const [catPromptPrefix, setCatPromptPrefix] = useState("");
+  const [catPromptSuffix, setCatPromptSuffix] = useState("");
+  const [catDefaultModel, setCatDefaultModel] = useState("Nano Banana 2");
+  const [catDefaultRatio, setCatDefaultRatio] = useState("1:1");
+  const [catIsActive, setCatIsActive] = useState(true);
 
   // Categories helper
   const categoriesList = ["Product Shot", "Lifestyle", "Festive", "UGC Style", "Creative", "Seasonal"];
@@ -88,9 +116,10 @@ export default function ProductionSettingsPage() {
         setDefaultAssignees(data.defaultAssignees);
         setProfiles(data.profiles || []);
 
-        // Fetch prompt templates if user is founder
+        // Fetch prompt templates & categories if user is founder
         if (role === "founder") {
           await fetchTemplates();
+          await fetchCategories();
         }
       } catch (err: unknown) {
         console.error(err);
@@ -101,6 +130,23 @@ export default function ProductionSettingsPage() {
     };
     fetchData();
   }, []);
+
+  const fetchCategories = async () => {
+    try {
+      setCategoriesLoading(true);
+      const res = await fetch("/api/production/categories");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.categories) {
+          setCategories(data.categories);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load categories:", err);
+    } finally {
+      setCategoriesLoading(false);
+    }
+  };
 
   const fetchTemplates = async () => {
     try {
@@ -289,6 +335,142 @@ export default function ProductionSettingsPage() {
     }
   };
 
+  // Categories CRUD handlers (Requirement 5)
+  const openCategoryForm = (cat?: GenerationCategoryItem) => {
+    setError(null);
+    setSuccess(null);
+    if (cat) {
+      setEditingCategory(cat);
+      setCatName(cat.name);
+      setCatDescription(cat.description || "");
+      setCatPromptPrefix(cat.prompt_prefix || "");
+      setCatPromptSuffix(cat.prompt_suffix || "");
+      setCatDefaultModel(cat.default_model || "Nano Banana 2");
+      setCatDefaultRatio(cat.default_aspect_ratio || "1:1");
+      setCatIsActive(cat.is_active);
+    } else {
+      setEditingCategory(null);
+      setCatName("");
+      setCatDescription("");
+      setCatPromptPrefix("");
+      setCatPromptSuffix("");
+      setCatDefaultModel("Nano Banana 2");
+      setCatDefaultRatio("1:1");
+      setCatIsActive(true);
+    }
+    setIsCategoryFormOpen(true);
+  };
+
+  const handleSubmitCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!catName.trim()) {
+      setError("Please fill in category name.");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const payload = {
+        id: editingCategory?.id,
+        name: catName,
+        description: catDescription,
+        prompt_prefix: catPromptPrefix,
+        prompt_suffix: catPromptSuffix,
+        default_model: catDefaultModel,
+        default_aspect_ratio: catDefaultRatio,
+        is_active: catIsActive
+      };
+
+      const method = editingCategory ? "PUT" : "POST";
+      const res = await fetch("/api/production/categories", {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to save category.");
+      }
+
+      setSuccess(`Category "${catName}" saved successfully.`);
+      setIsCategoryFormOpen(false);
+      await fetchCategories();
+    } catch (err: unknown) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleMoveCategory = async (index: number, direction: "up" | "down") => {
+    if (direction === "up" && index === 0) return;
+    if (direction === "down" && index === categories.length - 1) return;
+
+    const swapIndex = direction === "up" ? index - 1 : index + 1;
+    const currentCat = categories[index];
+    const swapCat = categories[swapIndex];
+
+    const reordered = [...categories];
+    reordered[index] = { ...swapCat, sort_order: currentCat.sort_order };
+    reordered[swapIndex] = { ...currentCat, sort_order: swapCat.sort_order };
+    setCategories(reordered);
+
+    try {
+      await fetch("/api/production/categories", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: currentCat.id, sort_order: swapCat.sort_order }),
+      });
+      await fetch("/api/production/categories", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: swapCat.id, sort_order: currentCat.sort_order }),
+      });
+    } catch (err) {
+      console.error("Failed to persist category order:", err);
+      await fetchCategories();
+    }
+  };
+
+  const handleToggleCategoryActive = async (cat: GenerationCategoryItem) => {
+    try {
+      const res = await fetch("/api/production/categories", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: cat.id, is_active: !cat.is_active }),
+      });
+      if (res.ok) {
+        await fetchCategories();
+      }
+    } catch (err) {
+      console.error("Failed to toggle category active status:", err);
+    }
+  };
+
+  const handleDeleteCategory = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this category?")) return;
+
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await fetch(`/api/production/categories?id=${id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) throw new Error("Failed to delete category");
+      setSuccess("Category deleted successfully.");
+      await fetchCategories();
+    } catch (err: unknown) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : "Deletion failed.");
+    }
+  };
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       
@@ -324,16 +506,28 @@ export default function ProductionSettingsPage() {
           Assignee Mappings
         </button>
         {userRole === "founder" && (
-          <button
-            onClick={() => setActiveTab("templates")}
-            className={`px-4 py-2 text-xs font-bold rounded-t-xl transition-all cursor-pointer ${
-              activeTab === "templates"
-                ? "text-white border-b-2 border-indigo-500 bg-indigo-500/5"
-                : "text-slate-500 hover:text-slate-300"
-            }`}
-          >
-            Prompt Templates
-          </button>
+          <>
+            <button
+              onClick={() => setActiveTab("templates")}
+              className={`px-4 py-2 text-xs font-bold rounded-t-xl transition-all cursor-pointer ${
+                activeTab === "templates"
+                  ? "text-white border-b-2 border-indigo-500 bg-indigo-500/5"
+                  : "text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              Prompt Templates
+            </button>
+            <button
+              onClick={() => setActiveTab("categories")}
+              className={`px-4 py-2 text-xs font-bold rounded-t-xl transition-all cursor-pointer ${
+                activeTab === "categories"
+                  ? "text-white border-b-2 border-indigo-500 bg-indigo-500/5"
+                  : "text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              Generation Categories
+            </button>
+          </>
         )}
       </div>
 
@@ -428,7 +622,7 @@ export default function ProductionSettingsPage() {
             )}
           </button>
         </form>
-      ) : (
+      ) : activeTab === "templates" ? (
         /* PROMPT TEMPLATES MANAGER (FOUNDER ONLY) */
         <div className="space-y-6">
           <div className="flex items-center justify-between">
@@ -656,6 +850,248 @@ export default function ProductionSettingsPage() {
                               onClick={() => handleDeleteTemplate(tpl.id)}
                               className="p-1.5 border border-red-950/40 hover:border-red-900 bg-red-950/10 text-red-400 hover:text-red-300 rounded-lg cursor-pointer transition-colors"
                               title="Delete Template"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* GENERATION CATEGORIES MANAGER (FOUNDER ONLY) */
+        <div className="space-y-6 animate-in fade-in duration-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center space-x-1.5">
+                <Sparkles className="w-4 h-4 text-indigo-400" />
+                <span>Generation Categories Manager</span>
+              </h3>
+              <p className="text-[10px] text-slate-550">Configure prompt suffix, prefix, and default configuration per category.</p>
+            </div>
+            <button
+              onClick={() => openCategoryForm()}
+              className="flex items-center space-x-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-1.5 px-3 rounded-lg text-[10px] cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add Category</span>
+            </button>
+          </div>
+
+          {/* Form Modal / Panel */}
+          {isCategoryFormOpen && (
+            <form onSubmit={handleSubmitCategory} className="bg-slate-950/60 border border-indigo-500/20 rounded-2xl p-5 space-y-4 text-xs">
+              <div className="border-b border-slate-900 pb-2 flex items-center justify-between">
+                <h4 className="font-bold text-white text-xs">{editingCategory ? "Edit Category" : "Add Generation Category"}</h4>
+                <button
+                  type="button"
+                  onClick={() => setIsCategoryFormOpen(false)}
+                  className="text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Category Name</label>
+                  <input
+                    type="text"
+                    value={catName}
+                    onChange={(e) => setCatName(e.target.value)}
+                    placeholder="e.g. Jewellery"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Description</label>
+                  <input
+                    type="text"
+                    value={catDescription}
+                    onChange={(e) => setCatDescription(e.target.value)}
+                    placeholder="e.g. Macro details, dark velvet surface"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Prompt Prefix</label>
+                  <textarea
+                    value={catPromptPrefix}
+                    onChange={(e) => setCatPromptPrefix(e.target.value)}
+                    placeholder="e.g. Luxury jewellery product photography of "
+                    rows={3}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Prompt Suffix</label>
+                  <textarea
+                    value={catPromptSuffix}
+                    onChange={(e) => setCatPromptSuffix(e.target.value)}
+                    placeholder="e.g. , macro detail, soft diffused studio lighting"
+                    rows={3}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Default Model</label>
+                  <select
+                    value={catDefaultModel}
+                    onChange={(e) => setCatDefaultModel(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
+                  >
+                    <option value="Nano Banana 2">Nano Banana 2</option>
+                    <option value="Nano Banana Pro">Nano Banana Pro</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Default Ratio</label>
+                  <select
+                    value={catDefaultRatio}
+                    onChange={(e) => setCatDefaultRatio(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
+                  >
+                    {ratioList.map((r) => (
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center space-x-2 pt-5">
+                  <input
+                    type="checkbox"
+                    id="catIsActive"
+                    checked={catIsActive}
+                    onChange={(e) => setCatIsActive(e.target.checked)}
+                    className="rounded border-slate-850 bg-slate-900 text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                  />
+                  <label htmlFor="catIsActive" className="font-bold text-slate-350 cursor-pointer">
+                    Active & Available
+                  </label>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={saving}
+                className="w-full flex items-center justify-center space-x-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-xs cursor-pointer shadow-md"
+              >
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Save Category</span>}
+              </button>
+            </form>
+          )}
+
+          {/* Categories List Table */}
+          {categoriesLoading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="w-5 h-5 text-indigo-500 animate-spin" />
+            </div>
+          ) : categories.length === 0 ? (
+            <div className="text-center py-10 text-slate-500 bg-slate-950/10 border border-slate-900 rounded-2xl">
+              No generation categories configured.
+            </div>
+          ) : (
+            <div className="bg-slate-950/40 border border-slate-900 rounded-2xl overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-slate-900/60 text-[9px] uppercase tracking-wider text-slate-400 font-bold border-b border-slate-900">
+                    <tr>
+                      <th className="py-3 px-4">Order</th>
+                      <th className="py-3 px-4">Category</th>
+                      <th className="py-3 px-4">Prefix</th>
+                      <th className="py-3 px-4">Suffix</th>
+                      <th className="py-3 px-4">Defaults</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-900/40">
+                    {categories.map((cat, idx) => (
+                      <tr key={cat.id} className="hover:bg-slate-900/10 transition-colors">
+                        <td className="py-3 px-4">
+                          <div className="flex items-center space-x-1">
+                            <button
+                              type="button"
+                              onClick={() => handleMoveCategory(idx, "up")}
+                              disabled={idx === 0}
+                              className="p-1 text-slate-500 hover:text-indigo-400 disabled:opacity-20 cursor-pointer"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleMoveCategory(idx, "down")}
+                              disabled={idx === categories.length - 1}
+                              className="p-1 text-slate-500 hover:text-indigo-400 disabled:opacity-20 cursor-pointer"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <span className="font-bold text-white block mb-0.5">{cat.name}</span>
+                          <span className="text-[10px] text-slate-450 truncate max-w-xs block">{cat.description}</span>
+                        </td>
+
+                        <td className="py-3 px-4 max-w-xs truncate italic text-slate-450">
+                          {cat.prompt_prefix || "(empty)"}
+                        </td>
+
+                        <td className="py-3 px-4 max-w-xs truncate italic text-slate-450">
+                          {cat.prompt_suffix || "(empty)"}
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <div className="space-y-0.5 text-[10px] font-mono text-slate-400">
+                            <div>Model: {cat.default_model}</div>
+                            <div>Ratio: {cat.default_aspect_ratio}</div>
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleCategoryActive(cat)}
+                            className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wide cursor-pointer ${
+                              cat.is_active
+                                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                                : "bg-red-500/10 text-red-400 border border-red-500/20"
+                            }`}
+                          >
+                            {cat.is_active ? "Active" : "Inactive"}
+                          </button>
+                        </td>
+
+                        <td className="py-3 px-4 text-right">
+                          <div className="flex items-center justify-end space-x-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openCategoryForm(cat)}
+                              className="p-1.5 border border-slate-850 hover:border-slate-700 bg-slate-900/40 text-slate-400 hover:text-white rounded-lg cursor-pointer transition-colors"
+                              title="Edit Category"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCategory(cat.id)}
+                              className="p-1.5 border border-red-950/40 hover:border-red-900 bg-red-950/10 text-red-400 hover:text-red-300 rounded-lg cursor-pointer transition-colors"
+                              title="Delete Category"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>

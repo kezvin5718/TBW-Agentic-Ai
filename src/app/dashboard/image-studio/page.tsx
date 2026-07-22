@@ -36,6 +36,8 @@ interface GenerationRecord {
   generated_image_url: string;
   cost: number;
   created_at: string;
+  category_id?: string | null;
+  raw_input?: string | null;
 }
 
 interface ClientRecord {
@@ -176,6 +178,51 @@ function ImageStudioWorkspace() {
     }
   };
 
+  // Generation categories state (Requirement 2)
+  interface GenerationCategory {
+    id: string;
+    name: string;
+    description?: string;
+    prompt_prefix?: string;
+    prompt_suffix?: string;
+    default_model?: string;
+    default_aspect_ratio?: string;
+    sort_order: number;
+    is_active: boolean;
+  }
+  const [categories, setCategories] = useState<GenerationCategory[]>([]);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string>("none");
+
+  const fetchCategories = async () => {
+    try {
+      const res = await fetch("/api/production/categories");
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setCategories(data.categories || []);
+      }
+    } catch (err) {
+      console.error("Failed to load categories:", err);
+    }
+  };
+
+  const handleCategoryChange = (catId: string) => {
+    setSelectedCategoryId(catId);
+    if (catId === "none") return;
+    const cat = categories.find(c => c.id === catId);
+    if (cat) {
+      if (cat.default_model) {
+        if (cat.default_model === "nano_banana_2" || cat.default_model === "Nano Banana 2") {
+          setSelectedModel("Nano Banana 2");
+        } else if (cat.default_model === "nano_banana_pro" || cat.default_model === "Nano Banana Pro" || cat.default_model === "gpt_image") {
+          setSelectedModel("Nano Banana Pro");
+        }
+      }
+      if (cat.default_aspect_ratio) {
+        setSelectedRatio(cat.default_aspect_ratio);
+      }
+    }
+  };
+
   const supabase = createClient();
 
   // Load parameters from query context
@@ -192,6 +239,7 @@ function ImageStudioWorkspace() {
     fetchMonthlyCredits();
     fetchTemplates();
     checkHiggsfieldConnection();
+    fetchCategories();
   }, []);
 
   // Fetch task-specific guidelines creatives
@@ -575,12 +623,21 @@ function ImageStudioWorkspace() {
 
       const workerPromise = (async () => {
         try {
+          const rawInputVal = job.promptOverride || prompt;
+          let finalPromptVal = rawInputVal;
+          if (selectedCategoryId !== "none") {
+            const cat = categories.find(c => c.id === selectedCategoryId);
+            if (cat) {
+              finalPromptVal = `${cat.prompt_prefix || ""}${rawInputVal}${cat.prompt_suffix || ""}`;
+            }
+          }
+
           // Submit generate_image for this single product image with its prompt override if set (Requirement 2)
           const res = await fetch("/api/production/higgsfield/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              prompt: job.promptOverride || prompt,
+              prompt: finalPromptVal,
               model: selectedModel,
               ratio: selectedRatio,
               styleReference,
@@ -597,6 +654,8 @@ function ImageStudioWorkspace() {
                 includeAddress,
                 clientId: selectedBrandingClient,
               } : undefined,
+              categoryId: selectedCategoryId !== "none" ? selectedCategoryId : undefined,
+              rawInput: rawInputVal,
             }),
           });
 
@@ -728,11 +787,12 @@ function ImageStudioWorkspace() {
     }
   };
 
-  // Copy parameters for Regenerating
+  // Copy parameters for Regenerating (Requirement 6: Restore category & input)
   const handleRegenerate = (record: GenerationRecord) => {
-    setPrompt(record.prompt);
+    setPrompt(record.raw_input || record.prompt);
     setSelectedModel(record.model);
     setSelectedRatio(record.ratio);
+    setSelectedCategoryId(record.category_id || "none");
     
     // Fill product images with this single product image to start
     if (record.reference_image_url) {
@@ -1445,6 +1505,45 @@ function ImageStudioWorkspace() {
 
         {/* 5. Prompt text area & Generate */}
         <div className="space-y-3">
+          {/* Requirement 2: Category selector above the prompt box */}
+          <div className="space-y-2 pb-1 border-b border-slate-900/40">
+            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+              Style Category Preset
+            </label>
+            <div className="flex flex-wrap gap-2.5">
+              <button
+                type="button"
+                onClick={() => handleCategoryChange("none")}
+                className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                  selectedCategoryId === "none"
+                    ? "bg-indigo-600 border-indigo-500 text-white shadow-md shadow-indigo-950/50"
+                    : "bg-slate-950/80 border-slate-900 text-slate-400 hover:border-slate-800 hover:text-white"
+                }`}
+              >
+                None
+              </button>
+              {categories.filter(c => c.is_active).map((cat) => (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => handleCategoryChange(cat.id)}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer text-left flex flex-col items-start ${
+                    selectedCategoryId === cat.id
+                      ? "bg-indigo-600 border-indigo-500 text-white shadow-md shadow-indigo-950/50"
+                      : "bg-slate-950/80 border-slate-900 text-slate-400 hover:border-slate-850 hover:text-white"
+                  }`}
+                >
+                  <span className="font-bold">{cat.name}</span>
+                  {cat.description && (
+                    <span className="text-[8px] text-slate-400/90 font-normal mt-0.5 truncate max-w-[150px]">
+                      {cat.description}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
             Creative Prompt
           </label>
@@ -1452,7 +1551,11 @@ function ImageStudioWorkspace() {
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             disabled={generating}
-            placeholder="Describe the image you want to generate in detail (e.g. 'Studio shot of a luxury smartwatch resting on black polished quartz stone, soft backlighting, dramatic product photography'...)"
+            placeholder={
+              selectedCategoryId !== "none"
+                ? `Describe what you want — ${categories.find(c => c.id === selectedCategoryId)?.name || ""} styling is applied automatically`
+                : "Describe the image you want to generate in detail (e.g. 'Studio shot of a luxury smartwatch resting on black polished quartz stone, soft backlighting, dramatic product photography'...)"
+            }
             rows={4}
             className="w-full bg-slate-950/80 border border-slate-900 focus:border-indigo-500/50 rounded-2xl p-4 text-xs text-white placeholder-slate-650 focus:outline-none transition-colors"
           />

@@ -22,7 +22,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { prompt, model, ratio, styleReference, productImages, taskId, brandElementIds, branding } = await request.json();
+    const { prompt, model, ratio, styleReference, productImages, taskId, brandElementIds, branding, categoryId, rawInput } = await request.json();
 
     if (!prompt || !prompt.trim()) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
@@ -196,6 +196,8 @@ export async function POST(request: Request) {
         duration: pollAfterSeconds * 1000,
         pollAfterSeconds,
         branding: branding || undefined,
+        categoryId: categoryId || undefined,
+        rawInput: rawInput || undefined,
       });
     });
 

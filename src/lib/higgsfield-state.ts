@@ -14,6 +14,8 @@ export interface HiggsfieldJobData {
     includeAddress?: boolean;
     clientId?: string;
   };
+  categoryId?: string;
+  rawInput?: string;
 }
 
 export const activeJobs = new Map<string, HiggsfieldJobData>();
