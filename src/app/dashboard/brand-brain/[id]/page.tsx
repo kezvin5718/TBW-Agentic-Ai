@@ -108,25 +108,22 @@ export default function ClientBrandBrainPage({
   const [creativeFile, setCreativeFile] = useState<File | null>(null);
 
   // Knowledge Import States
+  interface ExtractedEntry {
+    content: string;
+    category: 'facts' | 'preferences' | 'learnings' | 'feedback';
+    classification: string;
+    approved: boolean;
+  }
+
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importingFile, setImportingFile] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState("");
   const [uploadedFileSize, setUploadedFileSize] = useState(0);
 
-  // Extracted entries checklist states
-  const [extractedData, setExtractedData] = useState<{
-    facts: string[];
-    preferences: string[];
-    learnings: string[];
-    feedback: string[];
-  } | null>(null);
-
-  const [selectedFacts, setSelectedFacts] = useState<string[]>([]);
-  const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
-  const [selectedLearnings, setSelectedLearnings] = useState<string[]>([]);
-  const [selectedFeedback, setSelectedFeedback] = useState<string[]>([]);
-
+  // New Global checklist states
+  const [importedEntries, setImportedEntries] = useState<ExtractedEntry[]>([]);
+  const [allClients, setAllClients] = useState<ClientProfile[]>([]);
   const [confirmingImport, setConfirmingImport] = useState(false);
 
   // Fetch core client profiles
@@ -150,6 +147,13 @@ export default function ClientBrandBrainPage({
       const prefs = data.brandBrain?.design_preferences || {};
       setPrefKeys(Object.keys(prefs));
       setPrefVals(Object.values(prefs));
+
+      // Fetch all onboarding clients for global import classification reviews
+      const clientsRes = await fetch("/api/onboarding");
+      const clientsData = await clientsRes.json();
+      if (clientsRes.ok && clientsData.success) {
+        setAllClients(clientsData.clients || []);
+      }
     } catch (err: unknown) {
       console.error(err);
       setError(err instanceof Error ? err.message : "An unexpected error occurred");
@@ -249,7 +253,7 @@ export default function ClientBrandBrainPage({
 
     setImportingFile(true);
     setImportError(null);
-    setExtractedData(null);
+    setImportedEntries([]);
 
     const formData = new FormData();
     formData.append("file", file);
@@ -267,13 +271,17 @@ export default function ClientBrandBrainPage({
 
       setUploadedFileName(data.fileName);
       setUploadedFileSize(data.fileSize);
-      setExtractedData(data.extracted);
 
-      // Pre-select all extracted items
-      setSelectedFacts(data.extracted.facts || []);
-      setSelectedPrefs(data.extracted.preferences || []);
-      setSelectedLearnings(data.extracted.learnings || []);
-      setSelectedFeedback(data.extracted.feedback || []);
+      interface RawEntry {
+        content: string;
+        category: 'facts' | 'preferences' | 'learnings' | 'feedback';
+        classification: string;
+      }
+      const entries = (data.entries || []).map((entry: RawEntry) => ({
+        ...entry,
+        approved: true
+      }));
+      setImportedEntries(entries);
     } catch (err: unknown) {
       console.error(err);
       const msg = err instanceof Error ? err.message : String(err);
@@ -285,6 +293,15 @@ export default function ClientBrandBrainPage({
   };
 
   const handleConfirmImport = async () => {
+    const confirmed = importedEntries.filter(e => e.approved);
+
+    // Validate: Unassigned entries require manual assignment or discard (deselection)
+    const hasUnassigned = confirmed.some(e => e.classification === "unassigned");
+    if (hasUnassigned) {
+      alert("Please assign a client or agency to all approved entries, or deselect them before confirming.");
+      return;
+    }
+
     setConfirmingImport(true);
     setImportError(null);
 
@@ -293,10 +310,11 @@ export default function ClientBrandBrainPage({
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          facts: selectedFacts,
-          preferences: selectedPrefs,
-          learnings: selectedLearnings,
-          feedback: selectedFeedback,
+          confirmedEntries: confirmed.map(e => ({
+            content: e.content,
+            category: e.category,
+            clientId: e.classification
+          })),
           fileName: uploadedFileName,
           fileSize: uploadedFileSize
         }),
@@ -308,9 +326,9 @@ export default function ClientBrandBrainPage({
       }
 
       setIsImportModalOpen(false);
-      setExtractedData(null);
+      setImportedEntries([]);
       await fetchData();
-      alert("Brand knowledge successfully imported and brief regenerated!");
+      alert(`Knowledge successfully imported!\nUpdated Clients: ${data.updatedClients?.join(", ") || "None"}\nAgency Entries Confirmed: ${data.agencyEntriesCount || 0}`);
     } catch (err: unknown) {
       console.error(err);
       const msg = err instanceof Error ? err.message : String(err);
@@ -320,36 +338,22 @@ export default function ClientBrandBrainPage({
     }
   };
 
-  const toggleFact = (item: string) => {
-    if (selectedFacts.includes(item)) {
-      setSelectedFacts(selectedFacts.filter(x => x !== item));
-    } else {
-      setSelectedFacts([...selectedFacts, item]);
-    }
+  const toggleEntryApproval = (index: number) => {
+    setImportedEntries(prev => prev.map((item, i) => {
+      if (i === index) {
+        return { ...item, approved: !item.approved };
+      }
+      return item;
+    }));
   };
 
-  const togglePref = (item: string) => {
-    if (selectedPrefs.includes(item)) {
-      setSelectedPrefs(selectedPrefs.filter(x => x !== item));
-    } else {
-      setSelectedPrefs([...selectedPrefs, item]);
-    }
-  };
-
-  const toggleLearning = (item: string) => {
-    if (selectedLearnings.includes(item)) {
-      setSelectedLearnings(selectedLearnings.filter(x => x !== item));
-    } else {
-      setSelectedLearnings([...selectedLearnings, item]);
-    }
-  };
-
-  const toggleFeedback = (item: string) => {
-    if (selectedFeedback.includes(item)) {
-      setSelectedFeedback(selectedFeedback.filter(x => x !== item));
-    } else {
-      setSelectedFeedback([...selectedFeedback, item]);
-    }
+  const updateEntryClassification = (index: number, newClassification: string) => {
+    setImportedEntries(prev => prev.map((item, i) => {
+      if (i === index) {
+        return { ...item, classification: newClassification };
+      }
+      return item;
+    }));
   };
 
   // Generate Brief LLM Action
@@ -1065,7 +1069,6 @@ export default function ClientBrandBrainPage({
         )}
 
       </div>
-
       {/* Import Modal Dialog */}
       {isImportModalOpen && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -1073,15 +1076,15 @@ export default function ClientBrandBrainPage({
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <div className="flex items-center space-x-2 text-indigo-400">
                 <Upload className="w-4 h-4" />
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Import Client Brand Knowledge</h3>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Global Knowledge Import</h3>
               </div>
               <button
                 onClick={() => {
                   setIsImportModalOpen(false);
-                  setExtractedData(null);
+                  setImportedEntries([]);
                   setImportError(null);
                 }}
-                className="text-slate-500 hover:text-white"
+                className="text-slate-500 hover:text-white cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1095,11 +1098,11 @@ export default function ClientBrandBrainPage({
             )}
 
             {/* STEP 1: Upload slot */}
-            {!extractedData && !importingFile && (
+            {importedEntries.length === 0 && !importingFile && (
               <div className="space-y-4 py-4">
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Upload a `.txt`, `.md`, `.json`, or `.zip` file containing brand guidelines, past feedback logs, or marketing assets. 
-                  We will extract key durable knowledge points for your review.
+                  Upload a `.txt`, `.md`, `.json`, or `.zip` mixed export containing brand guidelines, past feedback logs, or marketing assets spanning multiple brands. 
+                  We will automatically chunk, classify, and group entries by client.
                 </p>
 
                 <label
@@ -1114,7 +1117,7 @@ export default function ClientBrandBrainPage({
                   <Upload className="w-8 h-8 text-slate-500 group-hover:text-indigo-400 transition-colors" />
                   <div>
                     <p className="text-xs text-slate-300 font-semibold">Choose file or drag here</p>
-                    <p className="text-[10px] text-slate-500 mt-1">Accepts TXT, MD, JSON, or ZIP (archives parsed server-side)</p>
+                    <p className="text-[10px] text-slate-500 mt-1">Accepts TXT, MD, JSON, or ZIP (mixed brand archives supported)</p>
                   </div>
                 </label>
               </div>
@@ -1125,135 +1128,127 @@ export default function ClientBrandBrainPage({
               <div className="py-12 flex flex-col items-center justify-center space-y-4">
                 <Loader2 className="w-8 h-8 text-indigo-400 animate-spin" />
                 <div className="text-center space-y-1">
-                  <p className="text-xs text-indigo-300 font-semibold animate-pulse">Analyzing Brand Document...</p>
-                  <p className="text-[10px] text-slate-500">Chunking content and running MODEL_SMART extraction...</p>
+                  <p className="text-xs text-indigo-300 font-semibold animate-pulse">Analyzing mixed documents...</p>
+                  <p className="text-[10px] text-slate-500">Auto-condensing and running MODEL_SMART client classification...</p>
                 </div>
               </div>
             )}
 
-            {/* STEP 2: Review Extracted checklist */}
-            {extractedData && (
+            {/* STEP 2: Review Extracted checklist (Grouped by Client) */}
+            {importedEntries.length > 0 && (
               <div className="space-y-5">
-                <div className="bg-slate-950/40 border border-slate-950 p-3.5 rounded-2xl">
-                  <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Import Source</span>
-                  <span className="text-xs text-slate-350 font-bold block truncate mt-0.5">{uploadedFileName} ({(uploadedFileSize / 1024).toFixed(1)} KB)</span>
+                <div className="bg-slate-950/40 border border-slate-955 p-3 rounded-xl flex justify-between items-center">
+                  <div>
+                    <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest block">Source Archive</span>
+                    <span className="text-xs text-slate-350 font-bold block truncate max-w-[280px] mt-0.5">{uploadedFileName}</span>
+                  </div>
+                  <span className="text-[10px] bg-slate-900 border border-slate-800 text-slate-400 px-2 py-0.5 rounded font-mono">
+                    {(uploadedFileSize / 1024).toFixed(1)} KB
+                  </span>
                 </div>
 
-                <div className="space-y-4">
+                <div className="space-y-4 max-h-[45vh] overflow-y-auto pr-1 space-y-3">
                   <div>
-                    <h4 className="text-xs font-bold text-white">Review Brand Insights before Save</h4>
-                    <p className="text-[10px] text-slate-500 mt-0.5">Untick any irrelevant, incorrect, or transient items. Approved items will enter the permanent brand guidelines brain.</p>
+                    <h4 className="text-xs font-bold text-white">Review Client-Grouped Entries</h4>
+                    <p className="text-[10px] text-slate-500 mt-0.5">
+                      Verify client classification before confirming. Unassigned entries must be mapped or unchecked.
+                    </p>
                   </div>
 
-                  {/* Facts Category Group */}
-                  <div className="space-y-2">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-850 pb-1">Group 1: Brand Facts & Identity ({extractedData.facts.length})</span>
-                    {extractedData.facts.length === 0 ? (
-                      <p className="text-[10px] text-slate-600 italic pl-1">No durable brand facts identified.</p>
-                    ) : (
-                      <div className="space-y-1.5 pl-1">
-                        {extractedData.facts.map((item, idx) => (
-                          <label key={idx} className="flex items-start space-x-2 text-xs text-slate-300 cursor-pointer select-none">
-                            <input
-                              type="checkbox"
-                              checked={selectedFacts.includes(item)}
-                              onChange={() => toggleFact(item)}
-                              className="mt-0.5 rounded border-slate-805 focus:ring-indigo-500/20 bg-slate-950 text-indigo-650"
-                            />
-                            <span>{item}</span>
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  {Array.from(new Set(importedEntries.map(e => e.classification))).map(classification => {
+                    let clientName = "";
+                    let cardStyle = "border-slate-800 bg-slate-900/20";
+                    if (classification === "agency") {
+                      clientName = "Agency (TBW)";
+                      cardStyle = "border-indigo-950 bg-indigo-950/5";
+                    } else if (classification === "unassigned") {
+                      clientName = "Unassigned (Map or deselect)";
+                      cardStyle = "border-amber-900/40 bg-amber-950/10";
+                    } else {
+                      const match = allClients.find(c => c.id === classification);
+                      clientName = match ? match.name : "Unknown Client";
+                    }
 
-                  {/* Preferences Category Group */}
-                  <div className="space-y-2">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-850 pb-1">Group 2: Design & Styling Preferences ({extractedData.preferences.length})</span>
-                    {extractedData.preferences.length === 0 ? (
-                      <p className="text-[10px] text-slate-600 italic pl-1">No styling preferences identified.</p>
-                    ) : (
-                      <div className="space-y-1.5 pl-1">
-                        {extractedData.preferences.map((item, idx) => (
-                          <label key={idx} className="flex items-start space-x-2 text-xs text-slate-300 cursor-pointer select-none">
-                            <input
-                              type="checkbox"
-                              checked={selectedPrefs.includes(item)}
-                              onChange={() => togglePref(item)}
-                              className="mt-0.5 rounded border-slate-805 focus:ring-indigo-500/20 bg-slate-950 text-indigo-650"
-                            />
-                            <span>{item}</span>
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                    return (
+                      <div key={classification} className={`border rounded-2xl p-4 space-y-3.5 ${cardStyle}`}>
+                        <div className="flex items-center justify-between border-b border-slate-850 pb-2">
+                          <span className="text-xs font-black text-white tracking-wide uppercase">
+                            {clientName}
+                          </span>
+                          <span className="text-[9px] text-slate-500 font-bold">
+                            {importedEntries.filter(e => e.classification === classification).length} entries
+                          </span>
+                        </div>
 
-                  {/* Learnings Category Group */}
-                  <div className="space-y-2">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-850 pb-1">Group 3: Campaign Performance Learnings ({extractedData.learnings.length})</span>
-                    {extractedData.learnings.length === 0 ? (
-                      <p className="text-[10px] text-slate-600 italic pl-1">No campaign learnings identified.</p>
-                    ) : (
-                      <div className="space-y-1.5 pl-1">
-                        {extractedData.learnings.map((item, idx) => (
-                          <label key={idx} className="flex items-start space-x-2 text-xs text-slate-300 cursor-pointer select-none">
-                            <input
-                              type="checkbox"
-                              checked={selectedLearnings.includes(item)}
-                              onChange={() => toggleLearning(item)}
-                              className="mt-0.5 rounded border-slate-805 focus:ring-indigo-500/20 bg-slate-950 text-indigo-650"
-                            />
-                            <span>{item}</span>
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                        <div className="space-y-3">
+                          {importedEntries.map((item, idx) => {
+                            if (item.classification !== classification) return null;
+                            return (
+                              <div key={idx} className="space-y-2 pb-3 border-b border-slate-950 last:border-0 last:pb-0">
+                                <div className="flex items-start space-x-2.5">
+                                  <input
+                                    type="checkbox"
+                                    checked={item.approved}
+                                    onChange={() => toggleEntryApproval(idx)}
+                                    className="mt-0.5 rounded border-slate-800 focus:ring-indigo-500/20 bg-slate-950 text-indigo-650 cursor-pointer"
+                                  />
+                                  <div className="flex-1 space-y-1">
+                                    <p className="text-xs text-slate-300 leading-relaxed">
+                                      {item.content}
+                                    </p>
+                                    <div className="flex items-center space-x-1.5">
+                                      <span className="text-[8px] font-black uppercase tracking-wider px-1 bg-slate-950 border border-slate-850 text-slate-400 rounded">
+                                        {item.category}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
 
-                  {/* Feedback Category Group */}
-                  <div className="space-y-2">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block border-b border-slate-850 pb-1">Group 4: Client Feedback History ({extractedData.feedback.length})</span>
-                    {extractedData.feedback.length === 0 ? (
-                      <p className="text-[10px] text-slate-600 italic pl-1">No historical client feedback identified.</p>
-                    ) : (
-                      <div className="space-y-1.5 pl-1">
-                        {extractedData.feedback.map((item, idx) => (
-                          <label key={idx} className="flex items-start space-x-2 text-xs text-slate-300 cursor-pointer select-none">
-                            <input
-                              type="checkbox"
-                              checked={selectedFeedback.includes(item)}
-                              onChange={() => toggleFeedback(item)}
-                              className="mt-0.5 rounded border-slate-805 focus:ring-indigo-500/20 bg-slate-950 text-indigo-650"
-                            />
-                            <span>{item}</span>
-                          </label>
-                        ))}
+                                <div className="flex items-center space-x-2 pl-7">
+                                  <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Target:</span>
+                                  <select
+                                    value={item.classification}
+                                    onChange={(e) => updateEntryClassification(idx, e.target.value)}
+                                    className="bg-slate-950 border border-slate-850 hover:border-slate-700 text-[10px] text-slate-300 font-bold rounded px-2 py-0.5 focus:outline-none cursor-pointer"
+                                  >
+                                    <option value="unassigned">-- Unassigned --</option>
+                                    <option value="agency">Agency (TBW)</option>
+                                    {allClients.map(c => (
+                                      <option key={c.id} value={c.id}>
+                                        {c.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    )}
-                  </div>
+                    );
+                  })}
                 </div>
 
                 <div className="flex space-x-3 border-t border-slate-800 pt-4">
                   <button
                     onClick={() => {
-                      setExtractedData(null);
+                      setImportedEntries([]);
                       setImportError(null);
                     }}
                     disabled={confirmingImport}
-                    className="flex-1 bg-slate-950 border border-slate-800 hover:bg-slate-900 text-slate-400 hover:text-white py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
+                    className="flex-1 bg-slate-950 border border-slate-850 hover:bg-slate-900 text-slate-400 hover:text-white py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
                   >
                     Back
                   </button>
                   <button
                     onClick={handleConfirmImport}
-                    disabled={confirmingImport || (selectedFacts.length === 0 && selectedPrefs.length === 0 && selectedLearnings.length === 0 && selectedFeedback.length === 0)}
+                    disabled={confirmingImport || importedEntries.filter(e => e.approved).length === 0}
                     className="flex-1 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white py-2.5 rounded-xl text-xs font-bold tracking-wider uppercase transition-all flex items-center justify-center space-x-2 shadow-lg shadow-indigo-950/50 cursor-pointer disabled:opacity-50"
                   >
                     {confirmingImport ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Saving & Synthesizing...</span>
+                        <span>Saving & Routing...</span>
                       </>
                     ) : (
                       <>

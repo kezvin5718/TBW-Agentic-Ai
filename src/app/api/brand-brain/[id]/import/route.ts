@@ -4,15 +4,17 @@ import { complete } from "@/lib/llm";
 import { MODEL_SMART } from "@/lib/llm-config";
 import AdmZip from "adm-zip";
 
-// 1. POST: Process File Upload, Extract Text, and run LLM Extraction
+// GET handler: Not needed for import flow, return method not allowed
+export async function GET() {
+  return new NextResponse("Method Not Allowed", { status: 405 });
+}
+
+// 1. POST: Process File Upload, Extract Text, and run LLM Extraction + Multi-brand Classification
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    // Await params to avoid unused variable warnings while extracting parameter info
-    const resolvedParams = await params;
-    const _clientId = resolvedParams.id;
     const supabase = await createClient();
 
     // Verify Session and Role
@@ -72,58 +74,78 @@ export async function POST(
       return NextResponse.json({ error: "No text content found in the uploaded file(s)" }, { status: 400 });
     }
 
-    // Call MODEL_SMART to extract durable brand knowledge
+    // Fetch all onboarding clients to match client UUIDs and details
+    const { data: dbClients, error: clientsErr } = await supabase
+      .from("clients")
+      .select("id, name, products");
+
+    if (clientsErr) {
+      console.error("Failed to load clients for classification:", clientsErr);
+    }
+
+    const clientProfiles = dbClients?.map(c => `ID: ${c.id}, Name: ${c.name}, Products: ${JSON.stringify(c.products)}`).join("\n") || "No clients onboarded.";
+
+    // Call MODEL_SMART to extract durable brand knowledge and classify
     const apiKey = process.env.OPENROUTER_API_KEY;
 
     // Check Mock Mode
     if (!apiKey || apiKey === "mock" || apiKey.startsWith("mock_")) {
+      const demoClientUuid = dbClients?.[0]?.id || "unassigned";
       return NextResponse.json({
         success: true,
         fileName: file.name,
         fileSize: file.size,
-        extracted: {
-          facts: [
-            `Durable brand fact: ${file.name} outlines SWAD premium organic packaging goals.`,
-            "SWAD pricing tier is premium, with average margins target of 35% on spice packs.",
-            "Primary target demographic is NRIs globally seeking authentic traditional taste."
-          ],
-          preferences: [
-            "Tone should be warm, nostalgic, and rich in culinary pride.",
-            "Visual preference: High-contrast close-ups of food textures, avoid bright backgrounds."
-          ],
-          learnings: [
-            "Product close-up video hooks in the first 2.5 seconds increase CTR by 40%.",
-            "Nostalgia-based copywriting focusing on 'ghar ka khana' memories converts best."
-          ],
-          feedback: [
-            "Client dislikes plain stock photography; prefers authentic Indian tableware.",
-            "Avoid neon colors or modern abstract art styles."
-          ]
-        }
+        entries: [
+          {
+            content: "Premium organic packaging guidelines: use earthy colors.",
+            category: "preferences",
+            classification: demoClientUuid
+          },
+          {
+            content: "Agency standard checklist: always double-check grammar before templates.",
+            category: "facts",
+            classification: "agency"
+          },
+          {
+            content: "Avoid using generic vector icons in luxury jewelry creatives.",
+            category: "feedback",
+            classification: "unassigned"
+          }
+        ]
       });
     }
 
-    const systemPrompt = `You are an expert AI Brand Strategy assistant. Your task is to extract DURABLE brand knowledge from the provided text documents.
-Durable knowledge includes: brand facts, products, pricing, target audience demographics, styling guidelines (colors/fonts), visual design preferences, campaign learnings (what works/what fails), and client feedback history.
-You must DISCARD chit-chat, one-off task lists, dates, and anything not relating to the permanent identity/learning of the brand.
-Return the output strictly in JSON format as a grouped checklist.`;
+    const systemPrompt = `You are an expert AI Brand Strategy assistant. Your task is to extract DURABLE brand/agency knowledge from the provided text documents and classify each entry to a specific client, to the agency "Agency (TBW)" (use classification key "agency"), or mark it "Unassigned" (use classification key "unassigned").
 
-    const userPrompt = `Extract durable brand knowledge from the following text document. Group the extracted items into four categories:
-1. "facts": Core brand identity details, products, pricing, and demographics.
+Durable knowledge categories:
+1. "facts": Core brand details, products, pricing, and demographics.
 2. "preferences": Font/color guides, visual layout preferences, tone preferences.
 3. "learnings": Actionable campaign insights, performance lessons, visual hooks that worked.
 4. "feedback": Ongoing client critiques, recurring complaints, likes and dislikes.
 
-Provide 2-5 concise points per category. Output STRICTLY a JSON object matching this schema:
+Match entries against these clients in the database:
+${clientProfiles}
+
+Rules for classification:
+- Match based on the client name, product names, or target audience mentioned in the text.
+- If it clearly belongs to the TBW agency itself (an overall internal guideline, standard templates, or general agency checklist), classify as "agency".
+- If it doesn't clearly match any client and is not agency-wide, classify as "unassigned".
+- Return the output strictly in JSON format matching the schema.`;
+
+    const userPrompt = `Extract durable brand knowledge from the following text document and classify each item.
+Output STRICTLY a JSON object with this schema:
 {
-  "facts": ["Fact point 1", "Fact point 2"],
-  "preferences": ["Pref point 1", "Pref point 2"],
-  "learnings": ["Learning point 1", "Learning point 2"],
-  "feedback": ["Feedback point 1", "Feedback point 2"]
+  "entries": [
+    {
+      "content": "The actual extracted fact or preference text point",
+      "category": "facts" | "preferences" | "learnings" | "feedback",
+      "classification": "client-uuid-here" | "agency" | "unassigned"
+    }
+  ]
 }
 
 Document Content:
-${textContent.substring(0, 12000)}`;
+${textContent.substring(0, 15000)}`;
 
     try {
       const responseText = await complete({
@@ -131,7 +153,7 @@ ${textContent.substring(0, 12000)}`;
         system: systemPrompt,
         messages: [{ role: "user", content: userPrompt }],
         jsonSchema: true,
-        maxTokens: 1000
+        maxTokens: 1200
       });
 
       let cleanText = responseText.trim();
@@ -140,24 +162,23 @@ ${textContent.substring(0, 12000)}`;
         cleanText = cleanText.replace(/\s*```$/, "");
       }
 
-      interface ExtractedJSON {
-        facts?: string[];
-        preferences?: string[];
-        learnings?: string[];
-        feedback?: string[];
+      interface ExtractedEntry {
+        content: string;
+        category: "facts" | "preferences" | "learnings" | "feedback";
+        classification: string;
       }
 
-      const extracted: ExtractedJSON = JSON.parse(cleanText);
+      interface ExtractedJSON {
+        entries: ExtractedEntry[];
+      }
+
+      const result: ExtractedJSON = JSON.parse(cleanText);
+
       return NextResponse.json({
         success: true,
         fileName: file.name,
         fileSize: file.size,
-        extracted: {
-          facts: extracted.facts || [],
-          preferences: extracted.preferences || [],
-          learnings: extracted.learnings || [],
-          feedback: extracted.feedback || []
-        }
+        entries: result.entries || []
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -171,11 +192,14 @@ ${textContent.substring(0, 12000)}`;
   }
 }
 
+interface ConfirmedEntry {
+  content: string;
+  category: "facts" | "preferences" | "learnings" | "feedback";
+  clientId: string; // client UUID, "agency", or "unassigned"
+}
+
 interface SavedJSONData {
-  facts?: string[];
-  preferences?: string[];
-  learnings?: string[];
-  feedback?: string[];
+  confirmedEntries: ConfirmedEntry[];
   fileName?: string;
   fileSize?: number;
 }
@@ -186,14 +210,12 @@ interface DesignPreferencesRecord {
   [key: string]: unknown;
 }
 
-// 2. PUT: Save Approved Entries and Regenerate Brief
+// 2. PUT: Save Approved Entries and Regenerate Briefs for affected clients
 export async function PUT(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const resolvedParams = await params;
-    const clientId = resolvedParams.id;
     const supabase = await createClient();
 
     // Verify Session and Role
@@ -208,83 +230,114 @@ export async function PUT(
     }
 
     const body: SavedJSONData = await request.json();
-    const { facts, preferences, learnings, feedback, fileName, fileSize } = body;
+    const { confirmedEntries, fileName, fileSize } = body;
 
-    // 1. Fetch client details
-    const { data: client, error: clientErr } = await supabase
-      .from("clients")
-      .select("*")
-      .eq("id", clientId)
-      .single();
-
-    if (clientErr || !client) {
-      return NextResponse.json({ error: "Client not found" }, { status: 404 });
-    }
-
-    // 2. Fetch linked brand_brain
-    const { data: brandBrain, error: brainErr } = await supabase
-      .from("brand_brain")
-      .select("*")
-      .eq("client_id", clientId)
-      .single();
-
-    if (brainErr || !brandBrain) {
-      return NextResponse.json({ error: "Brand Brain profile not found" }, { status: 404 });
+    if (!confirmedEntries || !Array.isArray(confirmedEntries) || confirmedEntries.length === 0) {
+      return NextResponse.json({ error: "No confirmed entries submitted" }, { status: 400 });
     }
 
     const importDate = new Date().toISOString().split("T")[0];
+    const apiKey = process.env.OPENROUTER_API_KEY;
 
-    // 3. Prepare Updates
-    // A. Feedback logs
-    const newFeedback = (feedback || []).map((f: string) => ({
-      date: importDate,
-      sender: "founder",
-      comment: f,
-      source: "import"
-    }));
-    const updatedFeedbackLog = [...(brandBrain.feedback_log || []), ...newFeedback];
+    // Filter out "unassigned" and "agency" entries for routing to client brand brains
+    const clientEntries = confirmedEntries.filter(
+      (entry) => entry.clientId && entry.clientId !== "unassigned" && entry.clientId !== "agency"
+    );
 
-    // B. Results logs
-    const newLearningsList = (learnings || []).map((l: string) => ({
-      date: importDate,
-      learning: l,
-      source: "import"
-    }));
-    const updatedResultsLog = [...(brandBrain.results_log || []), ...newLearningsList];
+    const agencyEntries = confirmedEntries.filter(
+      (entry) => entry.clientId === "agency"
+    );
 
-    // C. Design Preferences
-    const currentPrefs = (brandBrain.design_preferences || {}) as DesignPreferencesRecord;
-    const updatedDesignPrefs = {
-      ...currentPrefs,
-      imported_facts: [
-        ...(currentPrefs.imported_facts || []),
-        ...((facts || []).map((f: string) => ({ content: f, date: importDate, source: "import" })))
-      ],
-      imported_preferences: [
-        ...(currentPrefs.imported_preferences || []),
-        ...((preferences || []).map((p: string) => ({ content: p, date: importDate, source: "import" })))
-      ]
-    };
-
-    // 4. Perform database update first to compile the guidelines data
-    const { error: updateErr } = await supabase
-      .from("brand_brain")
-      .update({
-        feedback_log: updatedFeedbackLog,
-        results_log: updatedResultsLog,
-        design_preferences: updatedDesignPrefs,
-        updated_at: new Date().toISOString()
-      })
-      .eq("client_id", clientId);
-
-    if (updateErr) {
-      return NextResponse.json({ error: `Save failed: ${updateErr.message}` }, { status: 500 });
+    // 1. Process Client Brand Brains updates
+    // Group entries by client ID
+    const groupedByClient: Record<string, ConfirmedEntry[]> = {};
+    for (const entry of clientEntries) {
+      if (!groupedByClient[entry.clientId]) {
+        groupedByClient[entry.clientId] = [];
+      }
+      groupedByClient[entry.clientId].push(entry);
     }
 
-    // 5. Regenerate the Brand Brief using the newly consolidated inputs
-    const systemPrompt = "You are an expert brand strategy consultant. You synthesize client data into high-fidelity, actionable brand briefs under 800 words. You output raw, clean Markdown without surrounding code fences.";
+    const clientReport: string[] = [];
 
-    const userMessage = `You are the Brand Brief Synthesizer for TBW Advertising. 
+    for (const clientId of Object.keys(groupedByClient)) {
+      const entries = groupedByClient[clientId];
+
+      // Fetch client profile
+      const { data: client } = await supabase
+        .from("clients")
+        .select("*")
+        .eq("id", clientId)
+        .single();
+
+      if (!client) continue;
+
+      // Fetch linked brand_brain
+      const { data: brandBrain } = await supabase
+        .from("brand_brain")
+        .select("*")
+        .eq("client_id", clientId)
+        .single();
+
+      if (!brandBrain) continue;
+
+      const facts = entries.filter(e => e.category === "facts").map(e => e.content);
+      const preferences = entries.filter(e => e.category === "preferences").map(e => e.content);
+      const learnings = entries.filter(e => e.category === "learnings").map(e => e.content);
+      const feedback = entries.filter(e => e.category === "feedback").map(e => e.content);
+
+      // Consolidate updates
+      const newFeedback = feedback.map((f) => ({
+        date: importDate,
+        sender: "founder",
+        comment: f,
+        source: "import"
+      }));
+      const updatedFeedbackLog = [...(brandBrain.feedback_log || []), ...newFeedback];
+
+      const newLearningsList = learnings.map((l) => ({
+        date: importDate,
+        learning: l,
+        source: "import"
+      }));
+      const updatedResultsLog = [...(brandBrain.results_log || []), ...newLearningsList];
+
+      const currentPrefs = (brandBrain.design_preferences || {}) as DesignPreferencesRecord;
+      const updatedDesignPrefs = {
+        ...currentPrefs,
+        imported_facts: [
+          ...(currentPrefs.imported_facts || []),
+          ...facts.map((f) => ({ content: f, date: importDate, source: "import" }))
+        ],
+        imported_preferences: [
+          ...(currentPrefs.imported_preferences || []),
+          ...preferences.map((p) => ({ content: p, date: importDate, source: "import" }))
+        ]
+      };
+
+      // Save database updates
+      const { error: updateErr } = await supabase
+        .from("brand_brain")
+        .update({
+          feedback_log: updatedFeedbackLog,
+          results_log: updatedResultsLog,
+          design_preferences: updatedDesignPrefs,
+          updated_at: new Date().toISOString()
+        })
+        .eq("client_id", clientId);
+
+      if (updateErr) {
+        console.error(`Failed to update brand brain for client ${client.name}:`, updateErr);
+        continue;
+      }
+
+      // Regenerate Brief
+      let brief = "";
+      if (!apiKey || apiKey === "mock" || apiKey.startsWith("mock_")) {
+        brief = `### Brand Core Essence\n${client.name} is a leading brand in the market.\n\n### Copywriting Rules\nTone: Warm and authentic.\n\n### Visual Direction\nColors: ${JSON.stringify(brandBrain.colors || [])}\n\n### Imported Knowledge Highlights\n- Facts count: ${facts.length}\n- Preferences count: ${preferences.length}`;
+      } else {
+        const systemPrompt = "You are an expert brand strategy consultant. You synthesize client data into high-fidelity, actionable brand briefs under 800 words. You output raw, clean Markdown without surrounding code fences.";
+        const userMessage = `You are the Brand Brief Synthesizer for TBW Advertising. 
 Generate a comprehensive, high-fidelity 1-page Brand Brief for:
 
 Brand Name: ${client.name}
@@ -308,64 +361,74 @@ Generate a 1-page brief containing:
 
 Keep the content highly actionable, under 800 words, and formatted in clean, professional markdown. Do NOT wrap in \`\`\`markdown code block fences. Output the brief directly.`;
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    let brief = "";
-
-    if (!apiKey || apiKey === "mock" || apiKey.startsWith("mock_")) {
-      brief = `### Brand Core Essence\n${client.name} is a leading brand in the market.\n\n### Copywriting Rules\nTone: Warm and authentic.\n\n### Visual Direction\nColors: ${JSON.stringify(brandBrain.colors || [])}\n\n### Imported Knowledge Highlights\n- Facts count: ${(facts || []).length}\n- Preferences count: ${(preferences || []).length}`;
-    } else {
-      try {
-        brief = await complete({
-          model: MODEL_SMART,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userMessage }],
-          maxTokens: 1000
-        });
-      } catch (err: unknown) {
-        console.error("Brief generation LLM failure during import:", err);
-        brief = brandBrain.brand_brief || "Failed to synthesize brief.";
+        try {
+          brief = await complete({
+            model: MODEL_SMART,
+            system: systemPrompt,
+            messages: [{ role: "user", content: userMessage }],
+            maxTokens: 1000
+          });
+        } catch (err) {
+          console.error(`Brief generation LLM failure for client ${client.name}:`, err);
+          brief = brandBrain.brand_brief || "Failed to synthesize brief.";
+        }
       }
-    }
 
-    // 6. Save Regenerated Brief to Brand Brain
-    const { data: finalBrain, error: finalErr } = await supabase
-      .from("brand_brain")
-      .update({
-        brand_brief: brief,
-        updated_at: new Date().toISOString()
-      })
-      .eq("client_id", clientId)
-      .select()
-      .single();
+      // Save regenerated brief
+      const { error: finalErr } = await supabase
+        .from("brand_brain")
+        .update({
+          brand_brief: brief,
+          updated_at: new Date().toISOString()
+        })
+        .eq("client_id", clientId);
 
-    if (finalErr) {
-      console.error("Failed to save final brief:", finalErr);
-    }
+      if (finalErr) {
+        console.error(`Failed to save final brief for client ${client.name}:`, finalErr);
+      }
 
-    // 7. Log the import in the knowledge_import_audit table
-    const { error: auditErr } = await supabase
-      .from("knowledge_import_audit")
-      .insert({
+      // Insert audit log
+      await supabase.from("knowledge_import_audit").insert({
         client_id: clientId,
         user_id: user.id,
-        file_name: fileName || "unknown_document",
+        file_name: fileName || "mixed_export_knowledge",
         file_size: Number(fileSize) || 0,
         imported_entries: {
-          facts: facts || [],
-          preferences: preferences || [],
-          learnings: learnings || [],
-          feedback: feedback || []
+          facts,
+          preferences,
+          learnings,
+          feedback
         }
       });
 
-    if (auditErr) {
-      console.error("Failed to insert knowledge import audit log:", auditErr);
+      clientReport.push(client.name);
+    }
+
+    // 2. Process Agency (TBW) Entries
+    let agencyCount = 0;
+    for (const entry of agencyEntries) {
+      let category = "process_rules";
+      if (entry.category === "learnings") category = "platform_learnings";
+      else if (entry.category === "feedback") category = "creative_patterns";
+
+      const { error: agencyErr } = await supabase.from("agency_brain").insert({
+        category,
+        content: entry.content,
+        confidence: "observed_once",
+        source_count: 1
+      });
+
+      if (!agencyErr) {
+        agencyCount++;
+      } else {
+        console.error("Failed to insert agency brain entry:", agencyErr);
+      }
     }
 
     return NextResponse.json({
       success: true,
-      brandBrief: brief,
-      brandBrain: finalBrain || brandBrain
+      updatedClients: clientReport,
+      agencyEntriesCount: agencyCount
     });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
