@@ -77,10 +77,29 @@ function ImageStudioWorkspace() {
   const styleFileInputRef = useRef<HTMLInputElement>(null);
 
   // SECTION 2: Product Images (1 to 10 slots)
-  const [productImages, setProductImages] = useState<Array<{ mediaUrl: string; higgsfieldMediaRef: string; fileName: string }>>([]);
+  const [productImages, setProductImages] = useState<Array<{
+    id: string;
+    mediaUrl: string;
+    higgsfieldMediaRef: string;
+    fileName: string;
+    status: 'uploading' | 'importing' | 'ready' | 'failed';
+    error?: string;
+  }>>([]);
   const [uploadingProduct, setUploadingProduct] = useState(false);
   const [productUploadError, setProductUploadError] = useState<string | null>(null);
   const productFileInputRef = useRef<HTMLInputElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Active Batch Jobs state (Requirement 1)
+  const [activeBatchJobs, setActiveBatchJobs] = useState<Array<{
+    id: string;
+    fileName: string;
+    productUrl: string;
+    higgsfieldMediaRef: string;
+    status: 'queued' | 'submitting' | 'processing' | 'completed' | 'failed';
+    progress: number;
+    error?: string;
+  }>>([]);
 
   // Generation status state
   const [generating, setGenerating] = useState(false);
@@ -358,147 +377,311 @@ function ImageStudioWorkspace() {
     }
   };
 
-  // Upload Product Image handler
-  const handleProductUpload = async (file: File) => {
-    if (!file) return;
-    if (productImages.length >= 10) {
-      setProductUploadError("Maximum of 10 product images allowed");
-      return;
-    }
-    setUploadingProduct(true);
-    setProductUploadError(null);
+  // Requirement 2: Upload multiple files, track status per-thumbnail in parallel
+  const handleProductFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
 
+    const maxAllowed = 10;
+    const remaining = maxAllowed - productImages.length;
+
+    let filesToUpload = Array.from(files);
+    if (filesToUpload.length > remaining) {
+      setProductUploadError(`Only ${remaining} more slots available. Selected the first ${remaining} images.`);
+      filesToUpload = filesToUpload.slice(0, remaining);
+    } else {
+      setProductUploadError(null);
+    }
+
+    // Add placeholder entries with 'uploading' status
+    const newItems = filesToUpload.map(file => ({
+      id: `prod-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+      fileName: file.name,
+      mediaUrl: "",
+      higgsfieldMediaRef: "",
+      status: 'uploading' as const,
+    }));
+
+    setProductImages(prev => [...prev, ...newItems]);
+
+    // Process parallel uploads
+    filesToUpload.forEach((file, idx) => {
+      uploadAndImportFile(file, newItems[idx].id);
+    });
+  };
+
+  const uploadAndImportFile = async (file: File, itemId: string) => {
     const formData = new FormData();
     formData.append("file", file);
 
     try {
+      // First stage: Upload to storage is 'uploading'
+      // Second stage: call tool is 'importing'
+      setProductImages(prev => prev.map(item => {
+        if (item.id === itemId) {
+          return { ...item, status: 'importing' };
+        }
+        return item;
+      }));
+
       const res = await fetch("/api/production/higgsfield/upload", {
         method: "POST",
         body: formData,
       });
 
       const data = await res.json();
+
       if (res.ok && data.success) {
-        setProductImages(prev => [
-          ...prev,
-          { mediaUrl: data.mediaUrl, higgsfieldMediaRef: data.higgsfieldMediaRef, fileName: data.fileName }
-        ]);
+        setProductImages(prev => prev.map(item => {
+          if (item.id === itemId) {
+            return {
+              ...item,
+              status: 'ready',
+              mediaUrl: data.mediaUrl,
+              higgsfieldMediaRef: data.higgsfieldMediaRef,
+            };
+          }
+          return item;
+        }));
       } else {
-        setProductUploadError(data.error || "Product upload failed");
+        setProductImages(prev => prev.map(item => {
+          if (item.id === itemId) {
+            return {
+              ...item,
+              status: 'failed',
+              error: data.error || "Import failed",
+            };
+          }
+          return item;
+        }));
       }
-    } catch (err) {
-      setProductUploadError("Error uploading product image");
-    } finally {
-      setUploadingProduct(false);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setProductImages(prev => prev.map(item => {
+        if (item.id === itemId) {
+          return {
+            ...item,
+            status: 'failed',
+            error: msg || "Upload failed",
+          };
+        }
+        return item;
+      }));
     }
   };
 
-  const removeProductImage = (indexToRemove: number) => {
-    setProductImages(prev => prev.filter((_, idx) => idx !== indexToRemove));
+  const removeProductImage = (idToRemove: string) => {
+    setProductImages(prev => prev.filter((item) => item.id !== idToRemove));
   };
 
-  // Quick-Attach: appends guidelines images directly to the products list
-  const handleAttachGuideline = (gUrl: string, idx: number) => {
+  // Requirement 2: Quick-Attach: download guidelines image URL as File and process via parallel pipeline
+  const handleAttachGuideline = async (gUrl: string, idx: number) => {
     if (productImages.length >= 10) return;
-    setProductImages(prev => [
-      ...prev,
-      { mediaUrl: gUrl, higgsfieldMediaRef: `brand-reference-${idx}`, fileName: `brand-guideline-${idx}.jpg` }
-    ]);
+
+    const id = `guideline-${idx}-${Date.now()}`;
+    const newItem = {
+      id,
+      fileName: `guideline-${idx}.jpg`,
+      mediaUrl: gUrl,
+      higgsfieldMediaRef: "",
+      status: 'uploading' as const,
+    };
+
+    setProductImages(prev => [...prev, newItem]);
+
+    try {
+      const fetchRes = await fetch(gUrl);
+      const blob = await fetchRes.blob();
+      const file = new File([blob], `guideline-${idx}.jpg`, { type: blob.type || "image/jpeg" });
+      await uploadAndImportFile(file, id);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setProductImages(prev => prev.map(item => {
+        if (item.id === id) {
+          return {
+            ...item,
+            status: 'failed',
+            error: msg || "Failed to attach reference",
+          };
+        }
+        return item;
+      }));
+    }
   };
 
-  // Generate Image Handler
+  // Requirement 1: Submit a separate generation for each product (concurrency max 3, queue the rest)
   const handleGenerate = async () => {
     if (!prompt.trim() || productImages.length === 0) return;
 
+    // Requirement 3: Real Cost preview confirmation popup before submitting
+    const confirmMsg = `${productImages.length} images × ${selectedModel} = ~${totalCostEstimate.toFixed(1)} credits. Generate all?`;
+    if (!window.confirm(confirmMsg)) return;
+
     setGenerating(true);
-    setGenerationProgress(0);
     setGenerationError(null);
 
-    try {
-      const res = await fetch("/api/production/higgsfield/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt,
-          model: selectedModel,
-          ratio: selectedRatio,
-          styleReference, // Shared style reference input
-          productImages, // Product images driving the batch count
-          taskId: taskId || null,
-          branding: brandingEnabled && selectedBrandingClient ? {
-            enabled: true,
-            includeLogo,
-            includeAddress,
-            clientId: selectedBrandingClient,
-          } : undefined,
-        }),
-      });
+    const initialJobs = productImages.map((img) => ({
+      id: img.id,
+      fileName: img.fileName,
+      productUrl: img.mediaUrl,
+      higgsfieldMediaRef: img.higgsfieldMediaRef,
+      status: 'queued' as const,
+      progress: 0,
+    }));
+    setActiveBatchJobs(initialJobs);
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to start generation job");
-      }
-
-      if (data.creditWarning) {
-        setCreditAlert(true);
-      }
-      setMonthlyCredits(data.totalCredits || monthlyCredits);
-
-      // Start polling for status respecting server pollAfterSeconds
-      pollJobStatus(data.jobId, data.pollAfterSeconds || 3);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setGenerationError(msg || "An unexpected error occurred");
-      setGenerating(false);
-    }
+    runBatchQueue(initialJobs);
   };
 
-  const pollJobStatus = (jobId: string, initialPollAfter: number = 3) => {
-    let currentInterval = Math.max(initialPollAfter * 1000, 2000);
-    let timerId: NodeJS.Timeout | null = null;
+  const runBatchQueue = (jobs: typeof activeBatchJobs) => {
+    const queue = [...jobs];
+    const activeWorkers = new Map<string, Promise<void>>();
+    const maxConcurrency = 3;
 
-    const runPoll = async () => {
-      try {
-        const res = await fetch(`/api/production/higgsfield/status/${jobId}`);
-        const data = await res.json();
-
-        if (!res.ok || data.status === "failed" || data.status === "timed_out" || data.status === "nsfw" || data.status === "ip_detected") {
-          if (timerId) clearTimeout(timerId);
-          const failureMsg = data.error || `Generation ${data.status || "failed"}.`;
-          setGenerationError(failureMsg);
-          setGenerating(false);
-          return;
-        }
-
-        if (data.status === "completed") {
-          if (timerId) clearTimeout(timerId);
+    const startNext = () => {
+      const nextJobIndex = queue.findIndex(j => j.status === 'queued');
+      if (nextJobIndex === -1) {
+        // All tasks queued are processing, completed or failed.
+        const allFinished = queue.every(j => j.status === 'completed' || j.status === 'failed');
+        if (allFinished) {
           setGenerating(false);
           setPrompt("");
           setStyleReference(null);
           setProductImages([]);
           setLastPrompt(null);
+          setActiveBatchJobs([]); // Reset batch list
           fetchHistory();
           fetchMonthlyCredits();
-          return;
         }
+        return;
+      }
 
-        // Still processing - schedule next poll respecting poll_after_seconds
-        if (data.status === "processing") {
-          setGenerationProgress(data.progress || 0);
-          if (typeof data.pollAfterSeconds === "number") {
-            currentInterval = Math.max(data.pollAfterSeconds * 1000, 2000);
+      if (activeWorkers.size >= maxConcurrency) {
+        return;
+      }
+
+      const job = queue[nextJobIndex];
+      job.status = 'submitting';
+      setActiveBatchJobs([...queue]);
+
+      const workerPromise = (async () => {
+        try {
+          // Submit generate_image for this single product image (Requirement 1)
+          const res = await fetch("/api/production/higgsfield/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              prompt,
+              model: selectedModel,
+              ratio: selectedRatio,
+              styleReference,
+              productImages: [
+                {
+                  mediaUrl: job.productUrl,
+                  higgsfieldMediaRef: job.higgsfieldMediaRef,
+                }
+              ],
+              taskId: taskId || null,
+              branding: brandingEnabled && selectedBrandingClient ? {
+                enabled: true,
+                includeLogo,
+                includeAddress,
+                clientId: selectedBrandingClient,
+              } : undefined,
+            }),
+          });
+
+          const data = await res.json();
+          if (!res.ok || !data.success || !data.jobId) {
+            throw new Error(data.error || "Submission failed");
           }
-          timerId = setTimeout(runPoll, currentInterval);
+
+          if (data.creditWarning) {
+            setCreditAlert(true);
+          }
+          setMonthlyCredits(data.totalCredits || monthlyCredits);
+
+          job.status = 'processing';
+          setActiveBatchJobs([...queue]);
+
+          // Poll job status independently (Requirement 1)
+          await pollSingleJobStatus(data.jobId, job, queue);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          job.status = 'failed';
+          job.error = msg || "Failed to submit";
+          setActiveBatchJobs([...queue]);
+        } finally {
+          activeWorkers.delete(job.id);
+          startNext();
         }
-      } catch (err: unknown) {
-        if (timerId) clearTimeout(timerId);
-        const msg = err instanceof Error ? err.message : String(err);
-        setGenerationError(msg || "Checking status failed");
-        setGenerating(false);
+      })();
+
+      activeWorkers.set(job.id, workerPromise);
+
+      if (activeWorkers.size < maxConcurrency) {
+        startNext();
       }
     };
 
-    timerId = setTimeout(runPoll, currentInterval);
+    // Initialize first batch of workers
+    startNext();
+  };
+
+  const pollSingleJobStatus = (
+    jobId: string,
+    job: typeof activeBatchJobs[0],
+    queue: typeof activeBatchJobs
+  ): Promise<void> => {
+    return new Promise((resolve) => {
+      let currentInterval = 3000;
+      let timerId: NodeJS.Timeout | null = null;
+
+      const runPoll = async () => {
+        try {
+          const res = await fetch(`/api/production/higgsfield/status/${jobId}`);
+          const data = await res.json();
+
+          if (!res.ok || data.status === "failed" || data.status === "timed_out" || data.status === "nsfw" || data.status === "ip_detected") {
+            if (timerId) clearTimeout(timerId);
+            job.status = 'failed';
+            job.error = data.error || `Generation ${data.status || "failed"}.`;
+            setActiveBatchJobs([...queue]);
+            resolve();
+            return;
+          }
+
+          if (data.status === "completed") {
+            if (timerId) clearTimeout(timerId);
+            job.status = 'completed';
+            job.progress = 100;
+            setActiveBatchJobs([...queue]);
+            // Refresh history incrementally to show completed results immediately
+            fetchHistory();
+            resolve();
+            return;
+          }
+
+          if (data.status === "processing") {
+            job.progress = data.progress || 0;
+            setActiveBatchJobs([...queue]);
+
+            if (typeof data.pollAfterSeconds === "number") {
+              currentInterval = Math.max(data.pollAfterSeconds * 1000, 2000);
+            }
+            timerId = setTimeout(runPoll, currentInterval);
+          }
+        } catch (err: unknown) {
+          if (timerId) clearTimeout(timerId);
+          const msg = err instanceof Error ? err.message : String(err);
+          job.status = 'failed';
+          job.error = msg || "Checking status failed";
+          setActiveBatchJobs([...queue]);
+          resolve();
+        }
+      };
+
+      timerId = setTimeout(runPoll, currentInterval);
+    });
   };
 
   // Apply Prompt Template with Undo
@@ -534,9 +717,11 @@ function ImageStudioWorkspace() {
     if (record.reference_image_url) {
       setProductImages([
         {
+          id: `prod-regen-${Date.now()}`,
           mediaUrl: record.reference_image_url,
           higgsfieldMediaRef: record.higgsfield_media_ref || "regenerate-reference",
-          fileName: "regenerated-image.jpg"
+          fileName: "regenerated-image.jpg",
+          status: 'ready' as const,
         }
       ]);
     } else {
@@ -844,29 +1029,76 @@ function ImageStudioWorkspace() {
             ref={productFileInputRef}
             className="hidden"
             accept="image/*"
+            multiple
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleProductUpload(file);
+              handleProductFiles(e.target.files);
             }}
           />
 
-          <div className="grid grid-cols-5 gap-3.5 w-fit">
-            {productImages.map((prodImg, index) => (
+          <div
+            onDragOver={(e) => {
+              if (higgsfieldConnected === true) {
+                e.preventDefault();
+                setIsDragging(true);
+              }
+            }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={(e) => {
+              if (higgsfieldConnected === true) {
+                e.preventDefault();
+                setIsDragging(false);
+                handleProductFiles(e.dataTransfer.files);
+              }
+            }}
+            className={`grid grid-cols-5 gap-3.5 w-fit p-3 rounded-2xl border border-dashed transition-all duration-150 ${
+              isDragging ? "border-indigo-500 bg-indigo-950/10" : "border-slate-900 bg-slate-950/20"
+            }`}
+          >
+            {productImages.map((prodImg) => (
               <div
-                key={index}
+                key={prodImg.id}
                 className="relative w-16 h-16 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 group animate-in zoom-in-50 duration-150"
               >
-                <img
-                  src={prodImg.mediaUrl}
-                  alt={prodImg.fileName}
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute bottom-1 left-1 bg-slate-950/80 backdrop-blur-md rounded-full px-1.5 py-0.5 flex items-center space-x-0.5 border border-emerald-500/30" title="Imported & Ready">
-                  <CheckCircle className="w-2.5 h-2.5 text-emerald-400" />
-                  <span className="text-[8px] font-bold text-emerald-400 uppercase">Ready</span>
-                </div>
+                {prodImg.status === 'uploading' && (
+                  <div className="absolute inset-0 bg-slate-950/80 flex flex-col items-center justify-center space-y-1">
+                    <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
+                    <span className="text-[7px] text-indigo-400 font-bold uppercase tracking-wider">Uploading</span>
+                  </div>
+                )}
+
+                {prodImg.status === 'importing' && (
+                  <div className="absolute inset-0 bg-slate-950/80 flex flex-col items-center justify-center space-y-1">
+                    <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
+                    <span className="text-[7px] text-purple-400 font-bold uppercase tracking-wider">Importing</span>
+                  </div>
+                )}
+
+                {prodImg.status === 'failed' && (
+                  <div className="absolute inset-0 bg-red-950/90 flex flex-col items-center justify-center p-1 text-center">
+                    <AlertTriangle className="w-4 h-4 text-red-400" />
+                    <span className="text-[7px] text-red-400 font-bold leading-tight mt-1 truncate w-full" title={prodImg.error}>
+                      {prodImg.error || "Failed"}
+                    </span>
+                  </div>
+                )}
+
+                {prodImg.mediaUrl && (
+                  <img
+                    src={prodImg.mediaUrl}
+                    alt={prodImg.fileName}
+                    className="w-full h-full object-cover"
+                  />
+                )}
+
+                {prodImg.status === 'ready' && (
+                  <div className="absolute bottom-1 left-1 bg-slate-950/80 backdrop-blur-md rounded-full px-1.5 py-0.5 flex items-center space-x-0.5 border border-emerald-500/30" title="Imported & Ready">
+                    <CheckCircle className="w-2.5 h-2.5 text-emerald-400" />
+                    <span className="text-[8px] font-bold text-emerald-400 uppercase">Ready</span>
+                  </div>
+                )}
+
                 <button
-                  onClick={() => removeProductImage(index)}
+                  onClick={() => removeProductImage(prodImg.id)}
                   className="absolute top-1 right-1 w-4 h-4 bg-red-600/90 border border-red-500/30 rounded flex items-center justify-center text-white cursor-pointer opacity-80 group-hover:opacity-100 transition-opacity"
                 >
                   <X className="w-3 h-3" />
@@ -1231,7 +1463,57 @@ function ImageStudioWorkspace() {
           <ImageIcon className="w-5 h-5 text-indigo-400" />
           <span>Studio Workspace Gallery</span>
         </h2>
+        {/* Requirement 1: Pending Active Batch Jobs Grid */}
+        {activeBatchJobs.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+            {activeBatchJobs.map((job) => (
+              <div 
+                key={job.id} 
+                className="bg-slate-950/60 border border-slate-900 rounded-3xl p-4 flex flex-col justify-between space-y-3 relative overflow-hidden"
+              >
+                <div className="flex items-center space-x-3">
+                  <div className="w-12 h-12 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 shrink-0">
+                    <img src={job.productUrl} alt={job.fileName} className="w-full h-full object-cover" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-xs font-bold text-white truncate">{job.fileName}</h4>
+                    <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full inline-block mt-1 ${
+                      job.status === 'queued' ? 'bg-slate-900 text-slate-400 border border-slate-800' :
+                      job.status === 'submitting' ? 'bg-indigo-950 text-indigo-400 border border-indigo-900' :
+                      job.status === 'processing' ? 'bg-purple-950 text-purple-400 border border-purple-900 animate-pulse' :
+                      job.status === 'completed' ? 'bg-emerald-950 text-emerald-400 border border-emerald-900' :
+                      'bg-red-950 text-red-400 border border-red-900'
+                    }`}>
+                      {job.status}
+                    </span>
+                  </div>
+                </div>
 
+                {job.status === 'processing' && (
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[10px] text-slate-400 font-bold">
+                      <span>Generating...</span>
+                      <span>{job.progress}%</span>
+                    </div>
+                    <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
+                      <div 
+                        className="bg-gradient-to-r from-indigo-500 to-purple-500 h-full transition-all duration-300"
+                        style={{ width: `${job.progress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {job.status === 'failed' && (
+                  <p className="text-[10px] text-red-400 font-semibold flex items-center space-x-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    <span className="line-clamp-2">{job.error || "Generation failed"}</span>
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         {loadingHistory ? (
           <div className="flex flex-col items-center justify-center py-12 space-y-2 bg-slate-950/20 border border-slate-900/50 rounded-3xl">
             <Loader2 className="w-8 h-8 text-indigo-400 animate-spin" />
