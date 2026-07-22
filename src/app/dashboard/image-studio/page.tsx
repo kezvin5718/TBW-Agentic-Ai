@@ -710,6 +710,7 @@ function ImageStudioWorkspace() {
               } : undefined,
               categoryId: selectedCategoryId !== "none" ? selectedCategoryId : undefined,
               rawInput: rawInputVal,
+              clientId: selectedBrandingClient || undefined,
             }),
           });
 

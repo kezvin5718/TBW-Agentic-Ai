@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { HIGGSFIELD_CONFIG } from "@/lib/higgsfield-config";
+import { complete } from "@/lib/llm";
+import { MODEL_SMART } from "@/lib/llm-config";
 import { activeJobs } from "@/lib/higgsfield-state";
+import { SupabaseClient } from "@supabase/supabase-js";
 import {
   getHiggsfieldCredentials,
   getHiggsfieldGenerationCost,
@@ -13,6 +16,72 @@ import {
   getReferenceCleanupTemplate,
 } from "@/lib/higgsfield-mcp";
 
+const clientStyleCache = new Map<string, { block: string; timestamp: number }>();
+
+async function getCondensedClientStyle(supabase: SupabaseClient, clientId: string): Promise<string> {
+  const cacheKey = clientId;
+  const cached = clientStyleCache.get(cacheKey);
+  // Cache for 10 minutes to prevent redundant LLM calls in batch submissions
+  if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
+    return cached.block;
+  }
+
+  try {
+    // 1. Fetch client details
+    const { data: client } = await supabase
+      .from("clients")
+      .select("name, products, target_audience")
+      .eq("id", clientId)
+      .single();
+
+    // 2. Fetch brand brain details
+    const { data: brandBrain } = await supabase
+      .from("brand_brain")
+      .select("colors, caption_tone, design_preferences, brand_brief")
+      .eq("client_id", clientId)
+      .single();
+
+    if (!client || !brandBrain) {
+      return "";
+    }
+
+    const brandName = client.name;
+    const tone = brandBrain.caption_tone || "Not set";
+    const colors = JSON.stringify(brandBrain.colors || []);
+    const preferences = JSON.stringify(brandBrain.design_preferences || {});
+    const brief = brandBrain.brand_brief || "Not set";
+
+    const promptText = `You are a design and branding strategist. Condense the visual branding rules and preferences of the brand "${brandName}" into a concise visual style instructions block.
+
+Tone: ${tone}
+Color Palette Hexes: ${colors}
+Visual Preferences: ${preferences}
+Brand Brief Summary: ${brief}
+
+Strict Output Rules:
+1. Condense into a single visual style guideline statement.
+2. Focus ONLY on colors, visual rules, visual do's and don'ts, photography aesthetic.
+3. Maximum 100 words.
+4. Output only the condensed style block raw text. No intro, no explanation, no markdown code block formatting.`;
+
+    const response = await complete({
+      model: MODEL_SMART,
+      system: "You are a brand brief synthesizer. You output highly condensed style blocks under 100 words.",
+      messages: [{ role: "user", content: promptText }],
+    });
+
+    const styleBlock = response ? response.trim() : "";
+    if (styleBlock) {
+      clientStyleCache.set(cacheKey, { block: styleBlock, timestamp: Date.now() });
+      return styleBlock;
+    }
+  } catch (err) {
+    console.error("Failed to generate condensed style block:", err);
+  }
+
+  return "";
+}
+
 export async function POST(request: Request) {
   try {
     const supabase = await createClient();
@@ -22,7 +91,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { prompt, model, ratio, styleReference, productImages, taskId, brandElementIds, branding, categoryId, rawInput } = await request.json();
+    const { prompt, model, ratio, styleReference, productImages, taskId, brandElementIds, branding, categoryId, rawInput, clientId } = await request.json();
 
     if (!prompt || !prompt.trim()) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
@@ -50,6 +119,16 @@ export async function POST(request: Request) {
 
     // Resolve category-scaffolded prompt on the server-side first (Requirement 11)
     let scaffoldedPrompt = prompt;
+    let clientStyleBlock = "";
+    if (clientId) {
+      clientStyleBlock = await getCondensedClientStyle(supabase, clientId);
+    }
+
+    const userInputText = rawInput || prompt;
+    const combinedInput = clientStyleBlock
+      ? `Visual Style: ${clientStyleBlock.trim()}. Prompt: ${userInputText.trim()}`
+      : userInputText;
+
     if (categoryId) {
       const { data: categoryData } = await supabase
         .from("generation_categories")
@@ -58,17 +137,18 @@ export async function POST(request: Request) {
         .single();
 
       if (categoryData) {
-        const userInputText = rawInput || prompt;
         if (categoryData.scaffold_json) {
-          const userInputReplacement = userInputText.trim() ? userInputText : "as per the reference image";
+          const userInputReplacement = combinedInput.trim() ? combinedInput : "as per the reference image";
           const serialized = typeof categoryData.scaffold_json === "string"
             ? categoryData.scaffold_json
             : JSON.stringify(categoryData.scaffold_json);
           scaffoldedPrompt = serialized.replace(/{user_input}/g, userInputReplacement);
         } else {
-          scaffoldedPrompt = `${categoryData.prompt_prefix || ""}${userInputText}${categoryData.prompt_suffix || ""}`;
+          scaffoldedPrompt = `${categoryData.prompt_prefix || ""}${combinedInput}${categoryData.prompt_suffix || ""}`;
         }
       }
+    } else {
+      scaffoldedPrompt = combinedInput;
     }
 
     // 3. Format reusable brand elements as <<<element_id>>> placeholders inside prompt text
@@ -86,6 +166,9 @@ export async function POST(request: Request) {
         formattedPrompt = `${formattedPrompt} ${cleanupTemplate}`;
       }
     }
+
+    // Log the final composed prompt per generation
+    console.log(`⚙️ Higgsfield MCP [Final Composed Prompt]:\n${formattedPrompt}`);
 
     const batchCount = Array.isArray(productImages) && productImages.length > 0 ? productImages.length : 1;
 
