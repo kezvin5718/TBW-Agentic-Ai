@@ -21,7 +21,8 @@ import {
   Undo,
   Plus,
   Palette,
-  RefreshCw
+  RefreshCw,
+  Pencil
 } from "lucide-react";
 import { HIGGSFIELD_CONFIG } from "@/lib/higgsfield-config";
 
@@ -84,6 +85,7 @@ function ImageStudioWorkspace() {
     fileName: string;
     status: 'uploading' | 'importing' | 'ready' | 'failed';
     error?: string;
+    promptOverride?: string;
   }>>([]);
   const [uploadingProduct, setUploadingProduct] = useState(false);
   const [productUploadError, setProductUploadError] = useState<string | null>(null);
@@ -96,6 +98,7 @@ function ImageStudioWorkspace() {
     fileName: string;
     productUrl: string;
     higgsfieldMediaRef: string;
+    promptOverride?: string;
     status: 'queued' | 'submitting' | 'processing' | 'completed' | 'failed';
     progress: number;
     error?: string;
@@ -132,6 +135,10 @@ function ImageStudioWorkspace() {
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
 
   const [attachingToTask, setAttachingToTask] = useState<string | null>(null);
+
+  // Per-slot prompt override state (Requirement 1)
+  const [editingProductImageId, setEditingProductImageId] = useState<string | null>(null);
+  const [focusedEditor, setFocusedEditor] = useState<'main' | string>('main');
 
   // Client Branding Overlay states (Requirement 2)
   const [selectedBrandingClient, setSelectedBrandingClient] = useState<string>(clientId || "");
@@ -512,8 +519,10 @@ function ImageStudioWorkspace() {
   const handleGenerate = async () => {
     if (!prompt.trim() || productImages.length === 0) return;
 
-    // Requirement 3: Real Cost preview confirmation popup before submitting
-    const confirmMsg = `${productImages.length} images × ${selectedModel} = ~${totalCostEstimate.toFixed(1)} credits. Generate all?`;
+    // Requirement 5: Confirm dialog lists exact counts: "10 generations — 7 shared prompt, 3 custom. Generate all?"
+    const customCount = productImages.filter(img => img.promptOverride && img.promptOverride.trim()).length;
+    const sharedCount = productImages.length - customCount;
+    const confirmMsg = `${productImages.length} generations — ${sharedCount} shared prompt, ${customCount} custom. Generate all?`;
     if (!window.confirm(confirmMsg)) return;
 
     setGenerating(true);
@@ -524,6 +533,7 @@ function ImageStudioWorkspace() {
       fileName: img.fileName,
       productUrl: img.mediaUrl,
       higgsfieldMediaRef: img.higgsfieldMediaRef,
+      promptOverride: img.promptOverride || undefined,
       status: 'queued' as const,
       progress: 0,
     }));
@@ -565,12 +575,12 @@ function ImageStudioWorkspace() {
 
       const workerPromise = (async () => {
         try {
-          // Submit generate_image for this single product image (Requirement 1)
+          // Submit generate_image for this single product image with its prompt override if set (Requirement 2)
           const res = await fetch("/api/production/higgsfield/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              prompt,
+              prompt: job.promptOverride || prompt,
               model: selectedModel,
               ratio: selectedRatio,
               styleReference,
@@ -687,7 +697,18 @@ function ImageStudioWorkspace() {
   // Apply Prompt Template with Undo
   const handleApplyTemplate = (tpl: PromptTemplateItem) => {
     setLastPrompt(prompt); // Save current prompt for undo
-    setPrompt(tpl.prompt_text);
+    
+    // Apply template to whichever editor is focused (Requirement 2)
+    if (focusedEditor === 'main') {
+      setPrompt(tpl.prompt_text);
+    } else {
+      setProductImages(prev => prev.map(img => {
+        if (img.id === focusedEditor) {
+          return { ...img, promptOverride: tpl.prompt_text };
+        }
+        return img;
+      }));
+    }
     
     if (tpl.default_model === "nano_banana") {
       setSelectedModel("Nano Banana 2");
@@ -1059,6 +1080,21 @@ function ImageStudioWorkspace() {
                 key={prodImg.id}
                 className="relative w-16 h-16 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 group animate-in zoom-in-50 duration-150"
               >
+                {/* Visual state badge for custom override (Requirement 3) */}
+                {prodImg.status === 'ready' && prodImg.promptOverride && (
+                  <div
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      alert(`Prompt Override:\n"${prodImg.promptOverride}"`);
+                    }}
+                    className="absolute top-1 left-1 bg-indigo-650 hover:bg-indigo-650/90 text-white text-[7px] font-black uppercase px-1 rounded-full border border-indigo-500/50 shadow flex items-center space-x-0.5 cursor-pointer z-10"
+                    title="Prompt Override Active (click to preview)"
+                  >
+                    <span className="w-1 h-1 rounded-full bg-white animate-pulse" />
+                    <span>Custom</span>
+                  </div>
+                )}
+
                 {prodImg.status === 'uploading' && (
                   <div className="absolute inset-0 bg-slate-950/80 flex flex-col items-center justify-center space-y-1">
                     <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
@@ -1091,15 +1127,31 @@ function ImageStudioWorkspace() {
                 )}
 
                 {prodImg.status === 'ready' && (
-                  <div className="absolute bottom-1 left-1 bg-slate-950/80 backdrop-blur-md rounded-full px-1.5 py-0.5 flex items-center space-x-0.5 border border-emerald-500/30" title="Imported & Ready">
-                    <CheckCircle className="w-2.5 h-2.5 text-emerald-400" />
-                    <span className="text-[8px] font-bold text-emerald-400 uppercase">Ready</span>
-                  </div>
+                  <>
+                    <div className="absolute bottom-1 left-1 bg-slate-950/80 backdrop-blur-md rounded-full px-1.5 py-0.5 flex items-center space-x-0.5 border border-emerald-500/30" title="Imported & Ready">
+                      <CheckCircle className="w-2.5 h-2.5 text-emerald-400" />
+                      <span className="text-[8px] font-bold text-emerald-400 uppercase">Ready</span>
+                    </div>
+
+                    {/* Edit affordance (pencil) to edit slot prompt override (Requirement 1) */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingProductImageId(prodImg.id);
+                        setFocusedEditor(prodImg.id);
+                      }}
+                      className="absolute bottom-1 right-1 w-5 h-5 bg-slate-900/90 hover:bg-indigo-600 border border-slate-700/50 text-indigo-400 hover:text-white rounded flex items-center justify-center cursor-pointer transition-colors shadow z-10"
+                      title="Edit slot prompt override"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                  </>
                 )}
 
                 <button
                   onClick={() => removeProductImage(prodImg.id)}
-                  className="absolute top-1 right-1 w-4 h-4 bg-red-600/90 border border-red-500/30 rounded flex items-center justify-center text-white cursor-pointer opacity-80 group-hover:opacity-100 transition-opacity"
+                  className="absolute top-1 right-1 w-4 h-4 bg-red-600/90 border border-red-500/30 rounded flex items-center justify-center text-white cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity z-10"
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -1734,6 +1786,78 @@ function ImageStudioWorkspace() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* Prompt Override Editor Modal (Requirement 6: Mobile Friendly) */}
+      {editingProductImageId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-lg w-full space-y-4 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-800">
+              <div>
+                <h3 className="text-sm font-bold text-white">Custom Prompt Override</h3>
+                <p className="text-[10px] text-slate-500 mt-0.5">
+                  Individual prompt for: {productImages.find(img => img.id === editingProductImageId)?.fileName}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setEditingProductImageId(null);
+                  setFocusedEditor('main');
+                }}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                Slot Prompt Override
+              </label>
+              <textarea
+                value={productImages.find(img => img.id === editingProductImageId)?.promptOverride || ""}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setProductImages(prev => prev.map(img => {
+                    if (img.id === editingProductImageId) {
+                      return { ...img, promptOverride: val };
+                    }
+                    return img;
+                  }));
+                }}
+                placeholder={prompt || "Describe custom override for this slot..."}
+                rows={5}
+                className="w-full bg-slate-950/80 border border-slate-850 focus:border-indigo-500 rounded-2xl p-4 text-xs text-white placeholder-slate-650 focus:outline-none transition-colors"
+              />
+            </div>
+
+            <div className="flex items-center justify-between pt-2">
+              <button
+                onClick={() => {
+                  setProductImages(prev => prev.map(img => {
+                    if (img.id === editingProductImageId) {
+                      return { ...img, promptOverride: "" };
+                    }
+                    return img;
+                  }));
+                  setEditingProductImageId(null);
+                  setFocusedEditor('main');
+                }}
+                className="text-xs text-red-400 hover:text-red-300 font-semibold"
+              >
+                Clear override
+              </button>
+              <button
+                onClick={() => {
+                  setEditingProductImageId(null);
+                  setFocusedEditor('main');
+                }}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-4 py-2 rounded-xl transition-all"
+              >
+                Apply Override
+              </button>
+            </div>
           </div>
         </div>
       )}
