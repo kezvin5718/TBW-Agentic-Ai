@@ -48,8 +48,31 @@ export async function POST(request: Request) {
     }
     const selectedRatio = ratio || "3:4";
 
+    // Resolve category-scaffolded prompt on the server-side first (Requirement 11)
+    let scaffoldedPrompt = prompt;
+    if (categoryId) {
+      const { data: categoryData } = await supabase
+        .from("generation_categories")
+        .select("prompt_prefix, prompt_suffix, scaffold_json")
+        .eq("id", categoryId)
+        .single();
+
+      if (categoryData) {
+        const userInputText = rawInput || prompt;
+        if (categoryData.scaffold_json) {
+          const userInputReplacement = userInputText.trim() ? userInputText : "as per the reference image";
+          const serialized = typeof categoryData.scaffold_json === "string"
+            ? categoryData.scaffold_json
+            : JSON.stringify(categoryData.scaffold_json);
+          scaffoldedPrompt = serialized.replace(/{user_input}/g, userInputReplacement);
+        } else {
+          scaffoldedPrompt = `${categoryData.prompt_prefix || ""}${userInputText}${categoryData.prompt_suffix || ""}`;
+        }
+      }
+    }
+
     // 3. Format reusable brand elements as <<<element_id>>> placeholders inside prompt text
-    let formattedPrompt = formatPromptWithBrandElements(prompt, brandElementIds || []);
+    let formattedPrompt = formatPromptWithBrandElements(scaffoldedPrompt, brandElementIds || []);
     if (styleReference?.mediaUrl) {
       formattedPrompt = `In the visual style and setting of reference image 1, featuring: ${formattedPrompt}`;
     }

@@ -15,9 +15,14 @@ export async function GET() {
       return new NextResponse("Unauthorized", { status: 401 });
     }
 
+    const role = user.user_metadata?.role || "client";
+    const selectFields = role === "founder"
+      ? "*"
+      : "id, name, description, default_model, default_aspect_ratio, sort_order, is_active";
+
     const { data: categories, error } = await supabase
       .from("generation_categories")
-      .select("*")
+      .select(selectFields)
       .order("sort_order", { ascending: true });
 
     if (error) throw error;
