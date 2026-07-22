@@ -117,17 +117,33 @@ export async function POST(request: Request) {
     }
     const selectedRatio = ratio || "3:4";
 
-    // Resolve category-scaffolded prompt on the server-side first (Requirement 11)
-    let scaffoldedPrompt = prompt;
+    // Resolve client style context if client is selected
     let clientStyleBlock = "";
     if (clientId) {
       clientStyleBlock = await getCondensedClientStyle(supabase, clientId);
     }
 
+    // Resolve style reference disambiguation block if style reference is attached
+    let disambiguationBlock = "";
+    const hasStyleRef = !!(styleReference?.higgsfieldMediaRef || styleReference?.mediaUrl);
+    if (hasStyleRef) {
+      disambiguationBlock = "Image 1 is a STYLE/SCENE reference only — use its surface, background, lighting, mood and props, but do NOT reproduce any jewellery or products visible in it. Image 2 contains the ACTUAL PRODUCT: render exactly this product, preserving its design 100%, placed into the style of image 1.";
+    }
+
     const userInputText = rawInput || prompt;
-    const combinedInput = clientStyleBlock
-      ? `Visual Style: ${clientStyleBlock.trim()}. Prompt: ${userInputText.trim()}`
-      : userInputText;
+
+    // Compose inner combined parts
+    const combinedParts = [];
+    if (clientStyleBlock) {
+      combinedParts.push(`Visual Style: ${clientStyleBlock.trim()}.`);
+    }
+    if (disambiguationBlock) {
+      combinedParts.push(disambiguationBlock);
+    }
+    combinedParts.push(userInputText.trim());
+    const combinedInput = combinedParts.join(" ");
+
+    let scaffoldedPrompt = prompt;
 
     if (categoryId) {
       const { data: categoryData } = await supabase
@@ -144,7 +160,30 @@ export async function POST(request: Request) {
             : JSON.stringify(categoryData.scaffold_json);
           scaffoldedPrompt = serialized.replace(/{user_input}/g, userInputReplacement);
         } else {
-          scaffoldedPrompt = `${categoryData.prompt_prefix || ""}${combinedInput}${categoryData.prompt_suffix || ""}`;
+          let prefix = categoryData.prompt_prefix || "";
+          const suffix = categoryData.prompt_suffix || "";
+
+          // Grammar fix: check if user input starts with a preposition
+          if (prefix.toLowerCase().trim().endsWith(" of")) {
+            const prepositionPattern = /^(on|in|against|under|with|at|above|behind|beside|between|over|through|upon|inside|outside)\b/i;
+            if (prepositionPattern.test(userInputText.trim())) {
+              // Strip "of" from the prefix if user input describes a scene/preposition
+              prefix = prefix.replace(/\s+of\s*$/i, "").trim();
+            }
+          }
+
+          // Compose inner text for simple prefix/suffix
+          const innerParts = [];
+          if (clientStyleBlock) {
+            innerParts.push(`Visual Style: ${clientStyleBlock.trim()}.`);
+          }
+          if (disambiguationBlock) {
+            innerParts.push(disambiguationBlock);
+          }
+          innerParts.push(userInputText);
+
+          const innerText = innerParts.join(" ");
+          scaffoldedPrompt = `${prefix}${prefix && !prefix.endsWith(" ") ? " " : ""}${innerText}${suffix}`;
         }
       }
     } else {
@@ -254,6 +293,9 @@ export async function POST(request: Request) {
     if (formattedMedias && formattedMedias.length > 0) {
       generationParams.medias = formattedMedias;
     }
+
+    // Log per-job medias (media_ids attached, in what order)
+    console.log(`⚙️ Higgsfield MCP [Generation Media Order]: ${JSON.stringify(generationParams.medias || [])}`);
 
     // 5. Submit generation job via MCP wrapping arguments in { params: { ... } }
     console.log(`⚙️ Higgsfield MCP [Generation Submit]: Invoking generate_image tool with params wrapper...`);
