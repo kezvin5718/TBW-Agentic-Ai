@@ -465,64 +465,111 @@ function ImageStudioWorkspace() {
     });
   };
 
-  const uploadAndImportFile = async (file: File, itemId: string) => {
-    const formData = new FormData();
-    formData.append("file", file);
+  const uploadAndImportFile = (file: File, itemId: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const formData = new FormData();
+      formData.append("file", file);
 
-    try {
-      // First stage: Upload to storage is 'uploading'
-      // Second stage: call tool is 'importing'
-      setProductImages(prev => prev.map(item => {
-        if (item.id === itemId) {
-          return { ...item, status: 'importing' };
-        }
-        return item;
-      }));
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/production/higgsfield/upload");
 
-      const res = await fetch("/api/production/higgsfield/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await res.json();
-
-      if (res.ok && data.success) {
+      xhr.upload.onload = () => {
         setProductImages(prev => prev.map(item => {
           if (item.id === itemId) {
-            return {
-              ...item,
-              status: 'ready',
-              mediaUrl: data.mediaUrl,
-              higgsfieldMediaRef: data.higgsfieldMediaRef,
-            };
+            return { ...item, status: 'importing' };
           }
           return item;
         }));
-      } else {
+      };
+
+      xhr.onload = () => {
+        try {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            const data = JSON.parse(xhr.responseText);
+            if (data.success) {
+              setProductImages(prev => prev.map(item => {
+                if (item.id === itemId) {
+                  return {
+                    ...item,
+                    status: 'ready',
+                    mediaUrl: data.mediaUrl,
+                    higgsfieldMediaRef: data.higgsfieldMediaRef,
+                  };
+                }
+                return item;
+              }));
+              resolve();
+            } else {
+              setProductImages(prev => prev.map(item => {
+                if (item.id === itemId) {
+                  return {
+                    ...item,
+                    status: 'failed',
+                    error: data.error || "Import failed",
+                  };
+                }
+                return item;
+              }));
+              reject(new Error(data.error || "Import failed"));
+            }
+          } else {
+            let errMsg = "Upload failed";
+            try {
+              const data = JSON.parse(xhr.responseText);
+              errMsg = data.error || errMsg;
+            } catch {}
+            setProductImages(prev => prev.map(item => {
+              if (item.id === itemId) {
+                return {
+                  ...item,
+                  status: 'failed',
+                  error: errMsg,
+                };
+              }
+              return item;
+            }));
+            reject(new Error(errMsg));
+          }
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          setProductImages(prev => prev.map(item => {
+            if (item.id === itemId) {
+              return {
+                ...item,
+                status: 'failed',
+                error: msg || "Parse error during upload",
+              };
+            }
+            return item;
+          }));
+          reject(err);
+        }
+      };
+
+      xhr.onerror = () => {
         setProductImages(prev => prev.map(item => {
           if (item.id === itemId) {
             return {
               ...item,
               status: 'failed',
-              error: data.error || "Import failed",
+              error: "Network error during upload",
             };
           }
           return item;
         }));
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+        reject(new Error("Network error"));
+      };
+
+      // Set initial status as uploading
       setProductImages(prev => prev.map(item => {
         if (item.id === itemId) {
-          return {
-            ...item,
-            status: 'failed',
-            error: msg || "Upload failed",
-          };
+          return { ...item, status: 'uploading' };
         }
         return item;
       }));
-    }
+
+      xhr.send(formData);
+    });
   };
 
   const removeProductImage = (idToRemove: string) => {
@@ -568,10 +615,8 @@ function ImageStudioWorkspace() {
   const handleGenerate = async () => {
     if (!prompt.trim() || productImages.length === 0) return;
 
-    // Requirement 5: Confirm dialog lists exact counts: "10 generations — 7 shared prompt, 3 custom. Generate all?"
-    const customCount = productImages.filter(img => img.promptOverride && img.promptOverride.trim()).length;
-    const sharedCount = productImages.length - customCount;
-    const confirmMsg = `${productImages.length} generations — ${sharedCount} shared prompt, ${customCount} custom. Generate all?`;
+    // Requirement 3: Cost preview confirm dialog
+    const confirmMsg = `${productImages.length} images × ${selectedModel} = ~${totalCostEstimate.toFixed(1)} credits. Generate all?`;
     if (!window.confirm(confirmMsg)) return;
 
     setGenerating(true);
