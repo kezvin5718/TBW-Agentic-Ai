@@ -734,6 +734,7 @@ CREATE TABLE IF NOT EXISTS public.generation_categories (
   description TEXT,
   prompt_prefix TEXT DEFAULT '',
   prompt_suffix TEXT DEFAULT '',
+  scaffold_json JSONB,
   default_model TEXT,
   default_aspect_ratio TEXT,
   sort_order INTEGER DEFAULT 0,

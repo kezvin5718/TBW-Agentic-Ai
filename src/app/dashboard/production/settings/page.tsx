@@ -40,6 +40,7 @@ interface GenerationCategoryItem {
   description?: string;
   prompt_prefix?: string;
   prompt_suffix?: string;
+  scaffold_json?: unknown;
   default_model?: string;
   default_aspect_ratio?: string;
   sort_order: number;
@@ -93,6 +94,11 @@ export default function ProductionSettingsPage() {
   const [catDefaultModel, setCatDefaultModel] = useState("Nano Banana 2");
   const [catDefaultRatio, setCatDefaultRatio] = useState("1:1");
   const [catIsActive, setCatIsActive] = useState(true);
+  
+  // Additional JSON scaffold states (Requirement 11)
+  const [catMode, setCatMode] = useState<"simple" | "json">("simple");
+  const [catScaffoldJson, setCatScaffoldJson] = useState("");
+  const [jsonError, setJsonError] = useState<string | null>(null);
 
   // Categories helper
   const categoriesList = ["Product Shot", "Lifestyle", "Festive", "UGC Style", "Creative", "Seasonal"];
@@ -339,6 +345,7 @@ export default function ProductionSettingsPage() {
   const openCategoryForm = (cat?: GenerationCategoryItem) => {
     setError(null);
     setSuccess(null);
+    setJsonError(null);
     if (cat) {
       setEditingCategory(cat);
       setCatName(cat.name);
@@ -348,6 +355,13 @@ export default function ProductionSettingsPage() {
       setCatDefaultModel(cat.default_model || "Nano Banana 2");
       setCatDefaultRatio(cat.default_aspect_ratio || "1:1");
       setCatIsActive(cat.is_active);
+      if (cat.scaffold_json) {
+        setCatMode("json");
+        setCatScaffoldJson(JSON.stringify(cat.scaffold_json, null, 2));
+      } else {
+        setCatMode("simple");
+        setCatScaffoldJson("");
+      }
     } else {
       setEditingCategory(null);
       setCatName("");
@@ -357,6 +371,8 @@ export default function ProductionSettingsPage() {
       setCatDefaultModel("Nano Banana 2");
       setCatDefaultRatio("1:1");
       setCatIsActive(true);
+      setCatMode("simple");
+      setCatScaffoldJson("");
     }
     setIsCategoryFormOpen(true);
   };
@@ -371,14 +387,32 @@ export default function ProductionSettingsPage() {
     setSaving(true);
     setError(null);
     setSuccess(null);
+    setJsonError(null);
+
+    let parsedJson: unknown = null;
+    if (catMode === "json") {
+      try {
+        if (!catScaffoldJson.trim()) {
+          throw new Error("JSON scaffold cannot be empty.");
+        }
+        parsedJson = JSON.parse(catScaffoldJson);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setJsonError(`Invalid JSON: ${msg}`);
+        setError(`Failed to save: Invalid JSON scaffold format.`);
+        setSaving(false);
+        return;
+      }
+    }
 
     try {
       const payload = {
         id: editingCategory?.id,
         name: catName,
         description: catDescription,
-        prompt_prefix: catPromptPrefix,
-        prompt_suffix: catPromptSuffix,
+        prompt_prefix: catMode === "simple" ? catPromptPrefix : "",
+        prompt_suffix: catMode === "simple" ? catPromptSuffix : "",
+        scaffold_json: catMode === "json" ? parsedJson : null,
         default_model: catDefaultModel,
         default_aspect_ratio: catDefaultRatio,
         is_active: catIsActive
@@ -921,29 +955,79 @@ export default function ProductionSettingsPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Prompt Prefix</label>
-                  <textarea
-                    value={catPromptPrefix}
-                    onChange={(e) => setCatPromptPrefix(e.target.value)}
-                    placeholder="e.g. Luxury jewellery product photography of "
-                    rows={3}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Prompt Suffix</label>
-                  <textarea
-                    value={catPromptSuffix}
-                    onChange={(e) => setCatPromptSuffix(e.target.value)}
-                    placeholder="e.g. , macro detail, soft diffused studio lighting"
-                    rows={3}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
-                  />
-                </div>
+              {/* Mode Selection */}
+              <div className="flex space-x-2 border-b border-slate-900 pb-1">
+                <button
+                  type="button"
+                  onClick={() => { setCatMode("simple"); setError(null); }}
+                  className={`px-3 py-1.5 rounded-lg font-bold text-[10px] cursor-pointer transition-colors ${
+                    catMode === "simple"
+                      ? "bg-indigo-600 text-white"
+                      : "bg-slate-900/60 text-slate-400 hover:text-white"
+                  }`}
+                >
+                  Simple (Prefix/Suffix)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setCatMode("json"); setError(null); }}
+                  className={`px-3 py-1.5 rounded-lg font-bold text-[10px] cursor-pointer transition-colors ${
+                    catMode === "json"
+                      ? "bg-indigo-600 text-white"
+                      : "bg-slate-900/60 text-slate-400 hover:text-white"
+                  }`}
+                >
+                  JSON Scaffold
+                </button>
               </div>
+
+              {catMode === "simple" ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Prompt Prefix</label>
+                    <textarea
+                      value={catPromptPrefix}
+                      onChange={(e) => setCatPromptPrefix(e.target.value)}
+                      placeholder="e.g. Luxury jewellery product photography of "
+                      rows={3}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Prompt Suffix</label>
+                    <textarea
+                      value={catPromptSuffix}
+                      onChange={(e) => setCatPromptSuffix(e.target.value)}
+                      placeholder="e.g. , macro detail, soft diffused studio lighting"
+                      rows={3}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">JSON Scaffold Structure</label>
+                  <p className="text-[10px] text-slate-500">
+                    Use <code>{"{user_input}"}</code> to place the user&apos;s typed prompt override.
+                  </p>
+                  <textarea
+                    value={catScaffoldJson}
+                    onChange={(e) => {
+                      setCatScaffoldJson(e.target.value);
+                      setJsonError(null);
+                    }}
+                    placeholder={`{\n  "prompt": "Studio shot of {user_input}",\n  "negative_prompt": "blurry, low quality"\n}`}
+                    rows={6}
+                    className={`w-full bg-slate-900 border font-mono rounded-xl py-2 px-3 text-white focus:outline-none text-[11px] ${
+                      jsonError ? "border-red-650" : "border-slate-800"
+                    }`}
+                  />
+                  {jsonError && (
+                    <p className="text-[10px] text-red-400 font-bold">{jsonError}</p>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
@@ -1012,8 +1096,7 @@ export default function ProductionSettingsPage() {
                     <tr>
                       <th className="py-3 px-4">Order</th>
                       <th className="py-3 px-4">Category</th>
-                      <th className="py-3 px-4">Prefix</th>
-                      <th className="py-3 px-4">Suffix</th>
+                      <th className="py-3 px-4">Scaffold Pattern</th>
                       <th className="py-3 px-4">Defaults</th>
                       <th className="py-3 px-4">Status</th>
                       <th className="py-3 px-4 text-right">Actions</th>
@@ -1048,12 +1131,16 @@ export default function ProductionSettingsPage() {
                           <span className="text-[10px] text-slate-450 truncate max-w-xs block">{cat.description}</span>
                         </td>
 
-                        <td className="py-3 px-4 max-w-xs truncate italic text-slate-450">
-                          {cat.prompt_prefix || "(empty)"}
-                        </td>
-
-                        <td className="py-3 px-4 max-w-xs truncate italic text-slate-450">
-                          {cat.prompt_suffix || "(empty)"}
+                        <td className="py-3 px-4 max-w-xs truncate text-slate-400">
+                          {cat.scaffold_json ? (
+                            <span className="font-mono text-[9px] text-indigo-400">
+                              JSON: {JSON.stringify(cat.scaffold_json).substring(0, 50)}...
+                            </span>
+                          ) : (
+                            <span className="italic text-[10px] text-slate-450">
+                              Prefix: &ldquo;{cat.prompt_prefix || ""}&rdquo; &bull; Suffix: &ldquo;{cat.prompt_suffix || ""}&rdquo;
+                            </span>
+                          )}
                         </td>
 
                         <td className="py-3 px-4">

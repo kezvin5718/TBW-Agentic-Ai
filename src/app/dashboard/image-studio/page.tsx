@@ -185,6 +185,7 @@ function ImageStudioWorkspace() {
     description?: string;
     prompt_prefix?: string;
     prompt_suffix?: string;
+    scaffold_json?: unknown;
     default_model?: string;
     default_aspect_ratio?: string;
     sort_order: number;
@@ -628,7 +629,15 @@ function ImageStudioWorkspace() {
           if (selectedCategoryId !== "none") {
             const cat = categories.find(c => c.id === selectedCategoryId);
             if (cat) {
-              finalPromptVal = `${cat.prompt_prefix || ""}${rawInputVal}${cat.prompt_suffix || ""}`;
+              if (cat.scaffold_json) {
+                const userInputReplacement = rawInputVal.trim() ? rawInputVal : "as per the reference image";
+                const serialized = typeof cat.scaffold_json === "string"
+                  ? cat.scaffold_json
+                  : JSON.stringify(cat.scaffold_json);
+                finalPromptVal = serialized.replace(/{user_input}/g, userInputReplacement);
+              } else {
+                finalPromptVal = `${cat.prompt_prefix || ""}${rawInputVal}${cat.prompt_suffix || ""}`;
+              }
             }
           }
 

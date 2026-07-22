@@ -46,7 +46,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { name, description, prompt_prefix, prompt_suffix, default_model, default_aspect_ratio } = body;
+    const { name, description, prompt_prefix, prompt_suffix, scaffold_json, default_model, default_aspect_ratio } = body;
 
     if (!name) {
       return NextResponse.json({ error: "Missing required category fields" }, { status: 400 });
@@ -66,6 +66,7 @@ export async function POST(request: Request) {
         description: description || "",
         prompt_prefix: prompt_prefix || "",
         prompt_suffix: prompt_suffix || "",
+        scaffold_json: scaffold_json !== undefined ? scaffold_json : null,
         default_model: default_model || "",
         default_aspect_ratio: default_aspect_ratio || "1:1",
         sort_order: nextSortOrder,
@@ -100,17 +101,18 @@ export async function PUT(request: Request) {
     }
 
     const body = await request.json();
-    const { id, name, description, prompt_prefix, prompt_suffix, default_model, default_aspect_ratio, sort_order, is_active } = body;
+    const { id, name, description, prompt_prefix, prompt_suffix, scaffold_json, default_model, default_aspect_ratio, sort_order, is_active } = body;
 
     if (!id) {
       return NextResponse.json({ error: "Category ID is required" }, { status: 400 });
     }
 
-    const updatePayload: Record<string, string | number | boolean | undefined | null> = {};
+    const updatePayload: Record<string, unknown> = {};
     if (name !== undefined) updatePayload.name = name;
     if (description !== undefined) updatePayload.description = description;
     if (prompt_prefix !== undefined) updatePayload.prompt_prefix = prompt_prefix;
     if (prompt_suffix !== undefined) updatePayload.prompt_suffix = prompt_suffix;
+    if (scaffold_json !== undefined) updatePayload.scaffold_json = scaffold_json;
     if (default_model !== undefined) updatePayload.default_model = default_model;
     if (default_aspect_ratio !== undefined) updatePayload.default_aspect_ratio = default_aspect_ratio;
     if (sort_order !== undefined) updatePayload.sort_order = sort_order;
