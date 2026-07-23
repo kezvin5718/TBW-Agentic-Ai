@@ -18,14 +18,49 @@ export async function GET() {
     const role = user.user_metadata?.role || "client";
     const selectFields = role === "founder"
       ? "*"
-      : "id, name, description, category_type, engine, default_model, default_aspect_ratio, sort_order, is_active";
+      : "id,name,description,category_type,engine,default_model,default_aspect_ratio,sort_order,is_active";
 
-    const { data: categories, error } = await supabase
+    let categories: Array<Record<string, unknown>> | null = null;
+    const { data: catData, error } = await (supabase
       .from("generation_categories")
       .select(selectFields)
-      .order("sort_order", { ascending: true });
+      .order("sort_order", { ascending: true }) as unknown as { data: Array<Record<string, unknown>> | null; error: { message: string } | null });
 
-    if (error) throw error;
+    if (error) {
+      console.warn("Retrying categories fetch with legacy columns fallback due to:", error.message);
+      const fallbackFields = "id,name,description,prompt_prefix,prompt_suffix,default_model,default_aspect_ratio,sort_order,is_active";
+      const { data: legacyCategories, error: legacyErr } = await (supabase
+        .from("generation_categories")
+        .select(fallbackFields)
+        .order("sort_order", { ascending: true }) as unknown as { data: Array<Record<string, unknown>> | null; error: { message: string } | null });
+
+      if (legacyErr) throw legacyErr;
+
+      categories = (legacyCategories || []).map((cat: Record<string, unknown>) => ({
+        ...cat,
+        engine: cat.name === "Festival Post" ? "higgsfield" : "higgsfield",
+        category_type: cat.name === "Festival Post" ? "festival_post" : "standard",
+        scaffold_json: cat.name === "Festival Post" ? {
+          prompt: "A premium, minimalist 9:16 story-format festive creative for {festival_name}. Design style: {festival_details}. Aesthetic guidelines: use clean motifs and rich colors appropriate to {festival_name}, ensuring elegant negative space and safe margins for the 9:16 frame. Text Wish: {wish_text}. Tagline: {tagline_text}. Instructions: Render the typography clean and keep the text strings extremely short and exactly spelled as specified. If Wish or Tagline is empty, render NO text in the creative. Do not invent any text. Place the product seamlessly in the scene, adapting the styling to the product segments. House style: premium, elegant, minimal, no clutter."
+        } : undefined
+      }));
+    } else if (catData) {
+      categories = catData.map((cat: Record<string, unknown>) => {
+        if (cat.name === "Festival Post") {
+          return {
+            ...cat,
+            engine: "higgsfield",
+            default_model: "Nano Banana Pro",
+            category_type: "festival_post",
+            default_aspect_ratio: "9:16",
+            scaffold_json: cat.scaffold_json || {
+              prompt: "A premium, minimalist 9:16 story-format festive creative for {festival_name}. Design style: {festival_details}. Aesthetic guidelines: use clean motifs and rich colors appropriate to {festival_name}, ensuring elegant negative space and safe margins for the 9:16 frame. Text Wish: {wish_text}. Tagline: {tagline_text}. Instructions: Render the typography clean and keep the text strings extremely short and exactly spelled as specified. If Wish or Tagline is empty, render NO text in the creative. Do not invent any text. Place the product seamlessly in the scene, adapting the styling to the product segments. House style: premium, elegant, minimal, no clutter."
+            }
+          };
+        }
+        return cat;
+      });
+    }
 
     return NextResponse.json({ success: true, categories });
   } catch (error: unknown) {

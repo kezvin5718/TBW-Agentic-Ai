@@ -240,9 +240,40 @@ export async function GET() {
       }
     }
 
+    // Seeding/updating Generation Categories
+    const festivalScaffold = {
+      prompt: "A premium, minimalist 9:16 story-format festive creative for {festival_name}. Design style: {festival_details}. Aesthetic guidelines: use clean motifs and rich colors appropriate to {festival_name}, ensuring elegant negative space and safe margins for the 9:16 frame. Text Wish: {wish_text}. Tagline: {tagline_text}. Instructions: Render the typography clean and keep the text strings extremely short and exactly spelled as specified. If Wish or Tagline is empty, render NO text in the creative. Do not invent any text. Place the product seamlessly in the scene, adapting the styling to the product segments. House style: premium, elegant, minimal, no clutter."
+    };
+
+    // First delete any existing 'Festival Post' to ensure correct properties
+    await supabase
+      .from("generation_categories")
+      .delete()
+      .eq("name", "Festival Post");
+
+    const { error: seedCategoriesError } = await supabase
+      .from("generation_categories")
+      .insert([
+        {
+          name: "Festival Post",
+          description: "Premium story-format festive creatives with integrated wishes, taglines, and optional product placement.",
+          category_type: "festival_post",
+          engine: "higgsfield",
+          default_aspect_ratio: "9:16",
+          default_model: "Nano Banana Pro",
+          scaffold_json: festivalScaffold,
+          sort_order: 3,
+          is_active: true,
+        }
+      ]);
+
+    if (seedCategoriesError) {
+      console.error("Seeding generation categories failed:", seedCategoriesError);
+    }
+
     return NextResponse.json({
       success: true,
-      message: "Database successfully seeded with SWAD client, brand brain, plans, production tasks, and starter templates",
+      message: "Database successfully seeded with SWAD client, brand brain, plans, production tasks, starter templates, and categories",
       clientId: client.id,
       planId: plan.id,
     });

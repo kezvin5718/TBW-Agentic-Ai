@@ -125,15 +125,36 @@ export async function POST(request: Request) {
     let categoryData: { prompt_prefix?: string; prompt_suffix?: string; scaffold_json?: unknown } | null = null;
 
     if (categoryId) {
-      const { data: catData } = await supabase
+      const { data: catData, error: catErr } = await supabase
         .from("generation_categories")
-        .select("engine, category_type, prompt_prefix, prompt_suffix, scaffold_json")
+        .select("name, engine, category_type, prompt_prefix, prompt_suffix, scaffold_json")
         .eq("id", categoryId)
         .single();
-      if (catData) {
+      if (!catErr && catData) {
         categoryEngine = catData.engine || "higgsfield";
+        if ((catData as { name?: string }).name === "Festival Post") {
+          categoryEngine = "higgsfield";
+        }
         categoryType = catData.category_type || "standard";
         categoryData = catData;
+      } else {
+        const { data: legacyCat } = await supabase
+          .from("generation_categories")
+          .select("name, prompt_prefix, prompt_suffix, default_model")
+          .eq("id", categoryId)
+          .single();
+        if (legacyCat) {
+          const isFestival = legacyCat.name === "Festival Post";
+          categoryEngine = isFestival ? "higgsfield" : "higgsfield";
+          categoryType = isFestival ? "festival_post" : "standard";
+          categoryData = {
+            prompt_prefix: legacyCat.prompt_prefix || "",
+            prompt_suffix: legacyCat.prompt_suffix || "",
+            scaffold_json: isFestival ? {
+              prompt: "A premium, minimalist 9:16 story-format festive creative for {festival_name}. Design style: {festival_details}. Aesthetic guidelines: use clean motifs and rich colors appropriate to {festival_name}, ensuring elegant negative space and safe margins for the 9:16 frame. Text Wish: {wish_text}. Tagline: {tagline_text}. Instructions: Render the typography clean and keep the text strings extremely short and exactly spelled as specified. If Wish or Tagline is empty, render NO text in the creative. Do not invent any text. Place the product seamlessly in the scene, adapting the styling to the product segments. House style: premium, elegant, minimal, no clutter."
+            } : null
+          };
+        }
       }
     }
 

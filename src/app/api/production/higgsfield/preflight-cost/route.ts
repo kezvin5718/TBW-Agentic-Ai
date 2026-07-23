@@ -17,13 +17,25 @@ export async function POST(request: Request) {
     // Check category engine
     let categoryEngine = "higgsfield";
     if (categoryId) {
-      const { data: catData } = await supabase
+      const { data: catData, error: catErr } = await supabase
         .from("generation_categories")
-        .select("engine")
+        .select("name, engine")
         .eq("id", categoryId)
         .single();
-      if (catData?.engine) {
-        categoryEngine = catData.engine;
+      if (catErr) {
+        const { data: legacyCatData } = await supabase
+          .from("generation_categories")
+          .select("name")
+          .eq("id", categoryId)
+          .single();
+        if (legacyCatData?.name === "Festival Post") {
+          categoryEngine = "higgsfield";
+        }
+      } else if (catData) {
+        categoryEngine = catData.engine || "higgsfield";
+        if (catData.name === "Festival Post") {
+          categoryEngine = "higgsfield";
+        }
       }
     }
 
