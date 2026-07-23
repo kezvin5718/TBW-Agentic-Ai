@@ -78,6 +78,12 @@ Agency Shared Insights:
 ${agencyBrainDigest}
 
 Generate exactly ${totalSlots} content calendar slots. ${formatBreakdownInstruction}
+
+STRICT CREATIVE DIVERSITY RULES:
+1. Each generated content slot MUST be unique, creative, and highly specific to the brand, strategy pillars, and target platform. Do NOT repeat concepts, hooks, or CTAs. Every single slot must have genuinely distinct copywriting and themes.
+2. Implement Rotation Logic: Alternate between different content pillars, product segments, and hook formats so that consecutive slots do not repeat the same theme, format, or visual layout.
+3. Keep concepts concrete, detailed, and ready for production. Do NOT write generic placeholder concepts.
+
 For each slot, provide:
 - date: A string representing the post date spread across the month (format YYYY-MM-DD).
 - platform: "instagram" | "facebook" | "youtube".
@@ -85,6 +91,10 @@ For each slot, provide:
 - concept: The specific creative theme/concept (e.g. Swad Mango Pickles Nostalgia).
 - hook: The opening copy hook or visual sequence description (first 3 seconds).
 - CTA: The specific call to action (e.g. Shop pickles on Amazon, link in bio).`;
+
+    console.log("=================== GENERATE CALENDAR PROMPT ===================");
+    console.log(userMessage);
+    console.log("===============================================================");
 
     const jsonSchema = {
       type: "object",

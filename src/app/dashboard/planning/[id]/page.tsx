@@ -191,7 +191,12 @@ export default function PlanDetailPage({
         throw new Error(stratData.error || "Regeneration of strategy failed");
       }
 
-      // 3. Call calendar generator based on new strategy
+      // 3. Call calendar generator based on new strategy and maintain original counts
+      const existingSlots = plan.content_calendar as CalendarSlot[] || [];
+      const qtyStatic = existingSlots.filter(s => s.format === "static").length;
+      const qtyReel = existingSlots.filter(s => s.format === "reel").length;
+      const qtyCarousel = existingSlots.filter(s => s.format === "carousel").length;
+
       const calResponse = await fetch("/api/planning/generate-calendar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -200,6 +205,9 @@ export default function PlanDetailPage({
           month: plan.month,
           strategySummary: stratData.strategySummary,
           contentPillars: stratData.contentPillars,
+          qtyStatic,
+          qtyReel,
+          qtyCarousel,
         }),
       });
 
@@ -299,7 +307,12 @@ export default function PlanDetailPage({
       const stratData = await stratResponse.json();
       if (!stratResponse.ok) throw new Error(stratData.error || "Regeneration of strategy failed");
 
-      // 2. calendar
+      // 2. calendar and maintain original counts
+      const existingSlots = plan.content_calendar as CalendarSlot[] || [];
+      const qtyStatic = existingSlots.filter(s => s.format === "static").length;
+      const qtyReel = existingSlots.filter(s => s.format === "reel").length;
+      const qtyCarousel = existingSlots.filter(s => s.format === "carousel").length;
+
       const calResponse = await fetch("/api/planning/generate-calendar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -308,6 +321,9 @@ export default function PlanDetailPage({
           month: plan.month,
           strategySummary: stratData.strategySummary,
           contentPillars: stratData.contentPillars,
+          qtyStatic,
+          qtyReel,
+          qtyCarousel,
         }),
       });
 
