@@ -105,6 +105,7 @@ export async function POST(request: Request) {
       categoryId, 
       rawInput, 
       clientId,
+      postType,
       festivalName,
       festivalDetails,
       festivalWish,
@@ -119,10 +120,25 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Maximum batch limit is 10 product images" }, { status: 400 });
     }
 
-    // Resolve category type and engine
+    // Resolve post type and settings
+    const activePostType = postType || "regular";
+    const isFestivalPost = activePostType === "festival_post";
+
+    // Fetch festival_post_config from agency_settings
+    let festivalPostConfig: { scaffold?: { prompt?: string } } | null = null;
+    const { data: configRow } = await supabase
+      .from("agency_settings")
+      .select("value")
+      .eq("key", "festival_post_config")
+      .single();
+    if (configRow?.value) {
+      festivalPostConfig = configRow.value as { scaffold?: { prompt?: string } };
+    }
+
+    // Resolve category type and engine for the chosen Style Category
     let categoryEngine = "higgsfield";
     let categoryType = "standard";
-    let categoryData: { prompt_prefix?: string; prompt_suffix?: string; scaffold_json?: unknown } | null = null;
+    let categoryData: { name?: string; prompt_prefix?: string; prompt_suffix?: string; scaffold_json?: unknown } | null = null;
 
     if (categoryId) {
       const { data: catData, error: catErr } = await supabase
@@ -132,7 +148,7 @@ export async function POST(request: Request) {
         .single();
       if (!catErr && catData) {
         categoryEngine = catData.engine || "higgsfield";
-        if ((catData as { name?: string }).name === "Festival Post") {
+        if (catData.name === "Festival Post") {
           categoryEngine = "higgsfield";
         }
         categoryType = catData.category_type || "standard";
@@ -148,6 +164,7 @@ export async function POST(request: Request) {
           categoryEngine = isFestival ? "higgsfield" : "higgsfield";
           categoryType = isFestival ? "festival_post" : "standard";
           categoryData = {
+            name: legacyCat.name,
             prompt_prefix: legacyCat.prompt_prefix || "",
             prompt_suffix: legacyCat.prompt_suffix || "",
             scaffold_json: isFestival ? {
@@ -205,19 +222,58 @@ export async function POST(request: Request) {
 
     let scaffoldedPrompt = prompt;
 
-    if (categoryId && categoryData) {
-        if (categoryType === "festival_post" && categoryData.scaffold_json) {
-          const wishTextVal = festivalWish ? `"${festivalWish}"` : "NONE (do NOT render any text)";
-          const taglineTextVal = festivalTagline ? `"${festivalTagline}"` : "NONE (do NOT render any tagline)";
-          const serialized = typeof categoryData.scaffold_json === "string"
-            ? categoryData.scaffold_json
-            : JSON.stringify(categoryData.scaffold_json);
-          scaffoldedPrompt = serialized
-            .replace(/{festival_name}/g, festivalName || "Festival")
-            .replace(/{festival_details}/g, festivalDetails || "premium design motifs")
-            .replace(/{wish_text}/g, wishTextVal)
-            .replace(/{tagline_text}/g, taglineTextVal);
-        } else if (categoryData.scaffold_json) {
+    if (isFestivalPost) {
+      const festivalScaffoldPrompt = festivalPostConfig?.scaffold?.prompt || HIGGSFIELD_CONFIG.festivalPostScaffold;
+      const wishTextVal = festivalWish ? `"${festivalWish}"` : "NONE (do NOT render any text)";
+      const taglineTextVal = festivalTagline ? `"${festivalTagline}"` : "NONE (do NOT render any tagline)";
+      
+      let baseScaffold = festivalScaffoldPrompt;
+      
+      // If a style category is ALSO active, combine them
+      if (categoryId && categoryData) {
+        let styleScaffoldPrompt = "";
+        if (categoryData.scaffold_json) {
+          const parsed = typeof categoryData.scaffold_json === "string"
+            ? JSON.parse(categoryData.scaffold_json)
+            : categoryData.scaffold_json;
+          styleScaffoldPrompt = (parsed as Record<string, unknown>).prompt as string || JSON.stringify(parsed);
+        } else {
+          styleScaffoldPrompt = `${categoryData.prompt_prefix || ""} {user_input} ${categoryData.prompt_suffix || ""}`.trim();
+        }
+
+        // Combine scaffolds: Occasion/Format + Style Category Scaffold
+        baseScaffold = `${baseScaffold} Subject style guidelines: ${styleScaffoldPrompt}`;
+      }
+
+      // Replace user_input placeholder with user's free text/style details
+      const userFreeText = userInputText.trim() ? userInputText.trim() : "as per the reference image";
+      if (baseScaffold.includes("{user_input}")) {
+        baseScaffold = baseScaffold.replace(/{user_input}/g, userFreeText);
+      } else {
+        baseScaffold = `${baseScaffold} Subject description: ${userFreeText}.`;
+      }
+
+      // Replace client style guidelines if present
+      if (clientStyleBlock) {
+        baseScaffold = `${baseScaffold} Client visual style instructions: ${clientStyleBlock.trim()}.`;
+      }
+
+      // Replace style reference disambiguation if present
+      if (disambiguationBlock) {
+        baseScaffold = `${baseScaffold} ${disambiguationBlock}`;
+      }
+
+      // Finally, substitute Festival Post structured inputs
+      scaffoldedPrompt = baseScaffold
+        .replace(/{festival_name}/g, festivalName || "Festival")
+        .replace(/{festival_details}/g, festivalDetails || "premium design motifs")
+        .replace(/{wish_text}/g, wishTextVal)
+        .replace(/{tagline_text}/g, taglineTextVal);
+
+    } else {
+      // Regular Post Flow
+      if (categoryId && categoryData) {
+        if (categoryData.scaffold_json) {
           const userInputReplacement = combinedInput.trim() ? combinedInput : "as per the reference image";
           const serialized = typeof categoryData.scaffold_json === "string"
             ? categoryData.scaffold_json
@@ -231,7 +287,6 @@ export async function POST(request: Request) {
           if (prefix.toLowerCase().trim().endsWith(" of")) {
             const prepositionPattern = /^(on|in|against|under|with|at|above|behind|beside|between|over|through|upon|inside|outside)\b/i;
             if (prepositionPattern.test(userInputText.trim())) {
-              // Strip "of" from the prefix if user input describes a scene/preposition
               prefix = prefix.replace(/\s+of\s*$/i, "").trim();
             }
           }
@@ -249,8 +304,9 @@ export async function POST(request: Request) {
           const innerText = innerParts.join(" ");
           scaffoldedPrompt = `${prefix}${prefix && !prefix.endsWith(" ") ? " " : ""}${innerText}${suffix}`;
         }
-    } else {
-      scaffoldedPrompt = combinedInput;
+      } else {
+        scaffoldedPrompt = combinedInput;
+      }
     }
 
     // 3. Format reusable brand elements as <<<element_id>>> placeholders inside prompt text

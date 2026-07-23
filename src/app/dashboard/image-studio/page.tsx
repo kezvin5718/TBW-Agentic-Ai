@@ -72,6 +72,7 @@ function ImageStudioWorkspace() {
   const [lastPrompt, setLastPrompt] = useState<string | null>(null); // Undo state
   const [selectedModel, setSelectedModel] = useState("Nano Banana Pro");
   const [selectedRatio, setSelectedRatio] = useState("3:4");
+  const [postType, setPostType] = useState<"regular" | "festival_post">("regular");
   
   // SECTION 1: Style Reference (exactly 1 optional slot)
   const [styleReference, setStyleReference] = useState<{ mediaUrl: string; higgsfieldMediaRef: string; fileName: string } | null>(null);
@@ -251,18 +252,18 @@ function ImageStudioWorkspace() {
 
   // Lock Aspect Ratio for Festival Post category
   useEffect(() => {
-    if (selectedCategoryType === "festival_post") {
+    if (postType === "festival_post") {
       setSelectedRatio("9:16");
     }
-  }, [selectedCategoryType]);
+  }, [postType]);
 
   // Synchronize prompt state when festival fields change for validation fallback
   useEffect(() => {
-    if (selectedCategoryType === "festival_post") {
+    if (postType === "festival_post") {
       const summary = `Festival: ${festivalName || "Unspecified"}. Details: ${festivalDetails || "None"}. Wish: ${festivalWish || "None"}. Tagline: ${festivalTagline || "None"}`;
       setPrompt(summary);
     }
-  }, [festivalName, festivalDetails, festivalWish, festivalTagline, selectedCategoryType]);
+  }, [festivalName, festivalDetails, festivalWish, festivalTagline, postType]);
 
   // Load initial data
   useEffect(() => {
@@ -468,16 +469,24 @@ function ImageStudioWorkspace() {
   const handleProductFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
 
-    const maxAllowed = 10;
-    const remaining = maxAllowed - productImages.length;
-
+    const maxAllowed = postType === "festival_post" ? 1 : 10;
     let filesToUpload = Array.from(files);
-    if (filesToUpload.length > remaining) {
-      setProductUploadError(`Only ${remaining} more slots available. Selected the first ${remaining} images.`);
-      filesToUpload = filesToUpload.slice(0, remaining);
-    } else {
+
+    if (postType === "festival_post") {
+      filesToUpload = [filesToUpload[0]];
       setProductUploadError(null);
+      setProductImages([]); // Clear previous to replace the single slot
+    } else {
+      const remaining = maxAllowed - productImages.length;
+      if (filesToUpload.length > remaining) {
+        setProductUploadError(`Only ${remaining} more slots available. Selected the first ${remaining} images.`);
+        filesToUpload = filesToUpload.slice(0, remaining);
+      } else {
+        setProductUploadError(null);
+      }
     }
+
+    if (filesToUpload.length === 0) return;
 
     // Add placeholder entries with 'uploading' status
     const newItems = filesToUpload.map(file => ({
@@ -488,7 +497,11 @@ function ImageStudioWorkspace() {
       status: 'uploading' as const,
     }));
 
-    setProductImages(prev => [...prev, ...newItems]);
+    if (postType === "festival_post") {
+      setProductImages(newItems);
+    } else {
+      setProductImages(prev => [...prev, ...newItems]);
+    }
 
     // Process parallel uploads
     filesToUpload.forEach((file, idx) => {
@@ -644,16 +657,21 @@ function ImageStudioWorkspace() {
 
   // Requirement 1: Submit a separate generation for each product (concurrency max 3, queue the rest)
   const handleGenerate = async () => {
-    if (!prompt.trim() || productImages.length === 0) return;
+    if (!prompt.trim() || (postType !== "festival_post" && productImages.length === 0)) return;
 
+    const jobCount = (postType === "festival_post" && productImages.length === 0) ? 1 : productImages.length;
     // Requirement 3: Cost preview confirm dialog
-    const confirmMsg = `${productImages.length} images × ${selectedModel} = ~${totalCostEstimate.toFixed(1)} credits. Generate all?`;
+    const confirmMsg = `${jobCount} image${jobCount > 1 ? "s" : ""} × ${selectedModel} = ~${totalCostEstimate.toFixed(1)} credits. Generate all?`;
     if (!window.confirm(confirmMsg)) return;
 
     setGenerating(true);
     setGenerationError(null);
 
-    const initialJobs = productImages.map((img) => ({
+    const itemsToProcess = (postType === "festival_post" && productImages.length === 0)
+      ? [{ id: "festival-default", fileName: "No Product Placement", mediaUrl: "", higgsfieldMediaRef: "", promptOverride: undefined }]
+      : productImages;
+
+    const initialJobs = itemsToProcess.map((img) => ({
       id: img.id,
       fileName: img.fileName,
       productUrl: img.mediaUrl,
@@ -726,12 +744,12 @@ function ImageStudioWorkspace() {
               model: selectedModel,
               ratio: selectedRatio,
               styleReference,
-              productImages: [
+              productImages: job.productUrl ? [
                 {
                   mediaUrl: job.productUrl,
                   higgsfieldMediaRef: job.higgsfieldMediaRef,
                 }
-              ],
+              ] : undefined,
               taskId: taskId || null,
               branding: brandingEnabled && selectedBrandingClient ? {
                 enabled: true,
@@ -742,10 +760,11 @@ function ImageStudioWorkspace() {
               categoryId: selectedCategoryId !== "none" ? selectedCategoryId : undefined,
               rawInput: rawInputVal,
               clientId: selectedBrandingClient || undefined,
-              festivalName: selectedCategoryType === "festival_post" ? festivalName : undefined,
-              festivalDetails: selectedCategoryType === "festival_post" ? festivalDetails : undefined,
-              festivalWish: selectedCategoryType === "festival_post" ? festivalWish : undefined,
-              festivalTagline: selectedCategoryType === "festival_post" ? festivalTagline : undefined,
+              postType,
+              festivalName: postType === "festival_post" ? festivalName : undefined,
+              festivalDetails: postType === "festival_post" ? festivalDetails : undefined,
+              festivalWish: postType === "festival_post" ? festivalWish : undefined,
+              festivalTagline: postType === "festival_post" ? festivalTagline : undefined,
             }),
           });
 
@@ -986,7 +1005,8 @@ function ImageStudioWorkspace() {
   const costPerImage = engineIsOpenAi 
     ? 2.0 
     : (HIGGSFIELD_CONFIG.modelCosts[selectedModel as keyof typeof HIGGSFIELD_CONFIG.modelCosts] || 1.5);
-  const totalCostEstimate = productImages.length * costPerImage;
+  const jobCountForCost = (postType === "festival_post" && productImages.length === 0) ? 1 : productImages.length;
+  const totalCostEstimate = jobCountForCost * costPerImage;
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -1102,6 +1122,77 @@ function ImageStudioWorkspace() {
         </div>
       )}
 
+      {/* LEVEL 1 — POST TYPE SELECTOR */}
+      <div className="space-y-2.5">
+        <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+          Select Post Type
+        </label>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div
+            onClick={() => {
+              setPostType("regular");
+              // Check if currently selected category has default ratio
+              const cat = categories.find(c => c.id === selectedCategoryId);
+              if (cat?.default_aspect_ratio) {
+                setSelectedRatio(cat.default_aspect_ratio);
+              } else {
+                setSelectedRatio("3:4");
+              }
+            }}
+            className={`p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+              postType === "regular"
+                ? "bg-indigo-950/20 border-indigo-500/80 shadow-lg shadow-indigo-950/40"
+                : "bg-slate-950/80 border-slate-900 hover:border-slate-850"
+            }`}
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-white">Regular Post</h3>
+                <p className="text-[10px] text-slate-500 mt-1">Multi-image product batch shoots with style category presets</p>
+              </div>
+              <div
+                className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                  postType === "regular" ? "border-indigo-500 bg-indigo-500" : "border-slate-800"
+                }`}
+              >
+                {postType === "regular" && <div className="w-2 h-2 rounded-full bg-white" />}
+              </div>
+            </div>
+          </div>
+
+          <div
+            onClick={() => {
+              setPostType("festival_post");
+              setSelectedRatio("9:16"); // Lock ratio for Festival Post
+            }}
+            className={`p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+              postType === "festival_post"
+                ? "bg-indigo-950/20 border-indigo-500/80 shadow-lg shadow-indigo-950/40"
+                : "bg-slate-950/80 border-slate-900 hover:border-slate-850"
+            }`}
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center space-x-2">
+                  <span>Festival Post</span>
+                  <span className="bg-indigo-500/20 text-indigo-400 text-[8px] font-black uppercase px-2 py-0.5 rounded-full border border-indigo-500/30">
+                    New
+                  </span>
+                </h3>
+                <p className="text-[10px] text-slate-500 mt-1">Structured festive greetings, Wishes, Taglines & optional placement</p>
+              </div>
+              <div
+                className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                  postType === "festival_post" ? "border-indigo-500 bg-indigo-500" : "border-slate-800"
+                }`}
+              >
+                {postType === "festival_post" && <div className="w-2 h-2 rounded-full bg-white" />}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Main Form Glassmorphic Card */}
       <div className="bg-slate-950/40 border border-slate-900 backdrop-blur-md rounded-3xl p-6 space-y-6 shadow-2xl relative overflow-hidden">
         <div className="absolute top-0 right-0 w-48 h-48 bg-indigo-500/5 rounded-full blur-[60px] pointer-events-none" />
@@ -1187,16 +1278,20 @@ function ImageStudioWorkspace() {
           )}
         </div>
 
-        {/* SECTION 2: Product Images Batch (1 to 10) */}
+        {/* SECTION 2: Product Image Selection */}
         <div className="space-y-2.5">
           <div className="flex justify-between items-baseline">
             <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
-              Section 2 — Product Images
+              {postType === "festival_post" ? "Section 2 — Product Image" : "Section 2 — Product Images"}
             </label>
-            <span className="text-[10px] font-bold text-indigo-400">{productImages.length}/10 uploaded</span>
+            <span className="text-[10px] font-bold text-indigo-400">
+              {postType === "festival_post" ? `${productImages.length}/1 uploaded` : `${productImages.length}/10 uploaded`}
+            </span>
           </div>
           <p className="text-[10px] text-slate-500 mt-0.5">
-            Products to generate (1–10) — drives the total generation count
+            {postType === "festival_post" 
+              ? "Occasional product placement to overlay onto the festive creative (Optional)" 
+              : "Products to generate (1–10) — drives the total generation count"}
           </p>
 
           <input
@@ -1312,7 +1407,7 @@ function ImageStudioWorkspace() {
               </div>
             ))}
 
-            {productImages.length < 10 && (
+            {productImages.length < (postType === "festival_post" ? 1 : 10) && (
               <div
                 onClick={() => (engineIsOpenAi || higgsfieldConnected === true) && productFileInputRef.current?.click()}
                 className={`w-16 h-16 rounded-xl border border-dashed flex flex-col items-center justify-center transition-all duration-150 group ${
@@ -1374,7 +1469,7 @@ function ImageStudioWorkspace() {
             Select Generation Model
           </label>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {selectedCategoryType === "festival_post" ? (
+            {postType === "festival_post" ? (
               <>
                 <div
                   onClick={() => setSelectedModel("Nano Banana Pro")}
@@ -1498,7 +1593,7 @@ function ImageStudioWorkspace() {
             <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
               Aspect Ratio
             </label>
-            {selectedCategoryType === "festival_post" ? (
+            {postType === "festival_post" ? (
               <div className="inline-flex items-center space-x-1.5 bg-indigo-950/40 border border-indigo-900/60 px-3 py-1.5 rounded-full text-xs text-indigo-300 font-bold">
                 <span>9:16 Story (Locked for Festival Post)</span>
               </div>
@@ -1631,7 +1726,7 @@ function ImageStudioWorkspace() {
         </div>
 
         {/* Active prompt templates chips library */}
-        {templates.length > 0 && (
+        {postType === "regular" && templates.length > 0 && (
           <div className="space-y-2 border-t border-slate-900/60 pt-3">
             <div className="flex justify-between items-center">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
@@ -1684,7 +1779,7 @@ function ImageStudioWorkspace() {
               >
                 None
               </button>
-              {categories.filter(c => c.is_active).map((cat) => (
+              {categories.filter(c => c.is_active && c.name.toLowerCase() !== "festival post").map((cat) => (
                 <button
                   key={cat.id}
                   type="button"
@@ -1706,7 +1801,7 @@ function ImageStudioWorkspace() {
             </div>
           </div>
 
-          {selectedCategoryType === "festival_post" ? (
+          {postType === "festival_post" ? (
             <div className="space-y-4 bg-slate-950/40 border border-slate-900 rounded-3xl p-5 animate-in fade-in duration-200">
               <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-wider border-b border-slate-900 pb-2">
                 Festival Post Structured Details

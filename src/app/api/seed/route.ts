@@ -240,35 +240,27 @@ export async function GET() {
       }
     }
 
-    // Seeding/updating Generation Categories
+    // Seeding/updating Generation Settings / Categories
     const festivalScaffold = {
       prompt: "A premium, minimalist 9:16 story-format festive creative for {festival_name}. Design style: {festival_details}. Aesthetic guidelines: use clean motifs and rich colors appropriate to {festival_name}, ensuring elegant negative space and safe margins for the 9:16 frame. Text Wish: {wish_text}. Tagline: {tagline_text}. Instructions: Render the typography clean and keep the text strings extremely short and exactly spelled as specified. If Wish or Tagline is empty, render NO text in the creative. Do not invent any text. Place the product seamlessly in the scene, adapting the styling to the product segments. House style: premium, elegant, minimal, no clutter."
     };
 
-    // First delete any existing 'Festival Post' to ensure correct properties
+    // First delete any existing 'Festival Post' category row
     await supabase
       .from("generation_categories")
       .delete()
       .eq("name", "Festival Post");
 
-    const { error: seedCategoriesError } = await supabase
-      .from("generation_categories")
-      .insert([
-        {
-          name: "Festival Post",
-          description: "Premium story-format festive creatives with integrated wishes, taglines, and optional product placement.",
-          category_type: "festival_post",
-          engine: "higgsfield",
-          default_aspect_ratio: "9:16",
-          default_model: "Nano Banana Pro",
-          scaffold_json: festivalScaffold,
-          sort_order: 3,
-          is_active: true,
-        }
-      ]);
+    // Upsert the global festival_post_config into agency_settings
+    const { error: seedSettingsError } = await supabase
+      .from("agency_settings")
+      .upsert({
+        key: "festival_post_config",
+        value: { scaffold: festivalScaffold }
+      }, { onConflict: "key" });
 
-    if (seedCategoriesError) {
-      console.error("Seeding generation categories failed:", seedCategoriesError);
+    if (seedSettingsError) {
+      console.error("Seeding festival_post_config failed:", seedSettingsError);
     }
 
     return NextResponse.json({
