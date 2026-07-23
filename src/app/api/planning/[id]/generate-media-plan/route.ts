@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { complete } from "@/lib/llm";
+import { complete, safeJsonParse } from "@/lib/llm";
 import { MODEL_SMART } from "@/lib/llm-config";
 import { getAgencyBrainDigest } from "@/lib/agency-brain";
 
@@ -85,9 +85,13 @@ export async function POST(
         },
       });
 
-      if (response) {
-        mediaPlan = JSON.parse(response);
-      }
+        mediaPlan = safeJsonParse(response, {
+          objective: "OUTCOME_SALES",
+          campaign_structure: "1 Campaign -> 2 Ad Sets -> 4 Ads",
+          audience_suggestion: "Target demographics matching interest profile suggested by strategy.",
+          daily_budget_split: "Split daily budget evenly across active ad sets.",
+          expected_cpl_roas_range: "ROAS: 2.0x - 3.0x"
+        });
     } catch (llmErr) {
       console.error("AI Media Planner error:", llmErr);
       return NextResponse.json({ error: "Generative model failed to draft media plan." }, { status: 500 });

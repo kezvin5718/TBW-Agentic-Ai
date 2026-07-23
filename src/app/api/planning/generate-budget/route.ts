@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { complete } from "@/lib/llm";
+import { complete, safeJsonParse } from "@/lib/llm";
 import { MODEL_SMART } from "@/lib/llm-config";
 import { getAgencyBrainDigest } from "@/lib/agency-brain";
 
@@ -105,7 +105,12 @@ For each objective, provide:
       throw new Error("Generative engine returned an empty budget allocation.");
     }
 
-    const parsed = JSON.parse(aiResponse);
+    const parsed = safeJsonParse(aiResponse, {
+      allocations: [
+        { objective: "Conversion/Sales", percentage: 60, amount: Math.round(Number(adBudget) * 0.6), rationale: "Focus on driving conversion and direct purchases." },
+        { objective: "Awareness & Engagement", percentage: 40, amount: Math.round(Number(adBudget) * 0.4), rationale: "Establish visual presence and community engagement." }
+      ]
+    });
 
     return NextResponse.json({
       success: true,

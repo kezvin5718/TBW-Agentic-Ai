@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { complete } from "@/lib/llm";
+import { complete, safeJsonParse } from "@/lib/llm";
 import { MODEL_SMART } from "@/lib/llm-config";
 import AdmZip from "adm-zip";
 
@@ -172,7 +172,7 @@ ${textContent.substring(0, 15000)}`;
         entries: ExtractedEntry[];
       }
 
-      const result: ExtractedJSON = JSON.parse(cleanText);
+      const result: ExtractedJSON = safeJsonParse(cleanText, { entries: [] });
 
       return NextResponse.json({
         success: true,

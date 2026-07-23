@@ -1,5 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
-import { complete } from "./llm";
+import { complete, safeJsonParse } from "./llm";
 import { MODEL_SMART } from "./llm-config";
 import * as tools from "./jarvis-tools";
 
@@ -67,9 +67,11 @@ You MUST respond in JSON format matching this schema:
       jsonSchema: { type: "object" },
     });
 
-    const parsed: JarvisResponse = JSON.parse(
-      rawRes.replace(/```json/g, "").replace(/```/g, "").trim()
-    );
+    const parsed: JarvisResponse = safeJsonParse(rawRes, {
+      thought: "Failed to parse classification from LLM.",
+      tool: "none",
+      response: "I didn't understand the request. How can I help you today?"
+    });
 
     console.log("Bron Turn 1 parsed response:", parsed);
 

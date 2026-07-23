@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { complete } from "@/lib/llm";
+import { complete, safeJsonParse } from "@/lib/llm";
 import { MODEL_SMART } from "@/lib/llm-config";
 import { getAgencyBrainDigest } from "@/lib/agency-brain";
 
@@ -111,7 +111,20 @@ Generate exactly ${quota} content calendar slots. For each slot, provide:
       throw new Error("Generative engine returned an empty calendar.");
     }
 
-    const parsed = JSON.parse(aiResponse);
+    const defaultCalendarItems = Array.from({ length: quota }, (_, i) => {
+      const day = String(Math.min(28, (i + 1) * 5)).padStart(2, "0");
+      return {
+        date: `${month.substring(0, 7)}-${day}`,
+        platform: "instagram" as const,
+        format: "reel" as const,
+        concept: "Creative product showcase",
+        hook: "First 3 seconds hook sequence",
+        CTA: "Check link in bio"
+      };
+    });
+    const parsed = safeJsonParse(aiResponse, {
+      calendar: defaultCalendarItems
+    });
 
     // Sort calendar by date ascending
     const sortedCalendar = (parsed.calendar || []).sort(

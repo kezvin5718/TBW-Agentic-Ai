@@ -1,5 +1,5 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { complete } from "@/lib/llm";
+import { complete, safeJsonParse } from "@/lib/llm";
 import { MODEL_SMART } from "@/lib/llm-config";
 import { sendWhatsAppText } from "@/lib/integrations/whatsapp";
 import { executePublishForCreative } from "@/lib/publish-executor";
@@ -320,11 +320,7 @@ Only output the JSON object.`;
     }
 
     let optimizedJson: OptimizedGuidelines = {};
-    try {
-      optimizedJson = JSON.parse(cleanText);
-    } catch {
-      optimizedJson = {};
-    }
+      optimizedJson = safeJsonParse(cleanText, {});
 
     // Save learning consolidation back to Brand Brain
     const feedbackList = (feedbackNotes || []).map((f) => ({
@@ -452,7 +448,7 @@ Output JSON array strictly.`;
             cleanText = cleanText.replace(/\s*```$/, "");
           }
 
-          newLearnings = JSON.parse(cleanText);
+          newLearnings = safeJsonParse(cleanText, []);
         } catch (llmErr: unknown) {
           const msg = llmErr instanceof Error ? llmErr.message : String(llmErr);
           logs.push(`❌ LLM extraction of generalizable patterns failed: ${msg}`);

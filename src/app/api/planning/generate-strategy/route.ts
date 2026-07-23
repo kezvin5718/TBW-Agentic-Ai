@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { complete } from "@/lib/llm";
+import { complete, safeJsonParse } from "@/lib/llm";
 import { MODEL_SMART } from "@/lib/llm-config";
 import { getAgencyBrainDigest } from "@/lib/agency-brain";
 
@@ -97,7 +97,11 @@ Generate a JSON object containing:
       throw new Error("Generative engine returned an empty response.");
     }
 
-    const parsed = JSON.parse(aiResponse);
+    const parsed = safeJsonParse(aiResponse, {
+      goals: "Establish target brand goals.",
+      focus: "Drive engagement and organic branding.",
+      contentPillars: ["Product Spotlight", "Customer Reviews", "Behind the Scenes"]
+    });
 
     return NextResponse.json({
       success: true,

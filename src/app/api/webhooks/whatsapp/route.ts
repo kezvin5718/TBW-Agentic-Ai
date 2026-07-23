@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { complete } from "@/lib/llm";
+import { complete, safeJsonParse } from "@/lib/llm";
 import { MODEL_FAST } from "@/lib/llm-config";
 
 // GET: Webhook verification challenge for Meta Developer Portal
@@ -250,7 +250,7 @@ Generate a JSON object: { "classification": "category" }`;
       });
 
       if (aiResponse) {
-        classification = JSON.parse(aiResponse).classification || "other";
+        classification = safeJsonParse(aiResponse, { classification: "other" }).classification || "other";
       }
     } catch (llmErr) {
       console.error("LLM classification failed, defaulting to other:", llmErr);

@@ -14,6 +14,40 @@ export interface CompleteParams {
 }
 
 /**
+ * Utility to strip markdown code fences and clean up JSON string.
+ */
+export function stripMarkdownFences(text: string): string {
+  let cleaned = text.trim();
+  // Strip leading ```json
+  if (cleaned.startsWith("```json")) {
+    cleaned = cleaned.substring(7);
+  } else if (cleaned.startsWith("```")) {
+    cleaned = cleaned.substring(3);
+  }
+  // Strip trailing ```
+  if (cleaned.endsWith("```")) {
+    cleaned = cleaned.substring(0, cleaned.length - 3);
+  }
+  return cleaned.trim();
+}
+
+/**
+ * Robust JSON parse wrapper that strips markdown code fences,
+ * catches parsing errors, logs the raw text on failure, and returns a default value.
+ */
+export function safeJsonParse<T>(text: string, defaultValue: T): T {
+  const cleaned = stripMarkdownFences(text);
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch (err) {
+    console.error("❌ Failed to parse LLM JSON response. Error:", err);
+    console.error("👉 Raw response was:", text);
+    console.error("👉 Cleaned response was:", cleaned);
+    return defaultValue;
+  }
+}
+
+/**
  * Provider-agnostic LLM wrapper function.
  * Connects to OpenRouter completions endpoint, with mock fallback support.
  */

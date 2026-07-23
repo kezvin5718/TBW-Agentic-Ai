@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { complete } from "@/lib/llm";
+import { complete, safeJsonParse } from "@/lib/llm";
 import { MODEL_FAST } from "@/lib/llm-config";
 import { getAgencyBrainDigest } from "@/lib/agency-brain";
 
@@ -132,7 +132,7 @@ ${agencyBrainDigest}`;
       });
 
       if (response) {
-        generatedContent = JSON.parse(response);
+        generatedContent = safeJsonParse(response, {});
       }
     } catch (llmErr) {
       console.error("AI Generation failed:", llmErr);
