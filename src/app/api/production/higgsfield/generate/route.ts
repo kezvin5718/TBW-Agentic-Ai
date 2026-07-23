@@ -14,6 +14,7 @@ import {
   formatHiggsfieldMedias,
   validateGenerationParamsLocally,
   getReferenceCleanupTemplate,
+  type HiggsfieldCreds,
 } from "@/lib/higgsfield-mcp";
 
 const clientStyleCache = new Map<string, { block: string; timestamp: number }>();
@@ -91,7 +92,24 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { prompt, model, ratio, styleReference, productImages, taskId, brandElementIds, branding, categoryId, rawInput, clientId } = await request.json();
+    const bodyData = await request.json();
+    const { 
+      prompt, 
+      model, 
+      ratio, 
+      styleReference, 
+      productImages, 
+      taskId, 
+      brandElementIds, 
+      branding, 
+      categoryId, 
+      rawInput, 
+      clientId,
+      festivalName,
+      festivalDetails,
+      festivalWish,
+      festivalTagline 
+    } = bodyData;
 
     if (!prompt || !prompt.trim()) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
@@ -101,18 +119,39 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Maximum batch limit is 10 product images" }, { status: 400 });
     }
 
-    // 1. Connection check - fail loudly if Higgsfield is not connected
-    const creds = await getHiggsfieldCredentials();
-    if (!creds || creds.status !== "connected") {
-      return NextResponse.json(
-        { error: "Higgsfield MCP is not connected. Please connect Higgsfield in Settings -> Integrations first." },
-        { status: 400 }
-      );
+    // Resolve category type and engine
+    let categoryEngine = "higgsfield";
+    let categoryType = "standard";
+    let categoryData: { prompt_prefix?: string; prompt_suffix?: string; scaffold_json?: unknown } | null = null;
+
+    if (categoryId) {
+      const { data: catData } = await supabase
+        .from("generation_categories")
+        .select("engine, category_type, prompt_prefix, prompt_suffix, scaffold_json")
+        .eq("id", categoryId)
+        .single();
+      if (catData) {
+        categoryEngine = catData.engine || "higgsfield";
+        categoryType = catData.category_type || "standard";
+        categoryData = catData;
+      }
+    }
+
+    // 1. Connection check - fail loudly only if engine is Higgsfield
+    let creds: HiggsfieldCreds | null = null;
+    if (categoryEngine !== "openai") {
+      creds = await getHiggsfieldCredentials();
+      if (!creds || creds.status !== "connected") {
+        return NextResponse.json(
+          { error: "Higgsfield MCP is not connected. Please connect Higgsfield in Settings -> Integrations first." },
+          { status: 400 }
+        );
+      }
     }
 
     // 2. Resolve Machine ID mapping ('nano_banana_pro', 'nano_banana_2')
     let selectedModel = model || HIGGSFIELD_CONFIG.defaultModel;
-    if (HIGGSFIELD_CONFIG.models[selectedModel as keyof typeof HIGGSFIELD_CONFIG.models]) {
+    if (categoryEngine !== "openai" && HIGGSFIELD_CONFIG.models[selectedModel as keyof typeof HIGGSFIELD_CONFIG.models]) {
       selectedModel = HIGGSFIELD_CONFIG.models[selectedModel as keyof typeof HIGGSFIELD_CONFIG.models];
     }
     const selectedRatio = ratio || "3:4";
@@ -145,15 +184,19 @@ export async function POST(request: Request) {
 
     let scaffoldedPrompt = prompt;
 
-    if (categoryId) {
-      const { data: categoryData } = await supabase
-        .from("generation_categories")
-        .select("prompt_prefix, prompt_suffix, scaffold_json")
-        .eq("id", categoryId)
-        .single();
-
-      if (categoryData) {
-        if (categoryData.scaffold_json) {
+    if (categoryId && categoryData) {
+        if (categoryType === "festival_post" && categoryData.scaffold_json) {
+          const wishTextVal = festivalWish ? `"${festivalWish}"` : "NONE (do NOT render any text)";
+          const taglineTextVal = festivalTagline ? `"${festivalTagline}"` : "NONE (do NOT render any tagline)";
+          const serialized = typeof categoryData.scaffold_json === "string"
+            ? categoryData.scaffold_json
+            : JSON.stringify(categoryData.scaffold_json);
+          scaffoldedPrompt = serialized
+            .replace(/{festival_name}/g, festivalName || "Festival")
+            .replace(/{festival_details}/g, festivalDetails || "premium design motifs")
+            .replace(/{wish_text}/g, wishTextVal)
+            .replace(/{tagline_text}/g, taglineTextVal);
+        } else if (categoryData.scaffold_json) {
           const userInputReplacement = combinedInput.trim() ? combinedInput : "as per the reference image";
           const serialized = typeof categoryData.scaffold_json === "string"
             ? categoryData.scaffold_json
@@ -185,7 +228,6 @@ export async function POST(request: Request) {
           const innerText = innerParts.join(" ");
           scaffoldedPrompt = `${prefix}${prefix && !prefix.endsWith(" ") ? " " : ""}${innerText}${suffix}`;
         }
-      }
     } else {
       scaffoldedPrompt = combinedInput;
     }
@@ -211,12 +253,21 @@ export async function POST(request: Request) {
 
     const batchCount = Array.isArray(productImages) && productImages.length > 0 ? productImages.length : 1;
 
-    // 4. Preflight precise credit cost using params.get_cost: true
-    const preflight = await getHiggsfieldGenerationCost(creds, selectedModel, batchCount, {
-      prompt: formattedPrompt,
-      ratio: selectedRatio,
-    });
-    const totalCost = preflight.cost;
+    // 4. Preflight precise credit cost
+    let totalCost = 0;
+    let preflighted = false;
+
+    if (categoryEngine === "openai") {
+      totalCost = 2.0 * batchCount; // OpenAI Image generation cost
+      preflighted = true;
+    } else {
+      const preflight = await getHiggsfieldGenerationCost(creds, selectedModel, batchCount, {
+        prompt: formattedPrompt,
+        ratio: selectedRatio,
+      });
+      totalCost = preflight.cost;
+      preflighted = preflight.preflighted;
+    }
 
     // Verify monthly credit limit
     const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
@@ -231,13 +282,13 @@ export async function POST(request: Request) {
     // Log accurate preflighted credit cost to gen_costs table
     const { error: costErr } = await supabase.from("gen_costs").insert({
       task_id: taskId || null,
-      engine: selectedModel,
-      prompt: `[Batch: ${batchCount}] [Preflighted: ${preflight.preflighted ? "Yes" : "Estimate"}] [Ratio: ${selectedRatio}] ${formattedPrompt}`,
+      engine: categoryEngine === "openai" ? "openai" : selectedModel,
+      prompt: `[Batch: ${batchCount}] [Preflighted: ${preflighted ? "Yes" : "Estimate"}] [Ratio: ${selectedRatio}] ${formattedPrompt}`,
       cost: totalCost,
     });
 
     if (costErr) {
-      console.error("Failed to log Higgsfield cost:", costErr);
+      console.error("Failed to log generation cost:", costErr);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -263,6 +314,39 @@ export async function POST(request: Request) {
       );
     }
 
+    // Route to OpenAI engine if requested
+    if (categoryEngine === "openai") {
+      const crypto = await import("crypto");
+      const openaiJobId = `openai-job-${crypto.randomUUID().slice(0, 8)}`;
+      
+      activeJobs.set(openaiJobId, {
+        prompt: formattedPrompt,
+        model: "dall-e-3",
+        ratio: selectedRatio,
+        styleReference: styleReference || null,
+        productImages: processedProductImages,
+        taskId: taskId || null,
+        createdAt: Date.now(),
+        duration: 8000,
+        pollAfterSeconds: 2,
+        branding: branding || undefined,
+        categoryId: categoryId || undefined,
+        rawInput: rawInput || undefined,
+        engine: "openai",
+      });
+
+      return NextResponse.json({
+        success: true,
+        jobId: openaiJobId,
+        jobIds: [openaiJobId],
+        pollAfterSeconds: 2,
+        cost: totalCost,
+        preflightedCost: true,
+        creditWarning: limitExceeded,
+        totalCredits: accumulatedCost + totalCost
+      });
+    }
+
     // Requirement 1 & 2: Format medias using role: "image" for all media items. OMIT field when empty.
     const formattedMedias = formatHiggsfieldMedias(
       processedProductImages.map((p: { mediaId: string }) => p.mediaId),
@@ -271,8 +355,8 @@ export async function POST(request: Request) {
     );
 
     // Requirement 2: Validate request parameters against model constraints locally before sending
-    const modelInfo = creds.available_models_info?.find(m => m.id === selectedModel);
-    const mediaRoles = formattedMedias ? formattedMedias.map(m => m.role) : [];
+    const modelInfo = creds?.available_models_info?.find((m: { id: string }) => m.id === selectedModel);
+    const mediaRoles = formattedMedias ? formattedMedias.map((m: { role: string }) => m.role) : [];
     const validation = validateGenerationParamsLocally(modelInfo, selectedRatio, mediaRoles);
 
     if (!validation.valid) {
@@ -301,7 +385,7 @@ export async function POST(request: Request) {
     console.log(`⚙️ Higgsfield MCP [Generation Submit]: Invoking generate_image tool with params wrapper...`);
     let toolRes: unknown;
     try {
-      toolRes = await executeHiggsfieldGenerationTool(creds, "generate_image", generationParams);
+      toolRes = await executeHiggsfieldGenerationTool(creds!, "generate_image", generationParams);
     } catch (submitErr: unknown) {
       const submitMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
       console.error(`❌ Higgsfield MCP: generate_image tool submission failed: ${submitMsg}`);
@@ -355,7 +439,7 @@ export async function POST(request: Request) {
       jobIds: allSubmittedJobIds,
       pollAfterSeconds,
       cost: totalCost,
-      preflightedCost: preflight.preflighted,
+      preflightedCost: preflighted,
       creditWarning: limitExceeded,
       totalCredits: accumulatedCost + totalCost
     });

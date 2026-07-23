@@ -8,7 +8,9 @@ import {
   downloadAndStoreGeneratedMedia,
   uploadToSupabaseStorageDirect,
 } from "@/lib/higgsfield-mcp";
-import { applyClientBrandingOverlay } from "@/lib/branding-composite";
+import { applyClientBrandingOverlay, type ClientBrandingConfig } from "@/lib/branding-composite";
+import { generateOpenAIImage, OPENAI_IMAGE_CONFIG, describeImageViaVision } from "@/lib/integrations/openai-images";
+import * as crypto from "crypto";
 
 const MOCK_IMAGES = [
   "https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=800&auto=format&fit=crop",
@@ -47,10 +49,153 @@ export async function GET(
       });
     }
 
-    const creds = await getHiggsfieldCredentials();
     const serviceSupabase = createServiceRoleClient();
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
+
+    // Check if the job engine is OpenAI
+    if (job.engine === "openai" || job.model.startsWith("openai") || job.model.includes("dall-e")) {
+      const costPerImage = OPENAI_IMAGE_CONFIG.costPerImage;
+      try {
+        console.log(`[OpenAI Status Poll] Starting DALL-E generation for job: ${jobId}`);
+
+        // Resolve style reference via Vision if attached
+        let styleRefDescription = "";
+        if (job.styleReference?.mediaUrl) {
+          try {
+            console.log(`[OpenAI Status Poll] Analyzing style reference image: ${job.styleReference.mediaUrl}`);
+            const stylePrompt = "Analyze the style, background, lighting, and mood of this image. Provide a highly descriptive 50-word summary of the visual aesthetic (materials, colors, lighting, mood) to serve as a style prompt. Do not mention any text or products in the image.";
+            const desc = await describeImageViaVision(job.styleReference.mediaUrl, stylePrompt);
+            if (desc) styleRefDescription = desc.trim();
+          } catch (e) {
+            console.error("Failed to analyze style reference image:", e);
+          }
+        }
+
+        let composedDallePrompt = job.prompt;
+        if (styleRefDescription) {
+          composedDallePrompt = `[VISUAL STYLE REFERENCE: ${styleRefDescription}] ${composedDallePrompt}`;
+        }
+
+        // Call OpenAI DALL-E
+        const result = await generateOpenAIImage(composedDallePrompt, {
+          ratio: job.ratio,
+          productImageUrl: job.productImages[0]?.mediaUrl || null,
+        });
+
+        if (!result.success || !result.url) {
+          throw new Error(result.error || "OpenAI Image Generation returned no URL");
+        }
+
+        // 2. Download and store permanently
+        const permanentUrl = await downloadAndStoreGeneratedMedia(result.url, "openai");
+
+        // 3. Save clean original record to studio_generations
+        const { data: record, error: dbErr } = await serviceSupabase
+          .from("studio_generations")
+          .insert({
+            user_id: user?.id || null,
+            task_id: job.taskId || null,
+            category_id: job.categoryId || null,
+            raw_input: job.rawInput || null,
+            prompt: job.prompt,
+            model: job.model || "dall-e-3",
+            ratio: job.ratio,
+            reference_image_url: job.productImages[0]?.mediaUrl || null,
+            higgsfield_media_ref: jobId,
+            generated_image_url: permanentUrl,
+            cost: costPerImage,
+          })
+          .select()
+          .single();
+
+        if (dbErr) throw dbErr;
+
+        const returnRecords = [record];
+
+        // 4. Apply branding overlays if enabled
+        if (job.branding && job.branding.enabled && job.branding.clientId) {
+          try {
+            const fetchRes = await fetch(permanentUrl);
+            if (fetchRes.ok) {
+              const baseBuffer = Buffer.from(await fetchRes.arrayBuffer());
+              const { data: brandingConfig } = await serviceSupabase
+                .from("brand_brain")
+                .select("colors, logo_url, addresses")
+                .eq("client_id", job.branding.clientId)
+                .single();
+
+              const logoUrl = brandingConfig?.logo_url || null;
+              const address = brandingConfig?.addresses && Array.isArray(brandingConfig.addresses) && brandingConfig.addresses.length > 0
+                ? brandingConfig.addresses[0]
+                : null;
+
+              const brandedBuffer = await applyClientBrandingOverlay(baseBuffer, {
+                logoUrl,
+                addressText: address,
+                includeLogo: job.branding.includeLogo !== false,
+                includeAddress: job.branding.includeAddress !== false,
+                config: (brandingConfig as unknown) as ClientBrandingConfig,
+              });
+
+              const brandedFileName = `branded-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.png`;
+              const brandedPublicUrl = await uploadToSupabaseStorageDirect(brandedFileName, brandedBuffer, "image/png");
+
+              if (brandedPublicUrl) {
+                const { data: brandedRecord } = await serviceSupabase
+                  .from("studio_generations")
+                  .insert({
+                    user_id: user?.id || null,
+                    task_id: job.taskId || null,
+                    category_id: job.categoryId || null,
+                    raw_input: job.rawInput || null,
+                    prompt: `${job.prompt} [Client Branded]`,
+                    model: job.model || "dall-e-3",
+                    ratio: job.ratio,
+                    reference_image_url: job.productImages[0]?.mediaUrl || null,
+                    higgsfield_media_ref: `${jobId}-branded`,
+                    generated_image_url: brandedPublicUrl,
+                    cost: 0,
+                    parent_generation_id: record.id,
+                    branded_variant_url: brandedPublicUrl,
+                    is_branded: true,
+                  })
+                  .select()
+                  .single();
+
+                if (brandedRecord) {
+                  returnRecords.unshift(brandedRecord);
+                }
+
+                await serviceSupabase
+                  .from("studio_generations")
+                  .update({ branded_variant_url: brandedPublicUrl })
+                  .eq("id", record.id);
+              }
+            }
+          } catch (brandErr) {
+            console.error("❌ OpenAI Server Branding Overlay Error:", brandErr);
+          }
+        }
+
+        activeJobs.delete(jobId);
+        return NextResponse.json({
+          status: "completed",
+          records: returnRecords,
+        });
+
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`❌ OpenAI Generation Failed: ${msg}`);
+        activeJobs.delete(jobId);
+        return NextResponse.json({
+          status: "failed",
+          error: msg,
+        });
+      }
+    }
+
+    const creds = await getHiggsfieldCredentials();
 
     // 1. Real MCP Job Status Polling
     if (creds && creds.status === "connected") {
@@ -179,7 +324,7 @@ export async function GET(
                     addressText,
                     includeLogo: job.branding.includeLogo !== false,
                     includeAddress: job.branding.includeAddress !== false,
-                    config: brandingConfig,
+                    config: (brandingConfig as unknown) as ClientBrandingConfig,
                   });
 
                   const brandedFileName = `branded-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.png`;

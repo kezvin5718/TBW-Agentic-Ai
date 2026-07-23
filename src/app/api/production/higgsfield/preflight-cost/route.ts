@@ -12,7 +12,28 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { model, batchCount, prompt } = await request.json();
+    const { model, batchCount, prompt, categoryId } = await request.json();
+
+    // Check category engine
+    let categoryEngine = "higgsfield";
+    if (categoryId) {
+      const { data: catData } = await supabase
+        .from("generation_categories")
+        .select("engine")
+        .eq("id", categoryId)
+        .single();
+      if (catData?.engine) {
+        categoryEngine = catData.engine;
+      }
+    }
+
+    if (categoryEngine === "openai" || model === "openai") {
+      return NextResponse.json({
+        success: true,
+        cost: 2.0 * (batchCount || 1),
+        preflighted: true,
+      });
+    }
 
     // Resolve model machine ID
     let modelMachineId = model || HIGGSFIELD_CONFIG.defaultModel;

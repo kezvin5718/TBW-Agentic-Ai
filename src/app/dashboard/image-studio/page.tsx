@@ -133,6 +133,12 @@ function ImageStudioWorkspace() {
   // "Use for this Task" or "Save to Client" modal states
   const [savingRecord, setSavingRecord] = useState<GenerationRecord | null>(null);
   const [selectedClientId, setSelectedClientId] = useState("");
+
+  // Festival Post Form states (Requirement 2)
+  const [festivalName, setFestivalName] = useState("");
+  const [festivalDetails, setFestivalDetails] = useState("");
+  const [festivalWish, setFestivalWish] = useState("");
+  const [festivalTagline, setFestivalTagline] = useState("");
   const [savingToBrain, setSavingToBrain] = useState(false);
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
 
@@ -190,9 +196,15 @@ function ImageStudioWorkspace() {
     default_aspect_ratio?: string;
     sort_order: number;
     is_active: boolean;
+    engine?: string;
+    category_type?: string;
   }
   const [categories, setCategories] = useState<GenerationCategory[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>("none");
+  const selectedCategory = categories.find(c => c.id === selectedCategoryId);
+  const selectedCategoryType = selectedCategory?.category_type || "standard";
+  const categoryEngine = selectedCategory?.engine || "higgsfield";
+  const engineIsOpenAi = categoryEngine === "openai";
 
   const fetchCategories = async () => {
     try {
@@ -232,6 +244,21 @@ function ImageStudioWorkspace() {
     if (suggestedModel) setSelectedModel(suggestedModel);
     if (prefilledRatio) setSelectedRatio(prefilledRatio);
   }, [prefilledPrompt, suggestedModel, prefilledRatio]);
+
+  // Lock Aspect Ratio for Festival Post category
+  useEffect(() => {
+    if (selectedCategoryType === "festival_post") {
+      setSelectedRatio("9:16");
+    }
+  }, [selectedCategoryType]);
+
+  // Synchronize prompt state when festival fields change for validation fallback
+  useEffect(() => {
+    if (selectedCategoryType === "festival_post") {
+      const summary = `Festival: ${festivalName || "Unspecified"}. Details: ${festivalDetails || "None"}. Wish: ${festivalWish || "None"}. Tagline: ${festivalTagline || "None"}`;
+      setPrompt(summary);
+    }
+  }, [festivalName, festivalDetails, festivalWish, festivalTagline, selectedCategoryType]);
 
   // Load initial data
   useEffect(() => {
@@ -711,6 +738,10 @@ function ImageStudioWorkspace() {
               categoryId: selectedCategoryId !== "none" ? selectedCategoryId : undefined,
               rawInput: rawInputVal,
               clientId: selectedBrandingClient || undefined,
+              festivalName: selectedCategoryType === "festival_post" ? festivalName : undefined,
+              festivalDetails: selectedCategoryType === "festival_post" ? festivalDetails : undefined,
+              festivalWish: selectedCategoryType === "festival_post" ? festivalWish : undefined,
+              festivalTagline: selectedCategoryType === "festival_post" ? festivalTagline : undefined,
             }),
           });
 
@@ -945,14 +976,18 @@ function ImageStudioWorkspace() {
     }
   };
 
+
+
   // Cost calculation (based on product images count)
-  const costPerImage = HIGGSFIELD_CONFIG.modelCosts[selectedModel as keyof typeof HIGGSFIELD_CONFIG.modelCosts] || 1.5;
+  const costPerImage = engineIsOpenAi 
+    ? 2.0 
+    : (HIGGSFIELD_CONFIG.modelCosts[selectedModel as keyof typeof HIGGSFIELD_CONFIG.modelCosts] || 1.5);
   const totalCostEstimate = productImages.length * costPerImage;
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       {/* Connection Warning Banner */}
-      {higgsfieldConnected === false && (
+      {!engineIsOpenAi && higgsfieldConnected === false && (
         <div className="bg-amber-950/20 border border-amber-900/60 rounded-2xl p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-3 animate-in slide-in-from-top-4 duration-300">
           <div className="space-y-1">
             <span className="bg-amber-500/20 text-amber-300 text-[8px] font-black uppercase px-2 py-0.5 rounded-full border border-indigo-500/30">
@@ -1092,9 +1127,9 @@ function ImageStudioWorkspace() {
 
           {!styleReference ? (
             <div
-              onClick={() => higgsfieldConnected === true && styleFileInputRef.current?.click()}
+              onClick={() => (engineIsOpenAi || higgsfieldConnected === true) && styleFileInputRef.current?.click()}
               className={`w-full border border-dashed rounded-2xl p-4 text-center transition-all flex items-center justify-center space-x-2.5 group ${
-                higgsfieldConnected !== true
+                (!engineIsOpenAi && higgsfieldConnected !== true)
                   ? "border-slate-900 bg-slate-950/20 text-slate-600 cursor-not-allowed opacity-50"
                   : "border-purple-500/35 hover:border-purple-500/65 bg-purple-950/5 hover:bg-purple-950/10 cursor-pointer text-slate-350"
               }`}
@@ -1173,14 +1208,14 @@ function ImageStudioWorkspace() {
 
           <div
             onDragOver={(e) => {
-              if (higgsfieldConnected === true) {
+              if (engineIsOpenAi || higgsfieldConnected === true) {
                 e.preventDefault();
                 setIsDragging(true);
               }
             }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={(e) => {
-              if (higgsfieldConnected === true) {
+              if (engineIsOpenAi || higgsfieldConnected === true) {
                 e.preventDefault();
                 setIsDragging(false);
                 handleProductFiles(e.dataTransfer.files);
@@ -1275,9 +1310,9 @@ function ImageStudioWorkspace() {
 
             {productImages.length < 10 && (
               <div
-                onClick={() => higgsfieldConnected === true && productFileInputRef.current?.click()}
+                onClick={() => (engineIsOpenAi || higgsfieldConnected === true) && productFileInputRef.current?.click()}
                 className={`w-16 h-16 rounded-xl border border-dashed flex flex-col items-center justify-center transition-all duration-150 group ${
-                  higgsfieldConnected !== true
+                  (!engineIsOpenAi && higgsfieldConnected !== true)
                     ? "border-slate-900 bg-slate-950/20 cursor-not-allowed opacity-50"
                     : "border-slate-800 hover:border-indigo-500 bg-slate-900/10 hover:bg-indigo-950/5 cursor-pointer"
                 }`}
@@ -1398,21 +1433,28 @@ function ImageStudioWorkspace() {
             <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
               Aspect Ratio
             </label>
-            <div className="flex space-x-2">
-              {["9:16", "3:4", "1:1"].map((ratio) => (
-                <button
-                  key={ratio}
-                  onClick={() => setSelectedRatio(ratio)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
-                    selectedRatio === ratio
-                      ? "bg-indigo-600 border-indigo-500 text-white"
-                      : "bg-slate-950 border-slate-900 text-slate-400 hover:text-white"
-                  }`}
-                >
-                  {ratio}
-                </button>
-              ))}
-            </div>
+            {selectedCategoryType === "festival_post" ? (
+              <div className="inline-flex items-center space-x-1.5 bg-indigo-950/40 border border-indigo-900/60 px-3 py-1.5 rounded-full text-xs text-indigo-300 font-bold">
+                <span>9:16 Story (Locked for Festival Post)</span>
+              </div>
+            ) : (
+              <div className="flex space-x-2">
+                {["9:16", "3:4", "1:1"].map((ratio) => (
+                  <button
+                    key={ratio}
+                    type="button"
+                    onClick={() => setSelectedRatio(ratio)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
+                      selectedRatio === ratio
+                        ? "bg-indigo-600 border-indigo-500 text-white"
+                        : "bg-slate-950 border-slate-900 text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    {ratio}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="space-y-2 md:text-right">
@@ -1599,21 +1641,110 @@ function ImageStudioWorkspace() {
             </div>
           </div>
 
-          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
-            Creative Prompt
-          </label>
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            disabled={generating}
-            placeholder={
-              selectedCategoryId !== "none"
-                ? `Describe what you want — ${categories.find(c => c.id === selectedCategoryId)?.name || ""} styling is applied automatically`
-                : "Describe the image you want to generate in detail (e.g. 'Studio shot of a luxury smartwatch resting on black polished quartz stone, soft backlighting, dramatic product photography'...)"
-            }
-            rows={4}
-            className="w-full bg-slate-950/80 border border-slate-900 focus:border-indigo-500/50 rounded-2xl p-4 text-xs text-white placeholder-slate-650 focus:outline-none transition-colors"
-          />
+          {selectedCategoryType === "festival_post" ? (
+            <div className="space-y-4 bg-slate-950/40 border border-slate-900 rounded-3xl p-5 animate-in fade-in duration-200">
+              <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-wider border-b border-slate-900 pb-2">
+                Festival Post Structured Details
+              </h3>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">
+                    Festival Name <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={festivalName === "Diwali" || festivalName === "Holi" || festivalName === "Eid" || festivalName === "Christmas" || festivalName === "Raksha Bandhan" || festivalName === "Independence Day" || festivalName === "Rath Yatra" || festivalName === "" ? festivalName : "Custom"}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val !== "Custom") {
+                        setFestivalName(val);
+                      } else {
+                        setFestivalName("");
+                      }
+                    }}
+                    className="w-full bg-slate-950 border border-slate-900 focus:border-indigo-500/50 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-650 focus:outline-none cursor-pointer"
+                  >
+                    <option value="">-- Select Festival --</option>
+                    <option value="Diwali">Diwali</option>
+                    <option value="Holi">Holi</option>
+                    <option value="Eid">Eid</option>
+                    <option value="Christmas">Christmas</option>
+                    <option value="Raksha Bandhan">Raksha Bandhan</option>
+                    <option value="Independence Day">Independence Day</option>
+                    <option value="Rath Yatra">Rath Yatra</option>
+                    <option value="Custom">Custom (Type below)...</option>
+                  </select>
+                  
+                  {!(festivalName === "Diwali" || festivalName === "Holi" || festivalName === "Eid" || festivalName === "Christmas" || festivalName === "Raksha Bandhan" || festivalName === "Independence Day" || festivalName === "Rath Yatra" || festivalName === "") && (
+                    <input
+                      type="text"
+                      value={festivalName}
+                      onChange={(e) => setFestivalName(e.target.value)}
+                      placeholder="Type custom festival name..."
+                      className="w-full bg-slate-950 border border-slate-900 focus:border-indigo-500/50 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-650 focus:outline-none mt-1.5"
+                    />
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">
+                    Festival details / Vibe (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={festivalDetails}
+                    onChange={(e) => setFestivalDetails(e.target.value)}
+                    placeholder="e.g. glowing clay diyas, gold marigold garlands, sparkles"
+                    className="w-full bg-slate-950 border border-slate-900 focus:border-indigo-500/50 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-650 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">
+                    Text Holder 1: Festival Wish (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={festivalWish}
+                    onChange={(e) => setFestivalWish(e.target.value)}
+                    placeholder="e.g. Happy Diwali"
+                    className="w-full bg-slate-950 border border-slate-900 focus:border-indigo-500/50 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-650 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">
+                    Text Holder 2: Sub-Tagline (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={festivalTagline}
+                    onChange={(e) => setFestivalTagline(e.target.value)}
+                    placeholder="e.g. May light triumph over darkness"
+                    className="w-full bg-slate-950 border border-slate-900 focus:border-indigo-500/50 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-650 focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                Creative Prompt
+              </label>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                disabled={generating}
+                placeholder={
+                  selectedCategoryId !== "none"
+                    ? `Describe what you want — ${categories.find(c => c.id === selectedCategoryId)?.name || ""} styling is applied automatically`
+                    : "Describe the image you want to generate in detail (e.g. 'Studio shot of a luxury smartwatch resting on black polished quartz stone, soft backlighting, dramatic product photography'...)"
+                }
+                rows={4}
+                className="w-full bg-slate-950/80 border border-slate-900 focus:border-indigo-500/50 rounded-2xl p-4 text-xs text-white placeholder-slate-650 focus:outline-none transition-colors"
+              />
+            </>
+          )}
 
           {generationError && (
             <div className="p-3 bg-red-950/20 border border-red-900/40 rounded-xl text-red-200 text-[10px] flex items-center space-x-1.5">
@@ -1637,11 +1768,11 @@ function ImageStudioWorkspace() {
 
           <button
             onClick={handleGenerate}
-            disabled={generating || !prompt.trim() || productImages.length === 0 || higgsfieldConnected !== true}
+            disabled={generating || !prompt.trim() || productImages.length === 0 || (!engineIsOpenAi && higgsfieldConnected !== true)}
             className={`w-full py-3.5 px-6 rounded-2xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center space-x-2 ${
               generating
                 ? "bg-slate-900 border border-slate-800 text-slate-550"
-                : (higgsfieldConnected !== true)
+                : (!engineIsOpenAi && higgsfieldConnected !== true)
                 ? "bg-amber-950/10 border border-amber-950/30 text-amber-500/60 cursor-not-allowed"
                 : (!prompt.trim() || productImages.length === 0)
                 ? "bg-slate-950 border border-slate-900 text-slate-650 cursor-not-allowed"
@@ -1653,14 +1784,14 @@ function ImageStudioWorkspace() {
                 <Loader2 className="w-4 h-4 animate-spin text-indigo-450" />
                 <span>Generating Batch... ({generationProgress}%)</span>
               </>
-            ) : higgsfieldConnected === false ? (
+            ) : (!engineIsOpenAi && higgsfieldConnected === false) ? (
               <span>Higgsfield Not Connected</span>
             ) : productImages.length === 0 ? (
               <span>Upload product images to begin</span>
             ) : (
               <>
                 <Sparkles className="w-4 h-4" />
-                <span>Generate Higgsfield Batch ({productImages.length})</span>
+                <span>Generate Batch ({productImages.length})</span>
               </>
             )}
           </button>

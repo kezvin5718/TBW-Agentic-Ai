@@ -18,7 +18,7 @@ export async function GET() {
     const role = user.user_metadata?.role || "client";
     const selectFields = role === "founder"
       ? "*"
-      : "id, name, description, default_model, default_aspect_ratio, sort_order, is_active";
+      : "id, name, description, category_type, engine, default_model, default_aspect_ratio, sort_order, is_active";
 
     const { data: categories, error } = await supabase
       .from("generation_categories")
@@ -51,7 +51,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { name, description, prompt_prefix, prompt_suffix, scaffold_json, default_model, default_aspect_ratio } = body;
+    const { name, description, prompt_prefix, prompt_suffix, scaffold_json, default_model, default_aspect_ratio, engine, category_type } = body;
 
     if (!name) {
       return NextResponse.json({ error: "Missing required category fields" }, { status: 400 });
@@ -74,6 +74,8 @@ export async function POST(request: Request) {
         scaffold_json: scaffold_json !== undefined ? scaffold_json : null,
         default_model: default_model || "",
         default_aspect_ratio: default_aspect_ratio || "1:1",
+        engine: engine || "higgsfield",
+        category_type: category_type || "standard",
         sort_order: nextSortOrder,
         is_active: true,
       })
@@ -106,7 +108,7 @@ export async function PUT(request: Request) {
     }
 
     const body = await request.json();
-    const { id, name, description, prompt_prefix, prompt_suffix, scaffold_json, default_model, default_aspect_ratio, sort_order, is_active } = body;
+    const { id, name, description, prompt_prefix, prompt_suffix, scaffold_json, default_model, default_aspect_ratio, sort_order, is_active, engine, category_type } = body;
 
     if (!id) {
       return NextResponse.json({ error: "Category ID is required" }, { status: 400 });
@@ -122,6 +124,8 @@ export async function PUT(request: Request) {
     if (default_aspect_ratio !== undefined) updatePayload.default_aspect_ratio = default_aspect_ratio;
     if (sort_order !== undefined) updatePayload.sort_order = sort_order;
     if (is_active !== undefined) updatePayload.is_active = is_active;
+    if (engine !== undefined) updatePayload.engine = engine;
+    if (category_type !== undefined) updatePayload.category_type = category_type;
 
     const { data: updatedCategory, error } = await supabase
       .from("generation_categories")
