@@ -4,6 +4,8 @@ export const HIGGSFIELD_CONFIG = {
     "Nano Banana 2": "nano_banana_2",
     "nano_banana_pro": "nano_banana_pro",
     "nano_banana_2": "nano_banana_2",
+    "GPT Image 2": "gpt_image_2",
+    "gpt_image_2": "gpt_image_2",
   },
   modelCosts: {
     "nano_banana_pro": 1.5,
@@ -11,6 +13,8 @@ export const HIGGSFIELD_CONFIG = {
     "nano_banana": 1.0,
     "Nano Banana Pro": 1.5,
     "Nano Banana 2": 1.0,
+    "gpt_image_2": 2.0,
+    "GPT Image 2": 2.0,
   },
   defaultModel: "nano_banana_pro",
   defaultModelDisplayName: "Nano Banana Pro",

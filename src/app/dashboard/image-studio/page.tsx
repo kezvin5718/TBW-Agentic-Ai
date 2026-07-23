@@ -226,8 +226,12 @@ function ImageStudioWorkspace() {
       if (cat.default_model) {
         if (cat.default_model === "nano_banana_2" || cat.default_model === "Nano Banana 2") {
           setSelectedModel("Nano Banana 2");
-        } else if (cat.default_model === "nano_banana_pro" || cat.default_model === "Nano Banana Pro" || cat.default_model === "gpt_image") {
+        } else if (cat.default_model === "nano_banana_pro" || cat.default_model === "Nano Banana Pro") {
           setSelectedModel("Nano Banana Pro");
+        } else if (cat.default_model === "gpt_image_2" || cat.default_model === "GPT Image 2") {
+          setSelectedModel("GPT Image 2");
+        } else {
+          setSelectedModel(cat.default_model);
         }
       }
       if (cat.default_aspect_ratio) {
@@ -1370,60 +1374,121 @@ function ImageStudioWorkspace() {
             Select Generation Model
           </label>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div
-              onClick={() => setSelectedModel("Nano Banana 2")}
-              className={`p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
-                selectedModel === "Nano Banana 2"
-                  ? "bg-indigo-950/20 border-indigo-500/80 shadow-lg shadow-indigo-950/40"
-                  : "bg-slate-950/80 border-slate-900 hover:border-slate-800"
-              }`}
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <h4 className="text-xs font-bold text-white">Nano Banana 2</h4>
-                  <p className="text-[10px] text-slate-500 mt-1">Speed-optimized outputs for fast mockups</p>
-                </div>
+            {selectedCategoryType === "festival_post" ? (
+              <>
                 <div
-                  className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
-                    selectedModel === "Nano Banana 2"
-                      ? "border-indigo-500 bg-indigo-500"
-                      : "border-slate-800"
-                  }`}
-                >
-                  {selectedModel === "Nano Banana 2" && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                </div>
-              </div>
-            </div>
-
-            <div
-              onClick={() => setSelectedModel("Nano Banana Pro")}
-              className={`p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
-                selectedModel === "Nano Banana Pro"
-                  ? "bg-indigo-950/20 border-indigo-500/80 shadow-lg shadow-indigo-950/40"
-                  : "bg-slate-950/80 border-slate-900 hover:border-slate-800"
-              }`}
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <h4 className="text-xs font-bold text-white flex items-center space-x-1.5">
-                    <span>Nano Banana Pro</span>
-                    <span className="bg-indigo-500/20 text-indigo-400 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full border border-indigo-500/30">
-                      Default
-                    </span>
-                  </h4>
-                  <p className="text-[10px] text-slate-500 mt-1">High-quality, stylized ad layouts and assets</p>
-                </div>
-                <div
-                  className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
+                  onClick={() => setSelectedModel("Nano Banana Pro")}
+                  className={`p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
                     selectedModel === "Nano Banana Pro"
-                      ? "border-indigo-500 bg-indigo-500"
-                      : "border-slate-800"
+                      ? "bg-indigo-950/20 border-indigo-500/80 shadow-lg shadow-indigo-950/40"
+                      : "bg-slate-950/80 border-slate-900 hover:border-slate-800"
                   }`}
                 >
-                  {selectedModel === "Nano Banana Pro" && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-white flex items-center space-x-1.5">
+                        <span>Nano Banana Pro</span>
+                        <span className="bg-indigo-500/20 text-indigo-400 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full border border-indigo-500/30">
+                          Default
+                        </span>
+                      </h4>
+                      <p className="text-[10px] text-slate-500 mt-1">High-quality, stylized ad layouts and assets</p>
+                    </div>
+                    <div
+                      className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
+                        selectedModel === "Nano Banana Pro"
+                          ? "border-indigo-500 bg-indigo-500"
+                          : "border-slate-800"
+                      }`}
+                    >
+                      {selectedModel === "Nano Banana Pro" && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
+
+                <div
+                  onClick={() => setSelectedModel("GPT Image 2")}
+                  className={`p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                    selectedModel === "GPT Image 2"
+                      ? "bg-indigo-950/20 border-indigo-500/80 shadow-lg shadow-indigo-950/40"
+                      : "bg-slate-950/80 border-slate-900 hover:border-slate-800"
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-white">GPT Image 2</h4>
+                      <p className="text-[10px] text-slate-500 mt-1">DALL-E 3 powered photorealistic generation</p>
+                    </div>
+                    <div
+                      className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
+                        selectedModel === "GPT Image 2"
+                          ? "border-indigo-500 bg-indigo-500"
+                          : "border-slate-800"
+                      }`}
+                    >
+                      {selectedModel === "GPT Image 2" && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div
+                  onClick={() => setSelectedModel("Nano Banana 2")}
+                  className={`p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                    selectedModel === "Nano Banana 2"
+                      ? "bg-indigo-950/20 border-indigo-500/80 shadow-lg shadow-indigo-950/40"
+                      : "bg-slate-950/80 border-slate-900 hover:border-slate-800"
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-white">Nano Banana 2</h4>
+                      <p className="text-[10px] text-slate-500 mt-1">Speed-optimized outputs for fast mockups</p>
+                    </div>
+                    <div
+                      className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
+                        selectedModel === "Nano Banana 2"
+                          ? "border-indigo-500 bg-indigo-500"
+                          : "border-slate-800"
+                      }`}
+                    >
+                      {selectedModel === "Nano Banana 2" && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  onClick={() => setSelectedModel("Nano Banana Pro")}
+                  className={`p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                    selectedModel === "Nano Banana Pro"
+                      ? "bg-indigo-950/20 border-indigo-500/80 shadow-lg shadow-indigo-950/40"
+                      : "bg-slate-950/80 border-slate-900 hover:border-slate-800"
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-white flex items-center space-x-1.5">
+                        <span>Nano Banana Pro</span>
+                        <span className="bg-indigo-500/20 text-indigo-400 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full border border-indigo-500/30">
+                          Default
+                        </span>
+                      </h4>
+                      <p className="text-[10px] text-slate-500 mt-1">High-quality, stylized ad layouts and assets</p>
+                    </div>
+                    <div
+                      className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
+                        selectedModel === "Nano Banana Pro"
+                          ? "border-indigo-500 bg-indigo-500"
+                          : "border-slate-800"
+                      }`}
+                    >
+                      {selectedModel === "Nano Banana Pro" && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
 

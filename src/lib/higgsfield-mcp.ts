@@ -292,27 +292,61 @@ export function formatHiggsfieldMedias(
  * Validates request parameters against discovered model constraints locally before sending to server (Requirement 2)
  */
 export function validateGenerationParamsLocally(
-  modelInfo: { allowed_roles?: string[]; allowed_aspect_ratios?: string[] } | undefined,
+  modelInfo: { 
+    allowed_roles?: string[]; 
+    allowed_aspect_ratios?: string[]; 
+    aspect_ratios?: string[]; 
+    roles?: string[]; 
+    params?: Record<string, unknown>;
+  } | undefined,
   aspectRatio: string,
   mediaRoles: string[] = []
 ): { valid: boolean; error?: string } {
   if (!modelInfo) return { valid: true };
 
-  if (modelInfo.allowed_aspect_ratios && modelInfo.allowed_aspect_ratios.length > 0) {
-    if (!modelInfo.allowed_aspect_ratios.includes(aspectRatio)) {
+  const allowedRatios = modelInfo.allowed_aspect_ratios || modelInfo.aspect_ratios;
+  if (allowedRatios && allowedRatios.length > 0) {
+    if (!allowedRatios.includes(aspectRatio)) {
       return {
         valid: false,
-        error: `Aspect ratio '${aspectRatio}' is not supported by model. Allowed aspect ratios: [${modelInfo.allowed_aspect_ratios.join(", ")}]`,
+        error: `Aspect ratio '${aspectRatio}' is not supported by model. Allowed aspect ratios: [${allowedRatios.join(", ")}]`,
       };
     }
   }
 
-  if (modelInfo.allowed_roles && modelInfo.allowed_roles.length > 0) {
+  let allowedRoles: string[] | undefined = modelInfo.allowed_roles || modelInfo.roles;
+  if (!allowedRoles && modelInfo.params) {
+    const params = modelInfo.params as Record<string, unknown>;
+    const medias = params.medias as Record<string, unknown> | undefined;
+    if (medias) {
+      const items = medias.items as Record<string, unknown> | undefined;
+      if (items) {
+        const props = items.properties as Record<string, unknown> | undefined;
+        if (props) {
+          const role = props.role as Record<string, unknown> | undefined;
+          if (role && Array.isArray(role.enum)) {
+            allowedRoles = role.enum as string[];
+          }
+        }
+      }
+      if (!allowedRoles) {
+        const props = medias.properties as Record<string, unknown> | undefined;
+        if (props) {
+          const role = props.role as Record<string, unknown> | undefined;
+          if (role && Array.isArray(role.enum)) {
+            allowedRoles = role.enum as string[];
+          }
+        }
+      }
+    }
+  }
+
+  if (allowedRoles && allowedRoles.length > 0) {
     for (const role of mediaRoles) {
-      if (!modelInfo.allowed_roles.includes(role)) {
+      if (!allowedRoles.includes(role)) {
         return {
           valid: false,
-          error: `Media role '${role}' is not supported by model. Allowed media roles: [${modelInfo.allowed_roles.join(", ")}]`,
+          error: `Media role '${role}' is not supported by model. Allowed media roles: [${allowedRoles.join(", ")}]`,
         };
       }
     }
@@ -407,7 +441,7 @@ export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<
     console.log("⚙️ Higgsfield MCP [Discovered Models]:", JSON.stringify(discoveredModels, null, 2));
 
     // Requirement 1: Call models_explore get for each image model and log full raw response
-    const detailedModels: Array<{ id: string; name?: string; aspect_ratios?: string[]; params?: Record<string, unknown> }> = [];
+    const detailedModels: Array<{ id: string; name?: string; aspect_ratios?: string[]; allowed_aspect_ratios?: string[]; allowed_roles?: string[]; params?: Record<string, unknown> }> = [];
     for (const modelId of discoveredModels) {
       try {
         console.log(`⚙️ Higgsfield MCP [models_explore action: 'get' for '${modelId}']: Querying model specs...`);
@@ -424,6 +458,8 @@ export async function discoverHiggsfieldModels(creds: HiggsfieldCreds): Promise<
           id: modelId,
           name: (parsedGet.raw?.name || modelId) as string,
           aspect_ratios: (parsedGet.raw?.aspect_ratios || parsedGet.raw?.aspectRatios) as string[] | undefined,
+          allowed_aspect_ratios: (parsedGet.raw?.allowed_aspect_ratios || parsedGet.raw?.allowedAspectRatios || parsedGet.raw?.aspect_ratios || parsedGet.raw?.aspectRatios) as string[] | undefined,
+          allowed_roles: (parsedGet.raw?.allowed_roles || parsedGet.raw?.allowedRoles || parsedGet.raw?.roles) as string[] | undefined,
           params: parsedGet.raw?.params as Record<string, unknown> | undefined,
         });
       } catch (getErr) {

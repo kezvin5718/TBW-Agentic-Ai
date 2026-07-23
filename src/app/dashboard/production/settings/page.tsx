@@ -352,7 +352,7 @@ export default function ProductionSettingsPage() {
       setCatDescription(cat.description || "");
       setCatPromptPrefix(cat.prompt_prefix || "");
       setCatPromptSuffix(cat.prompt_suffix || "");
-      setCatDefaultModel(cat.default_model || "Nano Banana 2");
+      setCatDefaultModel(cat.default_model || (cat.name.toLowerCase() === "festival post" ? "Nano Banana Pro" : "Nano Banana 2"));
       setCatDefaultRatio(cat.default_aspect_ratio || "1:1");
       setCatIsActive(cat.is_active);
       if (cat.scaffold_json) {
@@ -1037,8 +1037,18 @@ export default function ProductionSettingsPage() {
                     onChange={(e) => setCatDefaultModel(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
                   >
-                    <option value="Nano Banana 2">Nano Banana 2</option>
-                    <option value="Nano Banana Pro">Nano Banana Pro</option>
+                    {catName.toLowerCase() === "festival post" ? (
+                      <>
+                        <option value="Nano Banana Pro">Nano Banana Pro</option>
+                        <option value="GPT Image 2">GPT Image 2</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="Nano Banana 2">Nano Banana 2</option>
+                        <option value="Nano Banana Pro">Nano Banana Pro</option>
+                        <option value="GPT Image 2">GPT Image 2</option>
+                      </>
+                    )}
                   </select>
                 </div>
 
