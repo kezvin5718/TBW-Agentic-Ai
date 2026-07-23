@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { clientId, month, strategySummary, contentPillars } = body;
+    const { clientId, month, strategySummary, contentPillars, qtyStatic, qtyReel, qtyCarousel } = body;
 
     if (!clientId || !month || !strategySummary) {
       return NextResponse.json({ error: "clientId, month, and strategySummary are required" }, { status: 400 });
@@ -46,7 +46,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Brand Brain not found" }, { status: 404 });
     }
 
-    const quota = client.deliverables_per_month || 4;
+    // Calculate total slots requested or fallback to quota
+    const hasQuantities = qtyStatic !== undefined && qtyReel !== undefined && qtyCarousel !== undefined;
+    const totalSlots = hasQuantities ? (Number(qtyStatic) + Number(qtyReel) + Number(qtyCarousel)) : (client.deliverables_per_month || 4);
+
+    let formatBreakdownInstruction = "";
+    if (hasQuantities) {
+      formatBreakdownInstruction = `Of these ${totalSlots} slots, exactly ${qtyStatic} must have format="static", exactly ${qtyReel} must have format="reel", and exactly ${qtyCarousel} must have format="carousel".`;
+    }
 
     // Fetch shared agency brain digest
     const agencyBrainDigest = await getAgencyBrainDigest();
@@ -56,7 +63,7 @@ export async function POST(request: Request) {
 
     const userMessage = `Brand: ${client.name}
 Month Target: ${month}
-Plan Quota: ${quota} deliverables (spread dates evenly across this month)
+Plan Quota: ${totalSlots} deliverables (spread dates evenly across this month)
 
 Brand Strategy Summary:
 ${strategySummary}
@@ -70,7 +77,8 @@ ${brandBrain.brand_brief || "None"}
 Agency Shared Insights:
 ${agencyBrainDigest}
 
-Generate exactly ${quota} content calendar slots. For each slot, provide:
+Generate exactly ${totalSlots} content calendar slots. ${formatBreakdownInstruction}
+For each slot, provide:
 - date: A string representing the post date spread across the month (format YYYY-MM-DD).
 - platform: "instagram" | "facebook" | "youtube".
 - format: "static" | "reel" | "carousel".
@@ -111,12 +119,12 @@ Generate exactly ${quota} content calendar slots. For each slot, provide:
       throw new Error("Generative engine returned an empty calendar.");
     }
 
-    const defaultCalendarItems = Array.from({ length: quota }, (_, i) => {
+    const defaultCalendarItems = Array.from({ length: totalSlots }, (_, i) => {
       const day = String(Math.min(28, (i + 1) * 5)).padStart(2, "0");
       return {
         date: `${month.substring(0, 7)}-${day}`,
         platform: "instagram" as const,
-        format: "reel" as const,
+        format: "reel" as "static" | "reel" | "carousel",
         concept: "Creative product showcase",
         hook: "First 3 seconds hook sequence",
         CTA: "Check link in bio"
@@ -126,8 +134,45 @@ Generate exactly ${quota} content calendar slots. For each slot, provide:
       calendar: defaultCalendarItems
     });
 
+    const slots = parsed.calendar || [];
+    // Pad or truncate to ensure correct length
+    while (slots.length < totalSlots) {
+      const day = String(Math.min(28, (slots.length + 1) * 3)).padStart(2, "0");
+      slots.push({
+        date: `${month.substring(0, 7)}-${day}`,
+        platform: "instagram",
+        format: "reel",
+        concept: "Creative product showcase",
+        hook: "First 3 seconds hook sequence",
+        CTA: "Check link in bio"
+      });
+    }
+    if (slots.length > totalSlots) {
+      slots.splice(totalSlots);
+    }
+
+    // Deterministically assign the requested quantities to guarantee alignment
+    if (hasQuantities) {
+      let staticAssigned = 0;
+      let reelAssigned = 0;
+      const staticTarget = Number(qtyStatic);
+      const reelTarget = Number(qtyReel);
+      
+      for (let i = 0; i < slots.length; i++) {
+        if (staticAssigned < staticTarget) {
+          slots[i].format = "static";
+          staticAssigned++;
+        } else if (reelAssigned < reelTarget) {
+          slots[i].format = "reel";
+          reelAssigned++;
+        } else {
+          slots[i].format = "carousel";
+        }
+      }
+    }
+
     // Sort calendar by date ascending
-    const sortedCalendar = (parsed.calendar || []).sort(
+    const sortedCalendar = slots.sort(
       (a: { date: string }, b: { date: string }) => new Date(a.date).getTime() - new Date(b.date).getTime()
     );
 

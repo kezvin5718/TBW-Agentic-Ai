@@ -11,7 +11,8 @@ import {
   Plus,
   Trash2,
   CheckCircle2,
-  Briefcase
+  Briefcase,
+  AlertTriangle
 } from "lucide-react";
 
 export default function PlanningIndexPage() {
@@ -68,6 +69,9 @@ export default function PlanningIndexPage() {
 
   // Step 2 states (Calendar)
   const [calendarSlots, setCalendarSlots] = useState<CalendarSlot[]>([]);
+  const [qtyStatic, setQtyStatic] = useState(0);
+  const [qtyReel, setQtyReel] = useState(0);
+  const [qtyCarousel, setQtyCarousel] = useState(0);
 
   // Step 3 states (Budget)
   const [budgetAllocations, setBudgetAllocations] = useState<BudgetAllocation[]>([]);
@@ -103,6 +107,19 @@ export default function PlanningIndexPage() {
   useEffect(() => {
     fetchIndexData();
   }, [fetchIndexData]);
+
+  useEffect(() => {
+    if (selectedClient) {
+      const clientObj = clients.find(c => c.id === selectedClient);
+      const total = clientObj?.deliverables_per_month || 10;
+      const reels = Math.max(0, Math.floor(total * 0.6));
+      const carousels = Math.max(0, Math.floor(total * 0.2));
+      const statics = Math.max(0, total - reels - carousels);
+      setQtyReel(reels);
+      setQtyCarousel(carousels);
+      setQtyStatic(statics);
+    }
+  }, [selectedClient, clients]);
 
   const handleStartWizard = () => {
     if (clients.length === 0) {
@@ -174,6 +191,9 @@ export default function PlanningIndexPage() {
           month: selectedMonth,
           strategySummary,
           contentPillars: pillars,
+          qtyStatic,
+          qtyReel,
+          qtyCarousel,
         }),
       });
 
@@ -467,6 +487,75 @@ export default function PlanningIndexPage() {
                     </div>
                   </div>
 
+                  {/* Format Quantity Planner */}
+                  <div className="space-y-4 pt-4 border-t border-slate-900/60">
+                    <div>
+                      <h4 className="text-xs font-bold text-white uppercase tracking-wider">Format Quantity Planner</h4>
+                      <p className="text-[10px] text-slate-500 mt-0.5">Specify the quantities per format to pre-tag calendar slots upon generation</p>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-4 text-xs">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Static Posts</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={qtyStatic}
+                          onChange={(e) => setQtyStatic(Math.max(0, parseInt(e.target.value) || 0))}
+                          className="w-full bg-slate-900/45 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Reels</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={qtyReel}
+                          onChange={(e) => setQtyReel(Math.max(0, parseInt(e.target.value) || 0))}
+                          className="w-full bg-slate-900/45 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Carousels</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={qtyCarousel}
+                          onChange={(e) => setQtyCarousel(Math.max(0, parseInt(e.target.value) || 0))}
+                          className="w-full bg-slate-900/45 border border-slate-800 rounded-xl py-2 px-3 text-white focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Reconciliation & Mismatch warnings */}
+                    {(() => {
+                      const clientObj = clients.find(c => c.id === selectedClient);
+                      const targetVal = clientObj?.deliverables_per_month;
+                      const sumVal = Number(qtyStatic) + Number(qtyReel) + Number(qtyCarousel);
+                      const hasMismatch = targetVal !== undefined && sumVal !== targetVal;
+                      
+                      return (
+                        <div className="space-y-2 text-xs">
+                          <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400 bg-slate-950/20 border border-slate-900 p-2.5 rounded-lg">
+                            <span>Total Scheduled Posts: <strong className="text-white">{sumVal}</strong></span>
+                            {targetVal !== undefined && (
+                              <span>Client Profile Target: <strong className="text-white">{targetVal}</strong></span>
+                            )}
+                          </div>
+                          {hasMismatch && (
+                            <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-3 flex items-start space-x-2 text-[10px] text-amber-300 font-semibold animate-in fade-in duration-200">
+                              <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                              <div>
+                                <p className="font-bold text-white">Target Quota Mismatch</p>
+                                <p className="font-normal mt-0.5">The total quantity of formats ({sumVal}) does not match the client profile target ({targetVal}). Please reconcile or verify if you wish to override this.</p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
                   <div className="flex items-center justify-between pt-6 border-t border-slate-900 mt-8 text-xs">
                     <button
                       type="button"
@@ -506,6 +595,23 @@ export default function PlanningIndexPage() {
                       <span>Add Slot</span>
                     </button>
                   </div>
+
+                  {(() => {
+                    const clientObj = clients.find(c => c.id === selectedClient);
+                    const targetVal = clientObj?.deliverables_per_month;
+                    const hasMismatch = targetVal !== undefined && calendarSlots.length !== targetVal;
+                    
+                    if (!hasMismatch) return null;
+                    return (
+                      <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-3 flex items-start space-x-2 text-[10px] text-amber-300 font-semibold animate-in fade-in duration-200">
+                        <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-bold text-white">Target Quota Mismatch</p>
+                          <p className="font-normal mt-0.5">This plan currently contains {calendarSlots.length} content slots, but the client profile specifies a target of {targetVal} deliverables per month.</p>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   <div className="space-y-4 max-h-[400px] overflow-y-auto pr-1">
                     {calendarSlots.map((slot, idx) => (
