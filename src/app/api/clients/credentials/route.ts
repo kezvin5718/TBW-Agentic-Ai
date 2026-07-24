@@ -53,14 +53,27 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { clientId, metaPageToken, igBusinessId } = body;
+    const { clientId, metaPageToken, igBusinessId, metaPageId } = body;
 
-    if (!clientId || !metaPageToken || !igBusinessId) {
-      return NextResponse.json({ error: "Missing required credential parameters" }, { status: 400 });
+    if (!clientId || !igBusinessId || !metaPageId) {
+      return NextResponse.json({ error: "Missing required credential parameters (clientId, igBusinessId, metaPageId are required)" }, { status: 400 });
     }
 
-    // Encrypt the token
-    const encryptedToken = encrypt(metaPageToken);
+    let encryptedToken = "";
+    if (metaPageToken) {
+      encryptedToken = encrypt(metaPageToken);
+    } else {
+      const { data: existing } = await supabase
+        .from("client_credentials")
+        .select("meta_page_token_encrypted")
+        .eq("client_id", clientId)
+        .maybeSingle();
+
+      if (!existing) {
+        return NextResponse.json({ error: "Meta Page Access Token is required for new configurations" }, { status: 400 });
+      }
+      encryptedToken = existing.meta_page_token_encrypted;
+    }
 
     // Upsert into client_credentials
     const { data, error } = await supabase
@@ -70,6 +83,7 @@ export async function POST(request: Request) {
           client_id: clientId,
           meta_page_token_encrypted: encryptedToken,
           ig_business_id: igBusinessId,
+          meta_page_id: metaPageId,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "client_id" }

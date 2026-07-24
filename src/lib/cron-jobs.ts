@@ -2,7 +2,7 @@ import { createServiceRoleClient } from "@/lib/supabase/server";
 import { complete, safeJsonParse } from "@/lib/llm";
 import { MODEL_SMART } from "@/lib/llm-config";
 import { sendWhatsAppText } from "@/lib/integrations/whatsapp";
-import { executePublishForCreative } from "@/lib/publish-executor";
+import { executePublishForCreative, executePublishForScheduledPost } from "@/lib/publish-executor";
 export { runAdsAutopilot } from "@/lib/ads-autopilot";
 
 // 1. Jarvis Morning Briefing
@@ -160,10 +160,7 @@ export async function runPublishingScheduler() {
   const supabase = createServiceRoleClient();
   const nowStr = new Date().toISOString();
 
-  // Fetch creatives where:
-  // - client_approval = 'approved'
-  // - published_at IS NULL
-  // - linked task deadline <= now
+  // A. Fetch due creatives from standard queue
   const { data: dueCreatives, error: fetchErr } = await supabase
     .from("creatives")
     .select("*, tasks(*)")
@@ -176,16 +173,32 @@ export async function runPublishingScheduler() {
     throw fetchErr;
   }
 
-  const validCreatives = (dueCreatives || []).filter(c => c.tasks !== null);
+  // B. Fetch due manual scheduled posts
+  const { data: dueScheduledPosts, error: fetchScheduledErr } = await supabase
+    .from("scheduled_posts")
+    .select("*")
+    .eq("status", "scheduled")
+    .lte("scheduled_for", nowStr);
 
-  console.log(`Cron publishing: Found ${validCreatives.length} due creatives at ${nowStr}`);
+  if (fetchScheduledErr) {
+    console.error("Failed to query due scheduled posts for cron publish:", fetchScheduledErr);
+    throw fetchScheduledErr;
+  }
+
+  const validCreatives = (dueCreatives || []).filter(c => c.tasks !== null);
+  const validScheduledPosts = dueScheduledPosts || [];
+
+  console.log(`Cron publishing: Found ${validCreatives.length} due creatives, ${validScheduledPosts.length} due scheduled posts at ${nowStr}`);
 
   const results = [];
+  
+  // 1. Process standard creatives
   for (const creative of validCreatives) {
     try {
       const res = await executePublishForCreative(creative.id);
       results.push({
-        creativeId: creative.id,
+        type: "creative",
+        id: creative.id,
         success: res.success,
         platformPostId: res.platformPostId,
         error: res.error,
@@ -193,7 +206,30 @@ export async function runPublishingScheduler() {
     } catch (err: unknown) {
       console.error(`Cron publishing failed for creative ${creative.id}:`, err);
       results.push({
-        creativeId: creative.id,
+        type: "creative",
+        id: creative.id,
+        success: false,
+        error: err instanceof Error ? err.message : "Unknown error inside cron loop",
+      });
+    }
+  }
+
+  // 2. Process manual scheduled posts
+  for (const post of validScheduledPosts) {
+    try {
+      const res = await executePublishForScheduledPost(post.id);
+      results.push({
+        type: "scheduled_post",
+        id: post.id,
+        success: res.success,
+        platformPostId: res.platformPostId,
+        error: res.error,
+      });
+    } catch (err: unknown) {
+      console.error(`Cron publishing failed for scheduled post ${post.id}:`, err);
+      results.push({
+        type: "scheduled_post",
+        id: post.id,
         success: false,
         error: err instanceof Error ? err.message : "Unknown error inside cron loop",
       });
@@ -201,7 +237,7 @@ export async function runPublishingScheduler() {
   }
 
   return {
-    processed: validCreatives.length,
+    processed: validCreatives.length + validScheduledPosts.length,
     results,
   };
 }
