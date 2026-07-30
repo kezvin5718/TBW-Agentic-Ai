@@ -59,3 +59,6 @@ CREATE POLICY "Manage scheduled posts" ON public.scheduled_posts
       WHERE profiles.id = auth.uid() AND (profiles.role = 'founder' OR profiles.role = 'employee')
     )
   );
+
+-- Add resolution column to gen_costs table
+ALTER TABLE public.gen_costs ADD COLUMN IF NOT EXISTS resolution TEXT;

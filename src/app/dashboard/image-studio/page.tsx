@@ -207,6 +207,105 @@ function ImageStudioWorkspace() {
   const categoryEngine = selectedCategory?.engine || "higgsfield";
   const engineIsOpenAi = categoryEngine === "openai";
 
+  const [selectedResolution, setSelectedResolution] = useState<string | null>(null);
+
+  interface ModelSpec {
+    id: string;
+    name: string;
+    resolutions?: string[];
+    allowed_resolutions?: string[];
+    params?: Record<string, unknown>;
+  }
+
+  const [modelsInfo, setModelsInfo] = useState<ModelSpec[]>([]);
+  const [preflightCost, setPreflightCost] = useState<number | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
+
+  // Reset resolution when model changes so they must actively select a valid one
+  useEffect(() => {
+    setSelectedResolution(null);
+  }, [selectedModel]);
+
+  const fetchModels = async () => {
+    try {
+      const res = await fetch("/api/production/models");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.models) {
+          setModelsInfo(data.models);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load model specifications:", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchModels();
+  }, []);
+
+  const getSupportedResolutionsForModel = (modelName: string): string[] => {
+    const matched = modelsInfo.find(m => m.name === modelName || m.id === modelName);
+    if (matched) {
+      if (matched.resolutions && Array.isArray(matched.resolutions)) {
+        return matched.resolutions.map((r) => r.toLowerCase());
+      }
+      if (matched.allowed_resolutions && Array.isArray(matched.allowed_resolutions)) {
+        return matched.allowed_resolutions.map((r) => r.toLowerCase());
+      }
+      if (matched.params && typeof matched.params === "object") {
+        const params = matched.params;
+        const resolutionVal = params.resolution as Record<string, unknown> | undefined;
+        const propertiesVal = params.properties as Record<string, unknown> | undefined;
+        const resField = resolutionVal || (propertiesVal?.resolution as Record<string, unknown> | undefined);
+        if (resField && Array.isArray(resField.enum)) {
+          return resField.enum.map((r: unknown) => String(r).toLowerCase());
+        }
+      }
+    }
+    const lowerName = modelName.toLowerCase();
+    if (lowerName.includes("gpt") || lowerName.includes("openai")) {
+      return ["1k"];
+    }
+    return ["1k", "2k", "4k"];
+  };
+
+  const jobCountForCost = (postType === "festival_post" && productImages.length === 0) ? 1 : productImages.length;
+
+  useEffect(() => {
+    if (!selectedModel || !selectedResolution) {
+      setPreflightCost(null);
+      return;
+    }
+
+    const fetchCost = async () => {
+      setPreflightLoading(true);
+      try {
+        const res = await fetch("/api/production/higgsfield/preflight-cost", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: selectedModel,
+            batchCount: jobCountForCost,
+            resolution: selectedResolution,
+            prompt: prompt || "Generate a premium brand image",
+            categoryId: selectedCategoryId !== "none" ? selectedCategoryId : undefined,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPreflightCost(data.cost);
+        }
+      } catch (err) {
+        console.error("Error preflighting cost:", err);
+      } finally {
+        setPreflightLoading(false);
+      }
+    };
+
+    fetchCost();
+  }, [selectedModel, selectedResolution, jobCountForCost, prompt, selectedCategoryId]);
+
   const fetchCategories = async () => {
     try {
       const res = await fetch("/api/production/categories");
@@ -1001,12 +1100,11 @@ function ImageStudioWorkspace() {
 
 
 
-  // Cost calculation (based on product images count)
+  // Cost calculation (based on product images count or preflight cost)
   const costPerImage = engineIsOpenAi 
     ? 2.0 
     : (HIGGSFIELD_CONFIG.modelCosts[selectedModel as keyof typeof HIGGSFIELD_CONFIG.modelCosts] || 1.5);
-  const jobCountForCost = (postType === "festival_post" && productImages.length === 0) ? 1 : productImages.length;
-  const totalCostEstimate = jobCountForCost * costPerImage;
+  const totalCostEstimate = preflightCost !== null ? preflightCost : (jobCountForCost * costPerImage);
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -1164,6 +1262,7 @@ function ImageStudioWorkspace() {
             onClick={() => {
               setPostType("festival_post");
               setSelectedRatio("9:16"); // Lock ratio for Festival Post
+              setSelectedModel("Nano Banana Pro"); // Default to configured category default
             }}
             className={`p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
               postType === "festival_post"
@@ -1588,7 +1687,7 @@ function ImageStudioWorkspace() {
         </div>
 
         {/* 3. Aspect ratio and 4. Resolution */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
           <div className="space-y-2">
             <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
               Aspect Ratio
@@ -1618,13 +1717,38 @@ function ImageStudioWorkspace() {
           </div>
 
           <div className="space-y-2 md:text-right">
-            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-              Resolution
+            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+              Resolution <span className="text-[10px] text-rose-500 font-bold">*</span>
             </label>
-            <div className="inline-flex items-center space-x-1.5 bg-slate-900/60 border border-slate-880 px-3 py-1.5 rounded-full text-xs text-slate-400">
-              <Compass className="w-3.5 h-3.5 text-indigo-400" />
-              <span className="font-bold text-slate-300">1K (Fixed)</span>
+            <div className="flex flex-wrap gap-2 md:justify-end">
+              {["1k", "2k", "4k"].map((res) => {
+                const isSupported = getSupportedResolutionsForModel(selectedModel).includes(res);
+                const isSelected = selectedResolution === res;
+                return (
+                  <button
+                    key={res}
+                    type="button"
+                    disabled={!isSupported}
+                    onClick={() => setSelectedResolution(res)}
+                    title={isSupported ? `Select ${res.toUpperCase()} resolution` : `${res.toUpperCase()} is not supported by ${selectedModel}`}
+                    className={`px-3.5 py-1.5 rounded-full text-xs font-bold border transition-all cursor-pointer ${
+                      isSelected
+                        ? "bg-indigo-650 border-indigo-500 text-white shadow-md shadow-indigo-950/50"
+                        : isSupported
+                        ? "bg-slate-950 border-slate-900 text-slate-400 hover:text-white"
+                        : "opacity-35 cursor-not-allowed bg-slate-950 border-slate-900/40 text-slate-650"
+                    }`}
+                  >
+                    {res.toUpperCase()}
+                  </button>
+                );
+              })}
             </div>
+            {!selectedResolution && (
+              <p className="text-[9px] text-rose-400 font-bold animate-pulse mt-1 md:text-right">
+                Please select a resolution to generate
+              </p>
+            )}
           </div>
         </div>
 
@@ -1913,29 +2037,46 @@ function ImageStudioWorkspace() {
             </div>
           )}
 
-          {/* Dynamic Cost Estimate Preview Panel (Driven ONLY by Product Images) */}
-          {productImages.length > 0 && (
+          {/* Dynamic Cost Estimate Preview Panel (Driven by Product Images or Festival Post) */}
+          {(productImages.length > 0 || postType === "festival_post") && (
             <div className="bg-indigo-950/20 border border-indigo-900/30 rounded-2xl p-3 text-xs text-indigo-300 font-semibold flex items-center justify-between animate-in fade-in zoom-in-95 duration-200">
               <div className="flex items-center space-x-2">
                 <Sparkles className="w-4 h-4 animate-pulse" />
-                <span>
-                  {productImages.length} {productImages.length === 1 ? "image" : "images"} &times; {selectedModel} = ~{totalCostEstimate.toFixed(1)} credits.
-                </span>
+                {preflightLoading ? (
+                  <div className="flex items-center space-x-1.5">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                    <span>Calculating precise preflight cost...</span>
+                  </div>
+                ) : (
+                  <span>
+                    {jobCountForCost} image{jobCountForCost === 1 ? "" : "s"} &times; {selectedModel} ({selectedResolution || "No Resolution Chosen"}) = ~{totalCostEstimate.toFixed(1)} credits.
+                  </span>
+                )}
               </div>
-              <span className="text-[10px] text-slate-500 font-normal">Est. cost log</span>
+              <span className="text-[10px] text-slate-500 font-normal">
+                {preflightCost !== null ? "Preflighted cost" : "Est. cost log"}
+              </span>
             </div>
           )}
 
           <button
             onClick={handleGenerate}
-            disabled={generating || !prompt.trim() || productImages.length === 0 || (!engineIsOpenAi && higgsfieldConnected !== true)}
+            disabled={
+              generating || 
+              !prompt.trim() || 
+              !selectedResolution ||
+              (postType !== "festival_post" && productImages.length === 0) || 
+              (!engineIsOpenAi && higgsfieldConnected !== true)
+            }
             className={`w-full py-3.5 px-6 rounded-2xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center space-x-2 ${
               generating
                 ? "bg-slate-900 border border-slate-800 text-slate-550"
                 : (!engineIsOpenAi && higgsfieldConnected !== true)
                 ? "bg-amber-950/10 border border-amber-950/30 text-amber-500/60 cursor-not-allowed"
-                : (!prompt.trim() || productImages.length === 0)
+                : (!prompt.trim() || (postType !== "festival_post" && productImages.length === 0))
                 ? "bg-slate-950 border border-slate-900 text-slate-650 cursor-not-allowed"
+                : !selectedResolution
+                ? "bg-slate-950 border border-slate-900 text-slate-550 border-rose-900/40 cursor-not-allowed"
                 : "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-lg shadow-indigo-950/50 cursor-pointer"
             }`}
           >
@@ -1946,12 +2087,14 @@ function ImageStudioWorkspace() {
               </>
             ) : (!engineIsOpenAi && higgsfieldConnected === false) ? (
               <span>Higgsfield Not Connected</span>
-            ) : productImages.length === 0 ? (
+            ) : (postType !== "festival_post" && productImages.length === 0) ? (
               <span>Upload product images to begin</span>
+            ) : !selectedResolution ? (
+              <span>Select resolution to generate</span>
             ) : (
               <>
                 <Sparkles className="w-4 h-4" />
-                <span>Generate Batch ({productImages.length})</span>
+                <span>Generate Batch ({jobCountForCost})</span>
               </>
             )}
           </button>

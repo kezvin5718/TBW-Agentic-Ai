@@ -12,7 +12,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { model, batchCount, prompt, categoryId } = await request.json();
+    const { model, batchCount, prompt, categoryId, resolution } = await request.json();
 
     // Check category engine
     let categoryEngine = "higgsfield";
@@ -54,7 +54,7 @@ export async function POST(request: Request) {
     }
 
     const creds = await getHiggsfieldCredentials();
-    const preflight = await getHiggsfieldGenerationCost(creds, modelMachineId, batchCount || 1, { prompt });
+    const preflight = await getHiggsfieldGenerationCost(creds, modelMachineId, batchCount || 1, { prompt, resolution });
 
     return NextResponse.json({
       success: true,

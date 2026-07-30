@@ -97,6 +97,7 @@ export async function POST(request: Request) {
       prompt, 
       model, 
       ratio, 
+      resolution,
       styleReference, 
       productImages, 
       taskId, 
@@ -114,6 +115,14 @@ export async function POST(request: Request) {
 
     if (!prompt || !prompt.trim()) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
+    }
+
+    if (!resolution) {
+      return NextResponse.json({ error: "Resolution selection is mandatory" }, { status: 400 });
+    }
+    const selectedResolution = resolution.toLowerCase();
+    if (!["1k", "2k", "4k"].includes(selectedResolution)) {
+      return NextResponse.json({ error: "Invalid resolution: must be 1k, 2k, or 4k" }, { status: 400 });
     }
 
     if (productImages && Array.isArray(productImages) && productImages.length > 10) {
@@ -341,6 +350,7 @@ export async function POST(request: Request) {
       const preflight = await getHiggsfieldGenerationCost(creds, selectedModel, batchCount, {
         prompt: formattedPrompt,
         ratio: selectedRatio,
+        resolution: selectedResolution,
       });
       totalCost = preflight.cost;
       preflighted = preflight.preflighted;
@@ -360,8 +370,9 @@ export async function POST(request: Request) {
     const { error: costErr } = await supabase.from("gen_costs").insert({
       task_id: taskId || null,
       engine: categoryEngine === "openai" ? "openai" : selectedModel,
-      prompt: `[Batch: ${batchCount}] [Preflighted: ${preflighted ? "Yes" : "Estimate"}] [Ratio: ${selectedRatio}] ${formattedPrompt}`,
+      prompt: `[Resolution: ${selectedResolution}] [Batch: ${batchCount}] [Preflighted: ${preflighted ? "Yes" : "Estimate"}] [Ratio: ${selectedRatio}] ${formattedPrompt}`,
       cost: totalCost,
+      resolution: selectedResolution,
     });
 
     if (costErr) {
@@ -434,7 +445,7 @@ export async function POST(request: Request) {
     // Requirement 2: Validate request parameters against model constraints locally before sending
     const modelInfo = creds?.available_models_info?.find((m: { id: string }) => m.id === selectedModel);
     const mediaRoles = formattedMedias ? formattedMedias.map((m: { role: string }) => m.role) : [];
-    const validation = validateGenerationParamsLocally(modelInfo, selectedRatio, mediaRoles);
+    const validation = validateGenerationParamsLocally(modelInfo, selectedRatio, mediaRoles, selectedResolution);
 
     if (!validation.valid) {
       console.error(`❌ Higgsfield Local Model Validation Failed for '${selectedModel}': ${validation.error}`);
@@ -448,7 +459,7 @@ export async function POST(request: Request) {
       model: selectedModel,
       prompt: formattedPrompt,
       aspect_ratio: selectedRatio,
-      resolution: "1k",
+      resolution: selectedResolution,
     };
 
     if (formattedMedias && formattedMedias.length > 0) {

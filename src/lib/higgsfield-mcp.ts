@@ -291,18 +291,64 @@ export function formatHiggsfieldMedias(
 /**
  * Validates request parameters against discovered model constraints locally before sending to server (Requirement 2)
  */
+export function extractSupportedResolutions(modelInfo: Record<string, unknown> | null | undefined): string[] {
+  if (!modelInfo) return ["1k", "2k"];
+  
+  if (modelInfo.resolutions && Array.isArray(modelInfo.resolutions)) {
+    return (modelInfo.resolutions as string[]).map((r) => r.toLowerCase());
+  }
+  if (modelInfo.allowed_resolutions && Array.isArray(modelInfo.allowed_resolutions)) {
+    return (modelInfo.allowed_resolutions as string[]).map((r) => r.toLowerCase());
+  }
+  
+  if (modelInfo.params && typeof modelInfo.params === "object") {
+    const params = modelInfo.params as Record<string, unknown>;
+    const resVal = params.resolution as Record<string, unknown> | undefined;
+    const propsVal = params.properties as Record<string, unknown> | undefined;
+    const subParamsVal = propsVal?.params as Record<string, unknown> | undefined;
+    const subPropsVal = subParamsVal?.properties as Record<string, unknown> | undefined;
+    
+    const resField = (resVal || propsVal?.resolution || subPropsVal?.resolution) as { enum?: unknown[] } | undefined;
+    if (resField && Array.isArray(resField.enum)) {
+      return (resField.enum as string[]).map((r) => r.toLowerCase());
+    }
+  }
+
+  const lowerId = ((modelInfo.id || modelInfo.name) as string || "").toLowerCase();
+  if (lowerId.includes("gpt") || lowerId.includes("openai")) {
+    return ["1k"];
+  }
+
+  return ["1k", "2k"];
+}
+
 export function validateGenerationParamsLocally(
   modelInfo: { 
+    id?: string;
     allowed_roles?: string[]; 
     allowed_aspect_ratios?: string[]; 
     aspect_ratios?: string[]; 
     roles?: string[]; 
     params?: Record<string, unknown>;
+    resolutions?: string[];
+    allowed_resolutions?: string[];
   } | undefined,
   aspectRatio: string,
-  mediaRoles: string[] = []
+  mediaRoles: string[] = [],
+  resolution?: string
 ): { valid: boolean; error?: string } {
   if (!modelInfo) return { valid: true };
+
+  if (resolution) {
+    const allowedResolutions = extractSupportedResolutions(modelInfo);
+    const cleanRes = resolution.toLowerCase();
+    if (allowedResolutions && allowedResolutions.length > 0 && !allowedResolutions.includes(cleanRes)) {
+      return {
+        valid: false,
+        error: `Resolution '${resolution}' is not supported by model. Allowed resolutions: [${allowedResolutions.join(", ")}]`,
+      };
+    }
+  }
 
   const allowedRatios = modelInfo.allowed_aspect_ratios || modelInfo.aspect_ratios;
   if (allowedRatios && allowedRatios.length > 0) {
