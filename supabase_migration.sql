@@ -62,3 +62,6 @@ CREATE POLICY "Manage scheduled posts" ON public.scheduled_posts
 
 -- Add resolution column to gen_costs table
 ALTER TABLE public.gen_costs ADD COLUMN IF NOT EXISTS resolution TEXT;
+
+-- Add locally_unrecoverable column to studio_generations table
+ALTER TABLE public.studio_generations ADD COLUMN IF NOT EXISTS locally_unrecoverable BOOLEAN NOT NULL DEFAULT false;

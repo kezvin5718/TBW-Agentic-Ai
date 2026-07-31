@@ -38,6 +38,7 @@ interface GenerationRecord {
   created_at: string;
   category_id?: string | null;
   raw_input?: string | null;
+  locally_unrecoverable?: boolean;
 }
 
 interface ClientRecord {
@@ -2241,11 +2242,21 @@ function ImageStudioWorkspace() {
 
                 {/* Main image content frame */}
                 <div className="relative aspect-video w-full bg-slate-950 overflow-hidden flex items-center justify-center border-b border-slate-900">
-                  <img
-                    src={record.generated_image_url}
-                    alt={record.prompt}
-                    className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-300"
-                  />
+                  {record.locally_unrecoverable ? (
+                    <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center p-4 text-center space-y-1.5">
+                      <AlertTriangle className="w-6 h-6 text-amber-500 animate-pulse" />
+                      <span className="text-[10px] font-bold text-slate-200">Local File Deleted</span>
+                      <p className="text-[9px] text-slate-400">
+                        Use the <strong>Sync from Higgsfield</strong> button above to restore.
+                      </p>
+                    </div>
+                  ) : (
+                    <img
+                      src={record.generated_image_url}
+                      alt={record.prompt}
+                      className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-300"
+                    />
+                  )}
                 </div>
 
                 {/* Body Details */}
@@ -2263,8 +2274,11 @@ function ImageStudioWorkspace() {
                     <div className="grid grid-cols-3 gap-2 border-t border-slate-900 pt-3">
                       {/* Download */}
                       <button
+                        disabled={!!record.locally_unrecoverable}
                         onClick={() => window.open(record.generated_image_url, "_blank")}
-                        className="py-1.5 px-2 bg-slate-900/60 hover:bg-slate-900 border border-slate-850 rounded-xl text-[10px] font-bold text-slate-350 flex items-center justify-center space-x-1 cursor-pointer transition-colors"
+                        className={`py-1.5 px-2 bg-slate-900/60 hover:bg-slate-900 border border-slate-850 rounded-xl text-[10px] font-bold text-slate-350 flex items-center justify-center space-x-1 cursor-pointer transition-colors ${
+                          record.locally_unrecoverable ? "opacity-40 cursor-not-allowed" : ""
+                        }`}
                       >
                         <Download className="w-3.5 h-3.5" />
                         <span>Open</span>

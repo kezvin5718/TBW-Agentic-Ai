@@ -1150,16 +1150,22 @@ export async function repairStudioGenerations(): Promise<number> {
   const supabase = createServiceRoleClient();
   const { data: rows, error } = await supabase
     .from("studio_generations")
-    .select("id, generated_image_url");
+    .select("id, generated_image_url, locally_unrecoverable");
 
   if (error || !rows || rows.length === 0) return 0;
 
+  const unrecoverableRows = rows.filter(r => r.locally_unrecoverable === true);
+  if (unrecoverableRows.length > 0) {
+    console.log(`🔧 Repair: ${unrecoverableRows.length} rows skipped as unrecoverable`);
+  }
+
+  const rowsToProcess = rows.filter(r => r.locally_unrecoverable !== true);
   let repairedCount = 0;
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
   const cleanBaseUrl = (supabaseUrl || "").trim().replace(/\/+$/, "");
   const targetPrefix = `${cleanBaseUrl}/storage/v1/object/public/studio-outputs/`;
 
-  for (const row of rows) {
+  for (const row of rowsToProcess) {
     const url = row.generated_image_url;
     if (!url || (cleanBaseUrl && url.startsWith(targetPrefix))) {
       continue;
@@ -1182,8 +1188,17 @@ export async function repairStudioGenerations(): Promise<number> {
             const ext = fileName.split(".").pop() || "png";
             const contentType = ext === "mp4" ? "video/mp4" : `image/${ext}`;
             permanentUrl = await uploadToSupabaseStorageDirect(fileName, fileBuffer, contentType);
-          } catch (fileErr) {
-            console.warn(`⚠️ Could not read local fallback file ${localFilePath}:`, fileErr);
+          } catch (fileErr: unknown) {
+            const errObj = fileErr as Record<string, unknown> | null;
+            if (errObj && errObj.code === "ENOENT") {
+              console.warn(`⚠️ Local fallback file ${localFilePath} not found (ENOENT). Marking row ${row.id} as locally_unrecoverable.`);
+              await supabase
+                .from("studio_generations")
+                .update({ locally_unrecoverable: true })
+                .eq("id", row.id);
+            } else {
+              console.warn(`⚠️ Could not read local fallback file ${localFilePath}:`, fileErr);
+            }
           }
         }
       }
