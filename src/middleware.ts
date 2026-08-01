@@ -36,7 +36,11 @@ export async function middleware(request: NextRequest) {
   // 4. Role-based Route Protection
   const role = user.user_metadata?.role || "client";
 
-  if (path.startsWith("/dashboard/jarvis") || path.startsWith("/dashboard/onboarding")) {
+  if (
+    path.startsWith("/dashboard/jarvis") ||
+    path.startsWith("/dashboard/onboarding") ||
+    path.startsWith("/dashboard/diagnostics")
+  ) {
     if (role !== "founder") {
       const homeUrl = new URL("/dashboard", baseAppUrl);
       return NextResponse.redirect(homeUrl);

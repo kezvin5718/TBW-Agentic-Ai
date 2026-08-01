@@ -19,7 +19,8 @@ import {
   Layers,
   Bot,
   Image,
-  Settings
+  Settings,
+  Activity
 } from "lucide-react";
 
 export default async function DashboardLayout({
@@ -56,6 +57,7 @@ export default async function DashboardLayout({
     { name: "Reporting & Analytics", href: "/dashboard/reporting", icon: LineChart, roles: ["founder", "employee", "client"] },
     { name: "Agency Brain", href: "/dashboard/agency-brain", icon: Layers, roles: ["founder"] },
     { name: "Integrations", href: "/dashboard/settings/integrations", icon: Settings, roles: ["founder"] },
+    { name: "System Diagnostics", href: "/dashboard/diagnostics", icon: Activity, roles: ["founder"] },
   ];
 
   const filteredNavItems = allNavItems.filter((item) => item.roles.includes(role));
