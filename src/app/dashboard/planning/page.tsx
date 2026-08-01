@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import {
   Sparkles,
@@ -12,7 +12,9 @@ import {
   Trash2,
   CheckCircle2,
   Briefcase,
-  AlertTriangle
+  AlertTriangle,
+  Wand2,
+  Upload
 } from "lucide-react";
 
 export default function PlanningIndexPage() {
@@ -281,6 +283,85 @@ export default function PlanningIndexPage() {
     setBudgetAllocations(updated);
   };
 
+  // ---- Full-plan (GPT-4o) generation + file import -------------------------
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  interface IncomingPlan {
+    strategySummary?: string;
+    contentPillars?: string[];
+    contentCalendar?: Array<{ date?: string; platform?: string; format?: string; concept?: string; hook?: string; CTA?: string; cta?: string }>;
+    budgetSummary?: { allocations?: BudgetAllocation[] };
+  }
+
+  const applyPlan = (plan: IncomingPlan) => {
+    setStrategySummary(plan.strategySummary || "");
+    setPillars(Array.isArray(plan.contentPillars) ? plan.contentPillars : []);
+    const slots: CalendarSlot[] = (plan.contentCalendar || []).map((s) => ({
+      date: s.date || "",
+      platform: s.platform || "instagram",
+      format: s.format || "static",
+      concept: s.concept || "",
+      hook: s.hook || "",
+      CTA: s.CTA || s.cta || "",
+    }));
+    setCalendarSlots(slots);
+    setQtyStatic(slots.filter((s) => s.format === "static").length);
+    setQtyReel(slots.filter((s) => s.format === "reel").length);
+    setQtyCarousel(slots.filter((s) => s.format === "carousel").length);
+    setBudgetAllocations(Array.isArray(plan.budgetSummary?.allocations) ? plan.budgetSummary!.allocations : []);
+  };
+
+  const handleGenerateFullPlan = async () => {
+    if (!selectedClient) {
+      setError("Please select a client first.");
+      return;
+    }
+    setGenerating(true);
+    setLoaderMessage("GPT-4o is drafting the complete plan — strategy, calendar and budget in one pass...");
+    setError(null);
+    try {
+      const res = await fetch("/api/planning/generate-full-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: selectedClient, month: selectedMonth }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to generate full plan");
+      applyPlan(data.plan);
+      setWizardStep(1);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to generate full plan");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleImportPlan = async (file: File) => {
+    if (!selectedClient) {
+      setError("Please select a client first.");
+      return;
+    }
+    setGenerating(true);
+    setLoaderMessage(`Extracting "${file.name}" with GPT-4o...`);
+    setError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("clientId", selectedClient);
+      fd.append("month", selectedMonth);
+      const res = await fetch("/api/planning/import", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to import plan");
+      applyPlan(data.plan);
+      setWizardStep(1);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to import plan");
+    } finally {
+      setGenerating(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
   // Step 4: Save plan to DB
   const handleSavePlan = async () => {
     setGenerating(true);
@@ -353,15 +434,25 @@ export default function PlanningIndexPage() {
         <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 md:p-8 relative">
           <div className="absolute top-0 right-0 left-0 h-[2px] bg-gradient-to-r from-transparent via-indigo-500/40 to-transparent" />
 
-          {/* Stepper Header */}
+          {/* Stepper Header — clickable to jump between (pre-filled) steps for review */}
           <div className="flex items-center justify-between pb-4 border-b border-slate-900 mb-6 text-xs text-slate-500">
-            <span className={wizardStep === 0 ? "text-indigo-400 font-bold" : "text-slate-400"}>0. Client Config</span>
-            <span className="text-slate-800">/</span>
-            <span className={wizardStep === 1 ? "text-indigo-400 font-bold" : "text-slate-400"}>1. Strategy pillars</span>
-            <span className="text-slate-800">/</span>
-            <span className={wizardStep === 2 ? "text-indigo-400 font-bold" : "text-slate-400"}>2. Calendar slots</span>
-            <span className="text-slate-800">/</span>
-            <span className={wizardStep === 3 ? "text-indigo-400 font-bold" : "text-slate-400"}>3. Spend Allocation</span>
+            {[
+              "0. Client Config",
+              "1. Strategy pillars",
+              "2. Calendar slots",
+              "3. Spend Allocation",
+            ].map((label, i) => (
+              <React.Fragment key={label}>
+                {i > 0 && <span className="text-slate-800">/</span>}
+                <button
+                  type="button"
+                  onClick={() => setWizardStep(i)}
+                  className={`cursor-pointer hover:text-white transition-colors ${wizardStep === i ? "text-indigo-400 font-bold" : "text-slate-400"}`}
+                >
+                  {label}
+                </button>
+              </React.Fragment>
+            ))}
           </div>
 
           {generating ? (
@@ -412,6 +503,43 @@ export default function PlanningIndexPage() {
                     </div>
                   </div>
 
+                  {/* Fast options: one-shot AI full plan (GPT-4o) or import a manual plan file */}
+                  <div className="border border-slate-900 rounded-xl p-4 space-y-3 bg-indigo-950/10">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Fast options — skip straight to a filled plan</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={handleGenerateFullPlan}
+                        className="flex items-center justify-center space-x-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs cursor-pointer shadow-lg shadow-indigo-950/30"
+                      >
+                        <Wand2 className="w-3.5 h-3.5" />
+                        <span>Generate Full Plan (GPT-4o)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="flex items-center justify-center space-x-2 bg-slate-900 border border-slate-800 hover:border-indigo-600 text-white font-bold py-2.5 px-4 rounded-xl text-xs cursor-pointer"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Import Plan (HTML / PDF)</span>
+                      </button>
+                    </div>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".html,.htm,.pdf,.txt,.md"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleImportPlan(f);
+                      }}
+                    />
+                    <p className="text-[9px] text-slate-600 leading-relaxed">
+                      <span className="text-slate-400 font-semibold">Full Plan</span> drafts everything in one GPT-4o pass.{" "}
+                      <span className="text-slate-400 font-semibold">Import</span> extracts a plan you wrote yourself (text PDF or HTML). Both drop into the editable steps below for review before saving.
+                    </p>
+                  </div>
+
                   <div className="flex items-center justify-between pt-6 border-t border-slate-900 mt-8">
                     <button
                       type="button"
@@ -425,7 +553,7 @@ export default function PlanningIndexPage() {
                       onClick={triggerGenerateStrategy}
                       className="flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs cursor-pointer shadow-lg shadow-indigo-950/30"
                     >
-                      <span>Generate Strategy</span>
+                      <span>Generate Strategy (step-by-step)</span>
                       <Sparkles className="w-3.5 h-3.5" />
                     </button>
                   </div>
