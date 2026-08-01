@@ -324,10 +324,15 @@ export async function POST(request: Request) {
       formattedPrompt = `In the visual style and setting of reference image 1, featuring: ${formattedPrompt}`;
     }
 
-    // Requirement 1: Reference Cleanup (always on when reference attached)
-    // Fetch editable template from prompt-templates config/DB instead of hardcoding
-    const hasReference = !!styleReference?.mediaUrl || (productImages && productImages.length > 0);
-    if (hasReference) {
+    // Reference Cleanup — only enforced when the Client Branding Overlay is ON.
+    // Rationale: the strict "render a completely clean image, no text/logos/labels"
+    // instruction was flattening backgrounds (e.g. jewellery scenes not adjusting).
+    // So we now keep the natural composition by default, and only ask the model to
+    // produce a clean base (no logo/address/text) when a client is selected for the
+    // branding overlay — that clean base is then replaced by the client's real
+    // logo + address overlay compositing step (see status route).
+    const brandingOverlayOn = !!(branding && branding.enabled);
+    if (brandingOverlayOn) {
       const cleanupTemplate = await getReferenceCleanupTemplate();
       if (cleanupTemplate && !formattedPrompt.toLowerCase().includes("completely clean image")) {
         formattedPrompt = `${formattedPrompt} ${cleanupTemplate}`;
