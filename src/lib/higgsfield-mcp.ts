@@ -292,7 +292,7 @@ export function formatHiggsfieldMedias(
  * Validates request parameters against discovered model constraints locally before sending to server (Requirement 2)
  */
 export function extractSupportedResolutions(modelInfo: Record<string, unknown> | null | undefined): string[] {
-  if (!modelInfo) return ["1k", "2k"];
+  if (!modelInfo) return ["1k", "2k", "4k"];
   
   if (modelInfo.resolutions && Array.isArray(modelInfo.resolutions)) {
     return (modelInfo.resolutions as string[]).map((r) => r.toLowerCase());
@@ -319,7 +319,7 @@ export function extractSupportedResolutions(modelInfo: Record<string, unknown> |
     return ["1k"];
   }
 
-  return ["1k", "2k"];
+  return ["1k", "2k", "4k"];
 }
 
 export function validateGenerationParamsLocally(

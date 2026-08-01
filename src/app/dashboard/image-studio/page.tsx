@@ -71,7 +71,7 @@ function ImageStudioWorkspace() {
 
   const [prompt, setPrompt] = useState("");
   const [lastPrompt, setLastPrompt] = useState<string | null>(null); // Undo state
-  const [selectedModel, setSelectedModel] = useState("Nano Banana Pro");
+  const [selectedModel, setSelectedModel] = useState(""); // No default — user must actively select a model
   const [selectedRatio, setSelectedRatio] = useState("3:4");
   const [postType, setPostType] = useState<"regular" | "festival_post">("regular");
   
@@ -1230,6 +1230,7 @@ function ImageStudioWorkspace() {
           <div
             onClick={() => {
               setPostType("regular");
+              setSelectedModel(""); // No default — user picks the model themselves
               // Check if currently selected category has default ratio
               const cat = categories.find(c => c.id === selectedCategoryId);
               if (cat?.default_aspect_ratio) {
@@ -1263,7 +1264,7 @@ function ImageStudioWorkspace() {
             onClick={() => {
               setPostType("festival_post");
               setSelectedRatio("9:16"); // Lock ratio for Festival Post
-              setSelectedModel("Nano Banana Pro"); // Default to configured category default
+              setSelectedModel(""); // No default — user picks the model themselves
             }}
             className={`p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
               postType === "festival_post"
@@ -1583,9 +1584,6 @@ function ImageStudioWorkspace() {
                     <div>
                       <h4 className="text-xs font-bold text-white flex items-center space-x-1.5">
                         <span>Nano Banana Pro</span>
-                        <span className="bg-indigo-500/20 text-indigo-400 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full border border-indigo-500/30">
-                          Default
-                        </span>
                       </h4>
                       <p className="text-[10px] text-slate-500 mt-1">High-quality, stylized ad layouts and assets</p>
                     </div>
@@ -1665,9 +1663,6 @@ function ImageStudioWorkspace() {
                     <div>
                       <h4 className="text-xs font-bold text-white flex items-center space-x-1.5">
                         <span>Nano Banana Pro</span>
-                        <span className="bg-indigo-500/20 text-indigo-400 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full border border-indigo-500/30">
-                          Default
-                        </span>
                       </h4>
                       <p className="text-[10px] text-slate-500 mt-1">High-quality, stylized ad layouts and assets</p>
                     </div>
@@ -2050,7 +2045,7 @@ function ImageStudioWorkspace() {
                   </div>
                 ) : (
                   <span>
-                    {jobCountForCost} image{jobCountForCost === 1 ? "" : "s"} &times; {selectedModel} ({selectedResolution || "No Resolution Chosen"}) = ~{totalCostEstimate.toFixed(1)} credits.
+                    {jobCountForCost} image{jobCountForCost === 1 ? "" : "s"} &times; {selectedModel || "No Model Chosen"} ({selectedResolution || "No Resolution Chosen"}) = ~{totalCostEstimate.toFixed(1)} credits.
                   </span>
                 )}
               </div>
@@ -2063,10 +2058,11 @@ function ImageStudioWorkspace() {
           <button
             onClick={handleGenerate}
             disabled={
-              generating || 
-              !prompt.trim() || 
+              generating ||
+              !prompt.trim() ||
+              !selectedModel ||
               !selectedResolution ||
-              (postType !== "festival_post" && productImages.length === 0) || 
+              (postType !== "festival_post" && productImages.length === 0) ||
               (!engineIsOpenAi && higgsfieldConnected !== true)
             }
             className={`w-full py-3.5 px-6 rounded-2xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center space-x-2 ${
@@ -2076,7 +2072,7 @@ function ImageStudioWorkspace() {
                 ? "bg-amber-950/10 border border-amber-950/30 text-amber-500/60 cursor-not-allowed"
                 : (!prompt.trim() || (postType !== "festival_post" && productImages.length === 0))
                 ? "bg-slate-950 border border-slate-900 text-slate-650 cursor-not-allowed"
-                : !selectedResolution
+                : (!selectedModel || !selectedResolution)
                 ? "bg-slate-950 border border-slate-900 text-slate-550 border-rose-900/40 cursor-not-allowed"
                 : "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-lg shadow-indigo-950/50 cursor-pointer"
             }`}
@@ -2090,6 +2086,8 @@ function ImageStudioWorkspace() {
               <span>Higgsfield Not Connected</span>
             ) : (postType !== "festival_post" && productImages.length === 0) ? (
               <span>Upload product images to begin</span>
+            ) : !selectedModel ? (
+              <span>Select a model to generate</span>
             ) : !selectedResolution ? (
               <span>Select resolution to generate</span>
             ) : (

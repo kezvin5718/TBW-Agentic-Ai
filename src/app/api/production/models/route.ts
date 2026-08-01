@@ -17,26 +17,26 @@ export async function GET() {
       {
         id: "nano_banana_pro",
         name: "Nano Banana Pro",
-        resolutions: ["1k", "2k"],
-        allowed_resolutions: ["1k", "2k"]
+        resolutions: ["1k", "2k", "4k"],
+        allowed_resolutions: ["1k", "2k", "4k"]
       },
       {
         id: "Nano Banana Pro",
         name: "Nano Banana Pro",
-        resolutions: ["1k", "2k"],
-        allowed_resolutions: ["1k", "2k"]
+        resolutions: ["1k", "2k", "4k"],
+        allowed_resolutions: ["1k", "2k", "4k"]
       },
       {
         id: "nano_banana_2",
         name: "Nano Banana 2",
-        resolutions: ["1k", "2k"],
-        allowed_resolutions: ["1k", "2k"]
+        resolutions: ["1k", "2k", "4k"],
+        allowed_resolutions: ["1k", "2k", "4k"]
       },
       {
         id: "Nano Banana 2",
         name: "Nano Banana 2",
-        resolutions: ["1k", "2k"],
-        allowed_resolutions: ["1k", "2k"]
+        resolutions: ["1k", "2k", "4k"],
+        allowed_resolutions: ["1k", "2k", "4k"]
       },
       {
         id: "gpt_image_2",
