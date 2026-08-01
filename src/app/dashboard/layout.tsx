@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import DiagnosticsStatusDot from "./DiagnosticsStatusDot";
+import GlobalErrorMonitor from "./GlobalErrorMonitor";
 import {
   Sparkles,
   LayoutDashboard,
@@ -160,6 +161,9 @@ export default async function DashboardLayout({
           {children}
         </div>
       </main>
+
+      {/* Always-on background error monitor (every dashboard page) */}
+      <GlobalErrorMonitor />
     </div>
   );
 }
