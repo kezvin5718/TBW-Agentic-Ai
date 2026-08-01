@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Activity, Loader2, Copy, Check, RefreshCw, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 
 type Status = "ok" | "warn" | "fail";
@@ -23,8 +23,29 @@ export default function DiagnosticsPage() {
   const [result, setResult] = useState<DiagResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+
+  // Live elapsed-seconds counter while a test is running, so it never looks frozen.
+  useEffect(() => {
+    if (!loading) return;
+    setElapsed(0);
+    const start = Date.now();
+    const t = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 250);
+    return () => clearInterval(t);
+  }, [loading]);
+
+  // Broadcast the latest overall status so the sidebar health dot can reflect it.
+  const broadcastStatus = (s: "ok" | "warn" | "fail" | "running" | "error") => {
+    try {
+      if (s !== "running") localStorage.setItem("tbw_diag_status", s);
+      window.dispatchEvent(new CustomEvent("tbw-diag-status", { detail: s }));
+    } catch {
+      /* localStorage/customEvent unavailable — non-fatal */
+    }
+  };
 
   const runDiagnostics = async () => {
+    broadcastStatus("running");
     setLoading(true);
     setError(null);
     setCopied(false);
@@ -34,11 +55,14 @@ export default function DiagnosticsPage() {
       if (!res.ok) {
         setError(data.error || `Request failed (${res.status})`);
         setResult(null);
+        broadcastStatus("error");
       } else {
         setResult(data);
+        broadcastStatus(data.summary.fail > 0 ? "fail" : data.summary.warn > 0 ? "warn" : "ok");
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to run diagnostics");
+      broadcastStatus("error");
     } finally {
       setLoading(false);
     }
@@ -84,6 +108,24 @@ export default function DiagnosticsPage() {
           <span>{loading ? "Running checks..." : "Run Diagnostics"}</span>
         </button>
       </div>
+
+      {loading && (
+        <div className="bg-indigo-950/30 border border-indigo-800/60 rounded-2xl p-5 flex items-center space-x-4 animate-pulse">
+          <div className="relative shrink-0">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-indigo-500 opacity-40 animate-ping" />
+            <span className="relative inline-flex w-3.5 h-3.5 rounded-full bg-indigo-400" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-indigo-200 flex items-center space-x-2">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>Testing all systems… {elapsed}s</span>
+            </p>
+            <p className="text-[11px] text-indigo-400/70 mt-0.5">
+              Checking database, storage, AI, and Higgsfield (the live Higgsfield check can take a few seconds).
+            </p>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="bg-rose-950/30 border border-rose-900/60 rounded-xl p-4 text-sm text-rose-300 flex items-center space-x-2">
