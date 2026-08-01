@@ -843,6 +843,7 @@ function ImageStudioWorkspace() {
               prompt: finalPromptVal,
               model: selectedModel,
               ratio: selectedRatio,
+              resolution: selectedResolution,
               styleReference,
               productImages: job.productUrl ? [
                 {
