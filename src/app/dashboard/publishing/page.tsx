@@ -560,7 +560,7 @@ export default function AdPublishingPage() {
                         <div className="flex items-center space-x-3">
                           <div className="w-16 h-16 rounded-lg overflow-hidden bg-slate-900 border border-slate-800 shrink-0">
                             {u.media_type === "video" ? (
-                              <video src={u.file_url} className="w-full h-full object-cover" muted />
+                              <a href={u.file_url.includes("googleusercontent.com") ? `https://drive.google.com/file/d/${u.file_url.match(/\/d\/([^=/?]+)/)?.[1] || ""}/view` : u.file_url} target="_blank" rel="noreferrer" title="Open video" className="w-full h-full flex items-center justify-center text-slate-500 hover:text-indigo-400 text-lg">▶</a>
                             ) : (
                               <img src={u.file_url} alt={u.file_name || ""} className="w-full h-full object-cover" />
                             )}

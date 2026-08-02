@@ -35,6 +35,11 @@ function fmtSize(bytes: number | null): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+const isDriveUrl = (u: string) => u.includes("googleusercontent.com");
+const driveOpen = (u: string) => {
+  const m = u.match(/googleusercontent\.com\/d\/([^=/?]+)/);
+  return m ? `https://drive.google.com/file/d/${m[1]}/view` : u;
+};
 
 export default function ContentHubPage() {
   const [clients, setClients] = useState<ClientRow[]>([]);
@@ -223,7 +228,13 @@ export default function ContentHubPage() {
                     <td className="py-2 pr-3">
                       <div className="w-10 h-10 rounded-lg overflow-hidden bg-slate-900 border border-slate-800">
                         {u.media_type === "video" ? (
-                          <video src={u.file_url} className="w-full h-full object-cover" muted />
+                          <a href={driveOpen(u.file_url)} target="_blank" rel="noreferrer" title="Open video" className="w-full h-full flex items-center justify-center text-slate-500 hover:text-indigo-400">
+                            <Film className="w-4 h-4" />
+                          </a>
+                        ) : isDriveUrl(u.file_url) ? (
+                          <a href={driveOpen(u.file_url)} target="_blank" rel="noreferrer" title="Open in Drive">
+                            <img src={u.file_url} alt={u.file_name || ""} className="w-full h-full object-cover" />
+                          </a>
                         ) : (
                           <img src={u.file_url} alt={u.file_name || ""} className="w-full h-full object-cover" />
                         )}

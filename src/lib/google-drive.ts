@@ -141,12 +141,13 @@ export async function uploadImageToDrive(
   fileName: string,
   mimeType: string,
   clientName?: string,
-  monthLabel?: string
+  monthLabel?: string,
+  rootFolder: string = ROOT_FOLDER_NAME
 ): Promise<{ fileId: string; viewUrl: string }> {
   const drive = await getDriveService();
   if (!drive) throw new Error("Google Drive is not connected.");
 
-  let parent = await findOrCreateFolder(drive, ROOT_FOLDER_NAME);
+  let parent = await findOrCreateFolder(drive, rootFolder);
   if (clientName) parent = await findOrCreateFolder(drive, clientName, parent);
   if (monthLabel) parent = await findOrCreateFolder(drive, monthLabel, parent);
 
@@ -168,6 +169,29 @@ export async function uploadImageToDrive(
 export async function isDriveConnected(): Promise<boolean> {
   const creds = await loadCreds();
   return !!creds && creds.status === "connected";
+}
+
+/**
+ * Store a Content Hub designer upload — Google Drive when connected (under
+ * "TBW Content Hub / {client} / {month}"), otherwise Supabase fallback.
+ * Returns a displayable URL, or null on failure.
+ */
+export async function storeContentHubUpload(
+  buffer: Buffer,
+  fileName: string,
+  mimeType: string,
+  clientName?: string,
+  monthLabel?: string
+): Promise<string | null> {
+  if (await isDriveConnected()) {
+    try {
+      const { viewUrl } = await uploadImageToDrive(buffer, fileName, mimeType, clientName, monthLabel, "TBW Content Hub");
+      return viewUrl;
+    } catch (err) {
+      console.error("Content Hub Drive upload failed, falling back to Supabase:", err);
+    }
+  }
+  return uploadToSupabaseStorageDirect(fileName, buffer, mimeType);
 }
 
 /**

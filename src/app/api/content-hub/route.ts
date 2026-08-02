@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
-import { uploadToSupabaseStorageDirect } from "@/lib/higgsfield-mcp";
+import { storeContentHubUpload } from "@/lib/google-drive";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -53,16 +53,22 @@ export async function POST(request: NextRequest) {
   const mediaType = mime.startsWith("video") || /\.(mp4|mov|avi|mkv|webm)$/i.test(file.name) ? "video" : "image";
   const buffer = Buffer.from(await file.arrayBuffer());
   const safeName = (file.name || "upload").replace(/[^a-zA-Z0-9._-]/g, "_");
-  const fileName = `content-hub/${Date.now()}-${safeName}`;
-
-  // Store to Supabase Storage so the media has a direct public URL (needed for
-  // preview and for Meta to fetch it when posting).
-  const publicUrl = await uploadToSupabaseStorageDirect(fileName, buffer, mime);
-  if (!publicUrl) {
-    return NextResponse.json({ error: "Storage upload failed (check Supabase storage config)." }, { status: 500 });
-  }
+  const fileName = `${Date.now()}-${safeName}`;
 
   const admin = createServiceRoleClient();
+
+  // Look up client name + current month for the Drive folder path.
+  const { data: client } = await admin.from("clients").select("name").eq("id", clientId).single();
+  const clientName = client?.name || undefined;
+  const monthLabel = new Date().toISOString().slice(0, 7);
+
+  // Store to Google Drive ("TBW Content Hub / {client} / {month}") when connected,
+  // else Supabase fallback.
+  const publicUrl = await storeContentHubUpload(buffer, fileName, mime, clientName, monthLabel);
+  if (!publicUrl) {
+    return NextResponse.json({ error: "Upload failed — check Google Drive / storage connection." }, { status: 500 });
+  }
+
   const { data: row, error } = await admin
     .from("creative_uploads")
     .insert({
