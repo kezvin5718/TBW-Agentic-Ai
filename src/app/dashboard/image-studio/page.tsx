@@ -22,7 +22,8 @@ import {
   Plus,
   Palette,
   RefreshCw,
-  Pencil
+  Pencil,
+  HardDrive
 } from "lucide-react";
 import { HIGGSFIELD_CONFIG } from "@/lib/higgsfield-config";
 
@@ -164,6 +165,25 @@ function ImageStudioWorkspace() {
   // Sync state
   const [syncing, setSyncing] = useState(false);
   const [syncSuccessMessage, setSyncSuccessMessage] = useState<string | null>(null);
+  const [migrating, setMigrating] = useState(false);
+
+  const handleMigrateToDrive = async () => {
+    if (!window.confirm("Move all existing Supabase-stored images to your Google Drive? This frees Supabase space and points the gallery to Drive.")) return;
+    setMigrating(true);
+    setSyncSuccessMessage(null);
+    setGenerationError(null);
+    try {
+      const res = await fetch("/api/production/higgsfield/migrate-to-drive", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Migration failed");
+      setSyncSuccessMessage(`Migrated ${data.migrated} image(s) to Google Drive${data.failed ? `, ${data.failed} failed` : ""}.`);
+      await fetchHistory();
+    } catch (err: unknown) {
+      setGenerationError(`Migrate error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setMigrating(false);
+    }
+  };
 
   const handleSyncFromHiggsfield = async () => {
     setSyncing(true);
@@ -1189,6 +1209,16 @@ function ImageStudioWorkspace() {
               <RefreshCw className="w-4 h-4 text-indigo-400" />
             )}
             <span>Sync from Higgsfield</span>
+          </button>
+
+          <button
+            onClick={handleMigrateToDrive}
+            disabled={migrating}
+            title="Move existing Supabase-stored images to your Google Drive"
+            className="flex items-center space-x-1.5 bg-slate-900 hover:bg-slate-850 border border-indigo-900/50 hover:border-indigo-500/50 text-indigo-300 hover:text-white text-xs font-bold py-3 px-4 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+          >
+            {migrating ? <Loader2 className="w-4 h-4 animate-spin text-indigo-400" /> : <HardDrive className="w-4 h-4 text-indigo-400" />}
+            <span>{migrating ? "Migrating…" : "Migrate to Drive"}</span>
           </button>
 
           {/* Credit Pricing table — credits per image by model & resolution */}
