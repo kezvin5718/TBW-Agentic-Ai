@@ -1,68 +1,80 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Share2, RefreshCw, Loader2, Database, Sparkles, HardDrive, Megaphone } from "lucide-react";
+import { Share2, RefreshCw, Loader2 } from "lucide-react";
 
 type Mode = "live" | "configured" | "simulated" | "offline" | "notbuilt";
-interface Connector {
-  key: string;
-  name: string;
-  category: string;
-  purpose: string;
-  mode: Mode;
-  detail: string;
-}
-interface Result {
-  connectors: Connector[];
-  summary: Record<string, number>;
-}
+interface Connector { key: string; name: string; category: string; purpose: string; mode: Mode; detail: string }
 
-const MODE: Record<Mode, { label: string; dot: string; chip: string }> = {
-  live: { label: "Live", dot: "bg-emerald-400", chip: "bg-emerald-950/40 border-emerald-900 text-emerald-400" },
-  configured: { label: "Configured — not connected", dot: "bg-sky-400", chip: "bg-sky-950/40 border-sky-900 text-sky-400" },
-  simulated: { label: "Simulated (mock)", dot: "bg-amber-400", chip: "bg-amber-950/40 border-amber-900 text-amber-400" },
-  offline: { label: "Offline / error", dot: "bg-rose-500", chip: "bg-rose-950/40 border-rose-900 text-rose-400" },
-  notbuilt: { label: "Not built yet", dot: "bg-slate-600", chip: "bg-slate-900 border-slate-800 text-slate-500" },
+const COLOR: Record<Mode, string> = {
+  live: "#34d399",
+  configured: "#38bdf8",
+  simulated: "#fbbf24",
+  offline: "#f43f5e",
+  notbuilt: "#64748b",
+};
+const MODE_LABEL: Record<Mode, string> = {
+  live: "Live",
+  configured: "Ready to connect",
+  simulated: "Simulated",
+  offline: "Offline",
+  notbuilt: "Not built",
 };
 
-const CAT_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
-  Data: Database,
-  AI: Sparkles,
-  Storage: HardDrive,
-  Publishing: Megaphone,
-};
+// Layout: left → right pipeline. y-centres per node.
+const NODES: { id: string; key: string; label: string; sub: string; x: number; y: number }[] = [
+  { id: "brain", key: "supabase_db", label: "Client & Planning", sub: "Supabase DB", x: 120, y: 310 },
+  { id: "openrouter", key: "openrouter", label: "OpenRouter", sub: "AI Text", x: 480, y: 130 },
+  { id: "higgsfield", key: "higgsfield", label: "Higgsfield", sub: "AI Images", x: 480, y: 310 },
+  { id: "openai", key: "openai", label: "OpenAI", sub: "Image / Voice", x: 480, y: 490 },
+  { id: "drive", key: "google_drive", label: "Google Drive", sub: "Storage", x: 840, y: 220 },
+  { id: "supastore", key: "supabase_storage", label: "Supabase", sub: "Storage", x: 840, y: 400 },
+  { id: "meta", key: "meta", label: "Meta", sub: "Instagram / FB", x: 1160, y: 220 },
+  { id: "whatsapp", key: "whatsapp", label: "WhatsApp", sub: "Approvals", x: 1160, y: 400 },
+  { id: "live", key: "meta", label: "Posted Live", sub: "Social feed", x: 1380, y: 310 },
+];
+const EDGES: [string, string][] = [
+  ["brain", "openrouter"], ["brain", "higgsfield"], ["brain", "openai"],
+  ["higgsfield", "drive"], ["openai", "drive"], ["higgsfield", "supastore"],
+  ["openrouter", "meta"], ["drive", "meta"], ["drive", "whatsapp"],
+  ["meta", "live"], ["whatsapp", "live"],
+];
 
-export default function ConnectionsPage() {
-  const [data, setData] = useState<Result | null>(null);
+const NW = 168, NH = 60;
+
+export default function AgentsConsolePage() {
+  const [connectors, setConnectors] = useState<Connector[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch("/api/connections", { cache: "no-store" });
-      if (res.ok) setData(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        setConnectors(data.connectors || []);
+      }
     } catch {
       /* ignore */
     } finally {
       setLoading(false);
     }
   }, []);
+  useEffect(() => { load(); }, [load]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const categories = data ? Array.from(new Set(data.connectors.map((c) => c.category))) : [];
+  const modeOf = (key: string): Mode => (connectors.find((c) => c.key === key)?.mode as Mode) || "notbuilt";
+  const detailOf = (key: string): string => connectors.find((c) => c.key === key)?.detail || "";
+  const nodeById = (id: string) => NODES.find((n) => n.id === id)!;
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <div className="max-w-6xl mx-auto space-y-5">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
             <Share2 className="w-6 h-6 text-indigo-400" />
             <span>Agents Console</span>
           </h1>
-          <p className="text-sm text-slate-500 mt-1">Every external service the system uses — what&apos;s live, what&apos;s simulated, and what&apos;s still to build.</p>
+          <p className="text-sm text-slate-500 mt-1">The whole system, left to right. Neon lights flow where it&apos;s working; the colour tells you the status.</p>
         </div>
         <button
           onClick={load}
@@ -75,48 +87,62 @@ export default function ConnectionsPage() {
       </div>
 
       {/* Legend */}
-      <div className="flex flex-wrap gap-3 text-[11px]">
-        {(Object.keys(MODE) as Mode[]).map((m) => (
+      <div className="flex flex-wrap gap-x-4 gap-y-2 text-[11px]">
+        {(Object.keys(COLOR) as Mode[]).map((m) => (
           <span key={m} className="flex items-center space-x-1.5 text-slate-400">
-            <span className={`w-2.5 h-2.5 rounded-full ${MODE[m].dot}`} />
-            <span>{MODE[m].label}</span>
+            <span className="w-2.5 h-2.5 rounded-full" style={{ background: COLOR[m], boxShadow: `0 0 6px ${COLOR[m]}` }} />
+            <span>{MODE_LABEL[m]}</span>
           </span>
         ))}
       </div>
 
-      {loading && !data ? (
-        <div className="py-20 flex justify-center"><Loader2 className="w-6 h-6 text-indigo-500 animate-spin" /></div>
-      ) : (
-        categories.map((cat) => {
-          const Icon = CAT_ICON[cat] || Share2;
-          return (
-            <div key={cat} className="space-y-3">
-              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center space-x-2">
-                <Icon className="w-4 h-4 text-indigo-400" />
-                <span>{cat}</span>
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {data!.connectors.filter((c) => c.category === cat).map((c) => (
-                  <div key={c.key} className="bg-slate-950/60 border border-slate-900 rounded-2xl p-4">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center space-x-2 min-w-0">
-                        <span className="relative flex shrink-0">
-                          {(c.mode === "offline") && <span className={`absolute inline-flex h-2.5 w-2.5 rounded-full ${MODE[c.mode].dot} opacity-60 animate-ping`} />}
-                          <span className={`relative w-2.5 h-2.5 rounded-full ${MODE[c.mode].dot}`} />
-                        </span>
-                        <h3 className="text-sm font-bold text-white truncate">{c.name}</h3>
-                      </div>
-                      <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border shrink-0 ${MODE[c.mode].chip}`}>{MODE[c.mode].label}</span>
-                    </div>
-                    <p className="text-[11px] text-slate-500 mt-1.5">{c.purpose}</p>
-                    <p className="text-[10px] text-slate-600 mt-1">{c.detail}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })
-      )}
+      {/* Flow diagram */}
+      <div className="bg-slate-950/50 border border-slate-900 rounded-3xl p-4 overflow-x-auto">
+        <svg viewBox="0 0 1500 620" className="w-full" style={{ minWidth: 900 }}>
+          <style>{`
+            .ac-flow { fill:none; stroke-width:2.4; stroke-linecap:round; stroke-dasharray:9 22; animation: ac-dash 1s linear infinite; }
+            @keyframes ac-dash { to { stroke-dashoffset: -31; } }
+            .ac-node { transition: all .3s; }
+          `}</style>
+
+          {/* Edges: dim wire underlay + animated neon overlay */}
+          {EDGES.map(([from, to], i) => {
+            const s = nodeById(from), t = nodeById(to);
+            const sx = s.x + NW / 2, sy = s.y, tx = t.x - NW / 2, ty = t.y;
+            const d = `M ${sx} ${sy} C ${sx + 110} ${sy}, ${tx - 110} ${ty}, ${tx} ${ty}`;
+            const mode = modeOf(s.key);
+            const col = COLOR[mode];
+            return (
+              <g key={i}>
+                <path d={d} fill="none" stroke={col} strokeWidth={2.4} opacity={0.12} />
+                <path d={d} className="ac-flow" stroke={col} style={{ filter: `drop-shadow(0 0 4px ${col})` }} />
+              </g>
+            );
+          })}
+
+          {/* Nodes */}
+          {NODES.map((n) => {
+            const mode = modeOf(n.key);
+            const col = COLOR[mode];
+            const x = n.x - NW / 2, y = n.y - NH / 2;
+            return (
+              <g key={n.id} className="ac-node">
+                <title>{`${n.label} — ${MODE_LABEL[mode]}\n${detailOf(n.key)}`}</title>
+                <rect x={x} y={y} width={NW} height={NH} rx={14}
+                  fill="#0b1220" stroke={col} strokeWidth={1.6}
+                  style={{ filter: `drop-shadow(0 0 8px ${col}44)` }} />
+                <circle cx={x + 16} cy={n.y} r={4.5} fill={col} style={{ filter: `drop-shadow(0 0 5px ${col})` }} />
+                <text x={x + 30} y={n.y - 4} fill="#fff" fontSize={15} fontWeight={700}>{n.label}</text>
+                <text x={x + 30} y={n.y + 14} fill="#94a3b8" fontSize={11}>{n.sub}</text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+
+      <p className="text-[11px] text-slate-600 text-center">
+        Hover any box for details. Green = working live · Amber = simulated (mock) · Blue = ready to connect · Red = offline · Grey = not built.
+      </p>
     </div>
   );
 }
