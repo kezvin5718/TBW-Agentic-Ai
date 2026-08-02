@@ -2,7 +2,6 @@ import React from "react";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import DiagnosticsStatusDot from "./DiagnosticsStatusDot";
 import GlobalErrorMonitor from "./GlobalErrorMonitor";
 import {
   Sparkles,
@@ -23,7 +22,6 @@ import {
   Bot,
   Image,
   Settings,
-  Activity,
   FolderUp,
   Share2
 } from "lucide-react";
@@ -65,7 +63,6 @@ export default async function DashboardLayout({
 
     { name: "Bron Assistant", href: "/dashboard/jarvis", icon: Bot, roles: ["founder"], section: "Assistant & System" },
     { name: "Agents Console", href: "/dashboard/connections", icon: Share2, roles: ["founder", "employee"], section: "Assistant & System" },
-    { name: "System Diagnostics", href: "/dashboard/diagnostics", icon: Activity, roles: ["founder"], section: "Assistant & System" },
     { name: "Integrations", href: "/dashboard/settings/integrations", icon: Settings, roles: ["founder"], section: "Assistant & System" },
   ];
 
@@ -143,7 +140,6 @@ export default async function DashboardLayout({
                 >
                   <Icon className="w-4 h-4 text-slate-500 group-hover:text-indigo-400 transition-colors" />
                   <span className="font-medium">{item.name}</span>
-                  {item.href === "/dashboard/diagnostics" && <DiagnosticsStatusDot />}
                 </Link>
               </React.Fragment>
             );
