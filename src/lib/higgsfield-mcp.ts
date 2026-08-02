@@ -1167,7 +1167,13 @@ export async function repairStudioGenerations(): Promise<number> {
 
   for (const row of rowsToProcess) {
     const url = row.generated_image_url;
-    if (!url || (cleanBaseUrl && url.startsWith(targetPrefix))) {
+    // Skip already-permanent URLs: the Supabase bucket, or Google Drive-hosted images.
+    if (
+      !url ||
+      (cleanBaseUrl && url.startsWith(targetPrefix)) ||
+      url.includes("googleusercontent.com") ||
+      url.includes("drive.google.com")
+    ) {
       continue;
     }
 

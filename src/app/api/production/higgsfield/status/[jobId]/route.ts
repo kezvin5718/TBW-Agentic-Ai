@@ -5,12 +5,25 @@ import { HIGGSFIELD_CONFIG } from "@/lib/higgsfield-config";
 import {
   getHiggsfieldCredentials,
   pollHiggsfieldJobStatus,
-  downloadAndStoreGeneratedMedia,
-  uploadToSupabaseStorageDirect,
 } from "@/lib/higgsfield-mcp";
 import { applyClientBrandingOverlay, type ClientBrandingConfig } from "@/lib/branding-composite";
 import { generateOpenAIImage, OPENAI_IMAGE_CONFIG, describeImageViaVision } from "@/lib/integrations/openai-images";
+import { storeFromUrl, storeFromBuffer } from "@/lib/google-drive";
 import * as crypto from "crypto";
+
+// Resolve a client name (for the Drive folder path) from a client id.
+async function resolveClientName(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  clientId?: string | null
+): Promise<string | undefined> {
+  if (!clientId) return undefined;
+  try {
+    const { data } = await supabase.from("clients").select("name").eq("id", clientId).single();
+    return data?.name || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const MOCK_IMAGES = [
   "https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=800&auto=format&fit=crop",
@@ -87,8 +100,10 @@ export async function GET(
           throw new Error(result.error || "OpenAI Image Generation returned no URL");
         }
 
-        // 2. Download and store permanently
-        const permanentUrl = await downloadAndStoreGeneratedMedia(result.url, "openai");
+        // 2. Store permanently (Google Drive when connected, else Supabase)
+        const monthLabel = new Date().toISOString().slice(0, 7);
+        const clientName = await resolveClientName(serviceSupabase, job.branding?.clientId);
+        const permanentUrl = await storeFromUrl(result.url, "openai", clientName, monthLabel);
 
         // 3. Save clean original record to studio_generations
         const { data: record, error: dbErr } = await serviceSupabase
@@ -139,7 +154,7 @@ export async function GET(
               });
 
               const brandedFileName = `branded-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.png`;
-              const brandedPublicUrl = await uploadToSupabaseStorageDirect(brandedFileName, brandedBuffer, "image/png");
+              const brandedPublicUrl = await storeFromBuffer(brandedBuffer, brandedFileName, "image/png", clientName, monthLabel);
 
               if (brandedPublicUrl) {
                 const { data: brandedRecord } = await serviceSupabase
@@ -254,8 +269,10 @@ export async function GET(
           }
 
           if (resultUrl) {
-            // Requirement 1 & 2: Download image server-side and upload clean original to Supabase Storage
-            const savedMediaUrl = await downloadAndStoreGeneratedMedia(resultUrl, "higgsfield");
+            // Store the clean original permanently (Google Drive when connected, else Supabase)
+            const monthLabel = new Date().toISOString().slice(0, 7);
+            const clientName = await resolveClientName(serviceSupabase, job.branding?.clientId);
+            const savedMediaUrl = await storeFromUrl(resultUrl, "higgsfield", clientName, monthLabel);
             const costPerImage = HIGGSFIELD_CONFIG.modelCosts[job.model as keyof typeof HIGGSFIELD_CONFIG.modelCosts] || 1.5;
 
             const { data: record, error: dbErr } = await serviceSupabase
@@ -328,7 +345,7 @@ export async function GET(
                   });
 
                   const brandedFileName = `branded-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.png`;
-                  const brandedPublicUrl = await uploadToSupabaseStorageDirect(brandedFileName, brandedBuffer, "image/png");
+                  const brandedPublicUrl = await storeFromBuffer(brandedBuffer, brandedFileName, "image/png", clientName, monthLabel);
 
                   if (brandedPublicUrl) {
                     // Requirement 2.d: Save BOTH files (clean original + linked branded variant)

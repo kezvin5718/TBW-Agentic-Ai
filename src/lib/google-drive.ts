@@ -2,6 +2,7 @@ import { google } from "googleapis";
 import { Readable } from "stream";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { encrypt, decrypt } from "@/lib/encryption";
+import { downloadAndStoreGeneratedMedia, uploadToSupabaseStorageDirect } from "@/lib/higgsfield-mcp";
 
 // Least-privilege: the app can only see/manage files IT creates, never the rest of the user's Drive.
 const SCOPES = [
@@ -167,4 +168,43 @@ export async function uploadImageToDrive(
 export async function isDriveConnected(): Promise<boolean> {
   const creds = await loadCreds();
   return !!creds && creds.status === "connected";
+}
+
+/**
+ * Store a generated image by URL: uploads to Google Drive when connected,
+ * otherwise falls back to Supabase Storage. Returns a displayable URL.
+ */
+export async function storeFromUrl(resultUrl: string, prefix: string, clientName?: string, monthLabel?: string): Promise<string> {
+  if (await isDriveConnected()) {
+    try {
+      const resp = await fetch(resultUrl);
+      if (resp.ok) {
+        const buf = Buffer.from(await resp.arrayBuffer());
+        const mime = resp.headers.get("content-type") || "image/png";
+        const ext = mime.includes("png") ? "png" : mime.includes("mp4") ? "mp4" : mime.includes("webp") ? "webp" : "jpg";
+        const fileName = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
+        const { viewUrl } = await uploadImageToDrive(buf, fileName, mime, clientName, monthLabel);
+        return viewUrl;
+      }
+    } catch (err) {
+      console.error("Drive store (url) failed, falling back to Supabase:", err);
+    }
+  }
+  return downloadAndStoreGeneratedMedia(resultUrl, prefix);
+}
+
+/**
+ * Store a generated image already in memory (e.g. a branding composite): Drive
+ * when connected, else Supabase. Returns a displayable URL (or null on failure).
+ */
+export async function storeFromBuffer(buffer: Buffer, fileName: string, mimeType: string, clientName?: string, monthLabel?: string): Promise<string | null> {
+  if (await isDriveConnected()) {
+    try {
+      const { viewUrl } = await uploadImageToDrive(buffer, fileName, mimeType, clientName, monthLabel);
+      return viewUrl;
+    } catch (err) {
+      console.error("Drive store (buffer) failed, falling back to Supabase:", err);
+    }
+  }
+  return uploadToSupabaseStorageDirect(fileName, buffer, mimeType);
 }
