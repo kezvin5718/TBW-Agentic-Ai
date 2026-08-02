@@ -71,6 +71,8 @@ export async function PUT(
       fonts,
       captionTone,
       designPreferences,
+      address,
+      contactNumber,
     } = body;
 
     // 1. Update Client fields
@@ -90,16 +92,24 @@ export async function PUT(
       return NextResponse.json({ error: clientUpdateErr.message }, { status: 500 });
     }
 
-    // 2. Update Brand Brain fields
+    // 2. Update Brand Brain fields. Only overwrite addresses when an address or
+    // contact number is provided, so an empty save doesn't wipe existing data.
+    const brainUpdate: Record<string, unknown> = {
+      colors: colors || [],
+      fonts: fonts || [],
+      caption_tone: captionTone || "",
+      design_preferences: designPreferences || {},
+      updated_at: new Date().toISOString(),
+    };
+    if (address !== undefined || contactNumber !== undefined) {
+      const addr = String(address || "").trim();
+      const phone = String(contactNumber || "").trim();
+      brainUpdate.addresses = addr || phone ? [{ address: addr, phone }] : [];
+    }
+
     const { error: brainUpdateErr } = await supabase
       .from("brand_brain")
-      .update({
-        colors: colors || [],
-        fonts: fonts || [],
-        caption_tone: captionTone || "",
-        design_preferences: designPreferences || {},
-        updated_at: new Date().toISOString(),
-      })
+      .update(brainUpdate)
       .eq("client_id", id);
 
     if (brainUpdateErr) {

@@ -90,6 +90,8 @@ export default function ClientBrandBrainPage({
   const [fontHeading, setFontHeading] = useState("");
   const [fontBody, setFontBody] = useState("");
   const [captionTone, setCaptionTone] = useState("");
+  const [address, setAddress] = useState("");
+  const [contactNumber, setContactNumber] = useState("");
   
   // Design Preferences JSON key-values
   const [prefKeys, setPrefKeys] = useState<string[]>([]);
@@ -142,6 +144,19 @@ export default function ClientBrandBrainPage({
       setFontHeading(data.brandBrain?.fonts?.[0] || "");
       setFontBody(data.brandBrain?.fonts?.[1] || "");
       setCaptionTone(data.brandBrain?.caption_tone || "");
+
+      // Address + contact number (stored as addresses[0] = { address, phone })
+      const firstAddr = data.brandBrain?.addresses?.[0];
+      if (firstAddr && typeof firstAddr === "object") {
+        setAddress(String((firstAddr as Record<string, unknown>).address || (firstAddr as Record<string, unknown>).text || ""));
+        setContactNumber(String((firstAddr as Record<string, unknown>).phone || ""));
+      } else if (typeof firstAddr === "string") {
+        setAddress(firstAddr);
+        setContactNumber("");
+      } else {
+        setAddress("");
+        setContactNumber("");
+      }
 
       // Preferences map
       const prefs = data.brandBrain?.design_preferences || {};
@@ -229,6 +244,8 @@ export default function ClientBrandBrainPage({
           fonts: [fontHeading, fontBody].filter(Boolean),
           captionTone,
           designPreferences,
+          address,
+          contactNumber,
         }),
       });
 
@@ -816,6 +833,28 @@ export default function ClientBrandBrainPage({
                     value={captionTone}
                     onChange={(e) => setCaptionTone(e.target.value)}
                     className="w-full bg-slate-900/40 border border-slate-800 rounded-xl py-2 px-3.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/80 transition-all resize-none"
+                  />
+                </div>
+
+                {/* Address + Contact Number (used on the branding overlay) */}
+                <div className="space-y-3 pt-3 border-t border-slate-900">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase">
+                    Business Address <span className="normal-case font-medium text-slate-600">— shown on the branding overlay</span>
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="e.g. 12 MG Road, Indiranagar, Bangalore 560038"
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    className="w-full bg-slate-900/40 border border-slate-800 rounded-xl py-2 px-3.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/80 transition-all resize-none"
+                  />
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase">Contact Number</label>
+                  <input
+                    type="tel"
+                    placeholder="e.g. +91 98765 43210"
+                    value={contactNumber}
+                    onChange={(e) => setContactNumber(e.target.value)}
+                    className="w-full bg-slate-900/40 border border-slate-800 rounded-xl py-2 px-3.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/80 transition-all"
                   />
                 </div>
 
