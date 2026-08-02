@@ -34,6 +34,16 @@ function extractAddressText(addresses: unknown): string | null {
   return null;
 }
 
+// Client logo_url is stored as a bucket-relative path (e.g. "logos/x.png"); the
+// branding compositor needs a fully-qualified public URL to fetch it.
+function resolveLogoUrl(path?: string | null): string | null {
+  if (!path) return null;
+  if (path.startsWith("http")) return path;
+  const base = (process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+  if (!base) return null;
+  return `${base}/storage/v1/object/public/brand-assets/${path.replace(/^\/+/, "")}`;
+}
+
 // Resolve a client name (for the Drive folder path) from a client id.
 async function resolveClientName(
   supabase: ReturnType<typeof createServiceRoleClient>,
@@ -159,11 +169,17 @@ export async function GET(
               const baseBuffer = Buffer.from(await fetchRes.arrayBuffer());
               const { data: brandingConfig } = await serviceSupabase
                 .from("brand_brain")
-                .select("colors, logo_url, addresses")
+                .select("colors, addresses")
                 .eq("client_id", job.branding.clientId)
                 .single();
+              // logo_url lives on the clients table, not brand_brain.
+              const { data: clientLogo } = await serviceSupabase
+                .from("clients")
+                .select("logo_url")
+                .eq("id", job.branding.clientId)
+                .single();
 
-              const logoUrl = brandingConfig?.logo_url || null;
+              const logoUrl = resolveLogoUrl(clientLogo?.logo_url);
               const address = extractAddressText(brandingConfig?.addresses);
 
               const brandedBuffer = await applyClientBrandingOverlay(baseBuffer, {
@@ -337,7 +353,7 @@ export async function GET(
                   .eq("client_id", job.branding.clientId)
                   .maybeSingle();
 
-                const logoUrl = clientData?.logo_url || null;
+                const logoUrl = resolveLogoUrl(clientData?.logo_url);
                 const addressText = extractAddressText(brainData?.addresses);
 
                 const brandingConfig = (brainData?.design_preferences as Record<string, unknown>)?.branding_config as Record<string, unknown> | undefined;

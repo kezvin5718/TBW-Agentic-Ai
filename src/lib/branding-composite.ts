@@ -59,27 +59,28 @@ export async function applyClientBrandingOverlay(
 
   const overlays: OverlayOptions[] = [];
 
-  // 1. Logo Overlay (center top, ~18% width, ~4% top margin)
+  // 1. Logo Overlay (center top). Fit inside a box so tall/wide logos scale sanely.
   if (includeLogo && logoUrl) {
     try {
       console.log(`🎨 Server Branding: Fetching client logo from URL: ${logoUrl}`);
       const logoRes = await fetch(logoUrl);
       if (logoRes.ok) {
         const logoBuffer = Buffer.from(await logoRes.arrayBuffer());
-        const logoWidth = Math.round(imgWidth * (logoWidthPct / 100));
+        const logoMaxWidth = Math.round(imgWidth * (logoWidthPct / 100));
+        const logoMaxHeight = Math.round(imgHeight * 0.16);
         const logoTop = Math.round(imgHeight * (logoTopMarginPct / 100));
-        const logoLeft = Math.round((imgWidth - logoWidth) / 2);
 
         const resizedLogo = await sharp(logoBuffer)
-          .resize({ width: logoWidth, fit: "contain" })
+          .resize({ width: logoMaxWidth, height: logoMaxHeight, fit: "inside", withoutEnlargement: true })
+          .png()
           .toBuffer();
 
-        overlays.push({
-          input: resizedLogo,
-          top: logoTop,
-          left: Math.max(0, logoLeft),
-        });
-        console.log(`✅ Server Branding: Logo composited at top: ${logoTop}px, left: ${logoLeft}px, width: ${logoWidth}px`);
+        const logoMeta = await sharp(resizedLogo).metadata();
+        const actualLogoWidth = logoMeta.width || logoMaxWidth;
+        const logoLeft = Math.max(0, Math.round((imgWidth - actualLogoWidth) / 2));
+
+        overlays.push({ input: resizedLogo, top: logoTop, left: logoLeft });
+        console.log(`✅ Server Branding: Logo composited at top: ${logoTop}px, left: ${logoLeft}px, width: ${actualLogoWidth}px`);
       } else {
         console.warn(`⚠️ Server Branding: Failed to fetch logo image (${logoRes.statusText})`);
       }
@@ -91,14 +92,22 @@ export async function applyClientBrandingOverlay(
   // 2. Address Line Overlay (bottom-centered single line, contrast-safe strip)
   if (includeAddress && addressText && addressText.trim()) {
     try {
-      const cleanAddress = addressText.trim().replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      const stripHeight = Math.max(36, Math.round(imgHeight * 0.05));
-      const fontSize = Math.max(12, Math.round(stripHeight * 0.42));
+      const cleanAddress = addressText.trim().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      // Bigger, legible strip. Auto-shrink the font so long address+phone lines
+      // always fit the width, but keep a comfortable minimum.
+      const stripHeight = config?.address_font_size
+        ? Math.max(60, Math.round(config.address_font_size * 2.3))
+        : Math.max(80, Math.round(imgHeight * 0.075));
+      const sidePadding = Math.round(imgWidth * 0.03);
+      const usableWidth = imgWidth - sidePadding * 2;
+      const desiredFont = config?.address_font_size ?? Math.round(stripHeight * 0.42);
+      const fitFont = Math.floor(usableWidth / Math.max(1, cleanAddress.length * 0.52));
+      const fontSize = Math.max(18, Math.min(desiredFont, fitFont));
       const stripTop = imgHeight - stripHeight;
 
       const svgAddress = `
         <svg width="${imgWidth}" height="${stripHeight}" xmlns="http://www.w3.org/2000/svg">
-          <rect width="100%" height="100%" fill="rgba(15, 23, 42, 0.78)" />
+          <rect width="100%" height="100%" fill="rgba(15, 23, 42, 0.85)" />
           <text
             x="50%"
             y="50%"
@@ -107,7 +116,7 @@ export async function applyClientBrandingOverlay(
             fill="#FFFFFF"
             font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
             font-size="${fontSize}px"
-            font-weight="600"
+            font-weight="700"
             letter-spacing="0.5px"
           >${cleanAddress}</text>
         </svg>
