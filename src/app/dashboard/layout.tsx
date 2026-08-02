@@ -22,7 +22,8 @@ import {
   Bot,
   Image,
   Settings,
-  Activity
+  Activity,
+  FolderUp
 } from "lucide-react";
 
 export default async function DashboardLayout({
@@ -55,6 +56,7 @@ export default async function DashboardLayout({
     { name: "Creative Approvals", href: "/dashboard/creatives-review", icon: Shield, roles: ["founder", "employee"] },
     { name: "Ad Production", href: "/dashboard/production", icon: Clapperboard, roles: ["founder", "employee"] },
     { name: "Ad Publishing", href: "/dashboard/publishing", icon: UploadCloud, roles: ["founder", "employee"] },
+    { name: "Content Hub", href: "/dashboard/content-hub", icon: FolderUp, roles: ["founder", "employee"] },
     { name: "Meta Ads Manager", href: "/dashboard/ads", icon: Megaphone, roles: ["founder", "employee"] },
     { name: "Reporting & Analytics", href: "/dashboard/reporting", icon: LineChart, roles: ["founder", "employee", "client"] },
     { name: "Agency Brain", href: "/dashboard/agency-brain", icon: Layers, roles: ["founder"] },
