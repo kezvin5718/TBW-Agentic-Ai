@@ -138,7 +138,6 @@ function ImageStudioWorkspace() {
 
   // Festival Post Form states (Requirement 2)
   const [festivalName, setFestivalName] = useState("");
-  const [festivalDetails, setFestivalDetails] = useState("");
   const [festivalWish, setFestivalWish] = useState("");
   const [festivalTagline, setFestivalTagline] = useState("");
   const [savingToBrain, setSavingToBrain] = useState(false);
@@ -357,13 +356,8 @@ function ImageStudioWorkspace() {
     }
   }, [postType]);
 
-  // Synchronize prompt state when festival fields change for validation fallback
-  useEffect(() => {
-    if (postType === "festival_post") {
-      const summary = `Festival: ${festivalName || "Unspecified"}. Details: ${festivalDetails || "None"}. Wish: ${festivalWish || "None"}. Tagline: ${festivalTagline || "None"}`;
-      setPrompt(summary);
-    }
-  }, [festivalName, festivalDetails, festivalWish, festivalTagline, postType]);
+  // (Festival mode now has its own Creative Prompt box; the prompt is no longer
+  // auto-overwritten with a synthetic summary of the festival fields.)
 
   // Load initial data
   useEffect(() => {
@@ -863,7 +857,6 @@ function ImageStudioWorkspace() {
               clientId: selectedBrandingClient || undefined,
               postType,
               festivalName: postType === "festival_post" ? festivalName : undefined,
-              festivalDetails: postType === "festival_post" ? festivalDetails : undefined,
               festivalWish: postType === "festival_post" ? festivalWish : undefined,
               festivalTagline: postType === "festival_post" ? festivalTagline : undefined,
             }),
@@ -1969,19 +1962,6 @@ function ImageStudioWorkspace() {
 
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">
-                    Festival details / Vibe (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={festivalDetails}
-                    onChange={(e) => setFestivalDetails(e.target.value)}
-                    placeholder="e.g. glowing clay diyas, gold marigold garlands, sparkles"
-                    className="w-full bg-slate-950 border border-slate-900 focus:border-indigo-500/50 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-650 focus:outline-none"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">
                     Text Holder 1: Festival Wish (Optional)
                   </label>
                   <input
@@ -2005,6 +1985,21 @@ function ImageStudioWorkspace() {
                     className="w-full bg-slate-950 border border-slate-900 focus:border-indigo-500/50 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-650 focus:outline-none"
                   />
                 </div>
+              </div>
+
+              {/* Creative Prompt — drives the festive scene, same as regular posts */}
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">
+                  Creative Prompt (Optional)
+                </label>
+                <textarea
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  disabled={generating}
+                  placeholder="Describe the scene, styling and how the product should sit in the festive creative..."
+                  rows={3}
+                  className="w-full bg-slate-950 border border-slate-900 focus:border-indigo-500/50 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-650 focus:outline-none resize-none"
+                />
               </div>
             </div>
           ) : (
@@ -2060,7 +2055,8 @@ function ImageStudioWorkspace() {
             onClick={handleGenerate}
             disabled={
               generating ||
-              !prompt.trim() ||
+              (postType !== "festival_post" && !prompt.trim()) ||
+              (postType === "festival_post" && !festivalName.trim()) ||
               !selectedModel ||
               !selectedResolution ||
               (postType !== "festival_post" && productImages.length === 0) ||
@@ -2071,7 +2067,7 @@ function ImageStudioWorkspace() {
                 ? "bg-slate-900 border border-slate-800 text-slate-550"
                 : (!engineIsOpenAi && higgsfieldConnected !== true)
                 ? "bg-amber-950/10 border border-amber-950/30 text-amber-500/60 cursor-not-allowed"
-                : (!prompt.trim() || (postType !== "festival_post" && productImages.length === 0))
+                : ((postType !== "festival_post" && !prompt.trim()) || (postType === "festival_post" && !festivalName.trim()) || (postType !== "festival_post" && productImages.length === 0))
                 ? "bg-slate-950 border border-slate-900 text-slate-650 cursor-not-allowed"
                 : (!selectedModel || !selectedResolution)
                 ? "bg-slate-950 border border-slate-900 text-slate-550 border-rose-900/40 cursor-not-allowed"
@@ -2087,6 +2083,8 @@ function ImageStudioWorkspace() {
               <span>Higgsfield Not Connected</span>
             ) : (postType !== "festival_post" && productImages.length === 0) ? (
               <span>Upload product images to begin</span>
+            ) : (postType === "festival_post" && !festivalName.trim()) ? (
+              <span>Select a festival name</span>
             ) : !selectedModel ? (
               <span>Select a model to generate</span>
             ) : !selectedResolution ? (
