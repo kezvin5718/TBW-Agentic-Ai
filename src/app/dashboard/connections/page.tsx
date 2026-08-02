@@ -60,7 +60,7 @@ export default function ConnectionsPage() {
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
             <Share2 className="w-6 h-6 text-indigo-400" />
-            <span>Connections</span>
+            <span>Agents Console</span>
           </h1>
           <p className="text-sm text-slate-500 mt-1">Every external service the system uses — what&apos;s live, what&apos;s simulated, and what&apos;s still to build.</p>
         </div>
