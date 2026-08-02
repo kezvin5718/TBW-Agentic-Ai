@@ -13,7 +13,8 @@ import {
   Loader2,
   ArrowRight,
   ShieldCheck,
-  Bot
+  Bot,
+  HardDrive
 } from "lucide-react";
 
 interface HiggsfieldStatus {
@@ -44,6 +45,46 @@ export default function IntegrationsPage() {
   // Manual token input states
   const [manualToken, setManualToken] = useState("");
   const [savingManual, setSavingManual] = useState(false);
+
+  // Google Drive states
+  const [driveStatus, setDriveStatus] = useState<{ connected: boolean; email?: string; configured: boolean } | null>(null);
+  const [driveDisconnecting, setDriveDisconnecting] = useState(false);
+
+  const fetchDriveStatus = async () => {
+    try {
+      const res = await fetch("/api/integrations/google-drive/status");
+      if (res.ok) setDriveStatus(await res.json());
+    } catch {
+      /* ignore */
+    }
+  };
+  useEffect(() => {
+    fetchDriveStatus();
+  }, []);
+  useEffect(() => {
+    const drive = searchParams.get("drive");
+    if (!drive) return;
+    if (drive === "connected") {
+      setAlertSuccess("Google Drive connected! New images will be saved to your Drive.");
+      fetchDriveStatus();
+    } else if (drive === "notconfigured") {
+      setAlertError("Google Drive is not configured on the server (missing GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET).");
+    } else if (drive === "error") {
+      setAlertError(`Google Drive connection failed: ${searchParams.get("reason") || "unknown error"}`);
+    }
+    router.replace("/dashboard/settings/integrations");
+  }, [searchParams, router]);
+
+  const handleDriveDisconnect = async () => {
+    setDriveDisconnecting(true);
+    try {
+      await fetch("/api/integrations/google-drive/disconnect", { method: "POST" });
+      await fetchDriveStatus();
+      setAlertSuccess("Google Drive disconnected.");
+    } finally {
+      setDriveDisconnecting(false);
+    }
+  };
 
   // Read URL params for OAuth callbacks
   useEffect(() => {
@@ -408,6 +449,60 @@ export default function IntegrationsPage() {
               <span className="block truncate">https://bron.digital/api/integrations/higgsfield/callback</span>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Google Drive integration */}
+      <div className="bg-slate-950/20 border border-slate-900/60 rounded-3xl p-6 space-y-4 mt-6">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center space-x-3">
+            <HardDrive className="w-6 h-6 text-indigo-400" />
+            <div>
+              <h3 className="text-sm font-bold text-white">Google Drive — permanent image storage</h3>
+              <p className="text-[10px] text-slate-500 mt-0.5">Save every generated image straight to your own Google Drive.</p>
+            </div>
+          </div>
+          {driveStatus?.connected ? (
+            <span className="flex items-center space-x-1.5 text-emerald-400 text-xs font-bold">
+              <CheckCircle2 className="w-4 h-4" />
+              <span>Connected{driveStatus.email ? ` — ${driveStatus.email}` : ""}</span>
+            </span>
+          ) : (
+            <span className="text-slate-500 text-xs font-bold">Not connected</span>
+          )}
+        </div>
+
+        {driveStatus && !driveStatus.configured && (
+          <div className="p-3 bg-amber-950/20 border border-amber-900/40 rounded-xl text-[10px] text-amber-300 leading-relaxed">
+            Server not configured yet. Add <span className="font-mono">GOOGLE_CLIENT_ID</span> and <span className="font-mono">GOOGLE_CLIENT_SECRET</span> to your <span className="font-mono">.env</span> and redeploy, then reload this page.
+          </div>
+        )}
+
+        <div className="flex items-center gap-3">
+          {driveStatus?.connected ? (
+            <button
+              onClick={handleDriveDisconnect}
+              disabled={driveDisconnecting}
+              className="flex items-center space-x-1.5 bg-slate-900 border border-slate-800 hover:border-rose-700 text-slate-200 text-xs font-bold py-2.5 px-4 rounded-xl cursor-pointer disabled:opacity-50"
+            >
+              {driveDisconnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unlink className="w-4 h-4" />}
+              <span>Disconnect</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => (window.location.href = "/api/integrations/google-drive/connect")}
+              disabled={!driveStatus?.configured}
+              className="flex items-center space-x-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-bold py-2.5 px-4 rounded-xl cursor-pointer disabled:opacity-40"
+            >
+              <Link2 className="w-4 h-4" />
+              <span>Connect Google Drive</span>
+            </button>
+          )}
+        </div>
+
+        <div className="p-3 bg-slate-950/40 border border-slate-900 rounded-xl space-y-1 text-slate-400 font-mono">
+          <span className="text-[8px] font-extrabold uppercase text-indigo-400 block mb-0.5">Redirect URL (add this in Google Cloud → Clients):</span>
+          <span className="block truncate">https://bron.digital/api/integrations/google-drive/callback</span>
         </div>
       </div>
     </div>
