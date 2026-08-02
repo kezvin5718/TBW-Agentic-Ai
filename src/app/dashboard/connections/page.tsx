@@ -1,58 +1,47 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Share2, RefreshCw, Loader2 } from "lucide-react";
+import { Share2, RefreshCw, Loader2, User, Bot } from "lucide-react";
 
 type Mode = "live" | "configured" | "simulated" | "offline" | "notbuilt";
 interface Connector { key: string; mode: Mode }
 
-const COLOR: Record<Mode, string> = {
-  live: "#34d399",
-  configured: "#38bdf8",
-  simulated: "#fbbf24",
-  offline: "#f43f5e",
-  notbuilt: "#64748b",
-};
-const MODE_LABEL: Record<Mode, string> = {
-  live: "Live",
-  configured: "Ready to connect",
-  simulated: "Simulated (mock)",
-  offline: "Offline",
-  notbuilt: "Not built",
-};
+const COLOR: Record<Mode, string> = { live: "#34d399", configured: "#38bdf8", simulated: "#fbbf24", offline: "#f43f5e", notbuilt: "#64748b" };
+const MODE_LABEL: Record<Mode, string> = { live: "Live", configured: "Ready to connect", simulated: "Simulated (mock)", offline: "Offline", notbuilt: "Not built" };
 
-// Column phases of the agentic workflow.
 const PHASES = ["Onboard & Brain", "Plan & Approve", "Produce", "Publish", "Advertise", "Report & Learn"];
-const COL_X = [140, 400, 660, 920, 1180, 1420];
+const COL_X = [150, 430, 710, 990, 1270, 1500];
 
-// The 19-step workflow. `col` = phase column, `deps` = which live connectors it relies on.
-interface Stage { n: number; col: number; label: string; sub: string; deps: string[] }
+interface Stage {
+  n: number; col: number; label: string; sub: string;
+  deps: string[]; manual?: boolean; tech: string[]; brief: string;
+}
 const STAGES: Stage[] = [
-  { n: 1, col: 0, label: "Client Onboarding", sub: "Onboarding Bot", deps: ["supabase_db"] },
-  { n: 2, col: 0, label: "Brand Brain", sub: "Brand Memory Bot", deps: ["supabase_db", "openrouter"] },
-  { n: 3, col: 1, label: "Strategy Planning", sub: "Planning Bot", deps: ["openrouter", "supabase_db"] },
-  { n: 4, col: 1, label: "Internal Approval", sub: "Founder Review", deps: ["supabase_db"] },
-  { n: 5, col: 1, label: "Client Plan Approval", sub: "WhatsApp Bot", deps: ["whatsapp"] },
-  { n: 6, col: 2, label: "Task Creation", sub: "AI Project Manager", deps: ["supabase_db"] },
-  { n: 7, col: 2, label: "Creative Production", sub: "Script / Image / Video", deps: ["higgsfield", "openrouter"] },
-  { n: 8, col: 2, label: "Quality Check", sub: "QC Bot", deps: ["openrouter"] },
-  { n: 9, col: 2, label: "Founder Approval", sub: "Approval Bot", deps: ["supabase_db"] },
-  { n: 10, col: 2, label: "Client Creative OK", sub: "WhatsApp Bot", deps: ["whatsapp"] },
-  { n: 11, col: 3, label: "Schedule & Publish", sub: "Publishing Bot", deps: ["meta"] },
-  { n: 15, col: 3, label: "WhatsApp Automation", sub: "Agency Assistant", deps: ["whatsapp"] },
-  { n: 12, col: 4, label: "Budget Planning", sub: "Media Planning Bot", deps: ["openrouter"] },
-  { n: 13, col: 4, label: "Campaign Setup", sub: "Meta / Google Ads", deps: ["meta"] },
-  { n: 14, col: 4, label: "Ads Monitoring", sub: "Optimisation Bot", deps: ["ad_metrics"] },
-  { n: 16, col: 5, label: "Reporting", sub: "Analytics Bot", deps: ["openrouter", "supabase_db"] },
-  { n: 17, col: 5, label: "Continuous Learning", sub: "Learning Bot", deps: ["openrouter"] },
+  { n: 1, col: 0, label: "Client Onboarding", sub: "Onboarding Bot", deps: ["supabase_db"], manual: true, tech: ["Manual upload", "Supabase"], brief: "Founder enters brand details and uploads logo, guidelines & products — creates the client profile + an empty Brand Brain." },
+  { n: 2, col: 0, label: "Brand Brain", sub: "Brand Memory Bot", deps: ["supabase_db", "openrouter"], tech: ["Claude", "Supabase"], brief: "Holds colours, fonts, tone, address & contact; AI writes the brand brief. Designers can also import knowledge docs (zip/pdf/txt)." },
+  { n: 3, col: 1, label: "Strategy Planning", sub: "Planning Bot", deps: ["openrouter"], tech: ["Claude", "GPT-4o"], brief: "Drafts monthly strategy, pillars, calendar & budget. Supports one-shot GPT-4o generation and HTML/PDF plan import." },
+  { n: 4, col: 1, label: "Internal Approval", sub: "Founder Review", deps: ["supabase_db"], manual: true, tech: ["Manual"], brief: "Founder reviews the plan — approve to send onward, or reject to auto-regenerate with notes." },
+  { n: 5, col: 1, label: "Client Plan Approval", sub: "WhatsApp Bot", deps: ["whatsapp"], manual: true, tech: ["WhatsApp"], brief: "Sends the plan PDF + calendar to the client on WhatsApp and records approval or change requests." },
+  { n: 6, col: 2, label: "Task Creation", sub: "AI Project Manager", deps: ["supabase_db"], tech: ["Supabase"], brief: "Turns the approved calendar into production tasks (copy/image/video) and assigns them with deadlines." },
+  { n: 7, col: 2, label: "Creative Production", sub: "Script / Image / Video", deps: ["higgsfield", "openrouter"], tech: ["Higgsfield · Nano Banana", "GPT Image 2", "Gemini", "Drive"], brief: "Writes captions/scripts (Gemini), generates images (Higgsfield Nano Banana Pro/2 + GPT Image 2, up to 4K) and videos; saves to Google Drive." },
+  { n: 8, col: 2, label: "Quality Check", sub: "QC Bot", deps: ["openrouter"], tech: ["Gemini"], brief: "AI audits grammar, brand-name spelling, claims and offer/address accuracy before a human sees it." },
+  { n: 9, col: 2, label: "Founder Approval", sub: "Approval Bot", deps: ["supabase_db"], manual: true, tech: ["Manual"], brief: "Founder reviews each creative in a swipe deck — approve, or reject with revision notes." },
+  { n: 10, col: 2, label: "Client Creative OK", sub: "WhatsApp Bot", deps: ["whatsapp"], manual: true, tech: ["WhatsApp"], brief: "Sends the approved creative to the client on WhatsApp for final sign-off." },
+  { n: 20, col: 3, label: "Designer Uploads", sub: "Content Hub", deps: ["supabase_storage"], manual: true, tech: ["Manual upload"], brief: "Designers/editors upload finished Posts/Reels/Stories per client; they flow into Ad Publishing for scheduling." },
+  { n: 11, col: 3, label: "Schedule & Publish", sub: "Publishing Bot", deps: ["meta"], tech: ["Meta Graph"], brief: "Schedules and auto-posts to Instagram/Facebook via Meta; a cron publishes due posts every 15 minutes." },
+  { n: 15, col: 3, label: "WhatsApp Automation", sub: "Agency Assistant", deps: ["whatsapp"], tech: ["WhatsApp"], brief: "Runs client & team group messages — reminders, approvals, escalations, status updates." },
+  { n: 12, col: 4, label: "Budget Planning", sub: "Media Planning Bot", deps: ["openrouter"], tech: ["Claude"], brief: "Drafts the Meta/Google budget split, objectives, audiences and daily budgets." },
+  { n: 13, col: 4, label: "Campaign Setup", sub: "Meta / Google Ads", deps: ["meta"], tech: ["Meta Graph"], brief: "Builds PAUSED Meta campaigns, ad sets and ads from QC-passed creatives (activation needs founder approval)." },
+  { n: 14, col: 4, label: "Ads Monitoring", sub: "Optimisation Bot", deps: ["ad_metrics"], tech: ["Simulated metrics"], brief: "Daily autopilot scales/trims/pauses by ROAS rules. NOTE: metrics are simulated — real Meta Insights not built yet." },
+  { n: 16, col: 5, label: "Reporting", sub: "Analytics Bot", deps: ["openrouter"], tech: ["Claude"], brief: "Generates weekly client performance reports and daily founder briefings." },
+  { n: 17, col: 5, label: "Continuous Learning", sub: "Learning Bot", deps: ["openrouter"], tech: ["Claude"], brief: "Weekly loop re-tunes each client's Brand Brain and the shared Agency Brain from results & feedback." },
 ];
-// Sequential flow + the WhatsApp-group branch + the learning loop back to Brand Brain.
 const EDGES: [number, number][] = [
   [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7], [7, 8], [8, 9], [9, 10],
-  [10, 11], [11, 15], [11, 12], [12, 13], [13, 14], [14, 16], [16, 17], [17, 2],
+  [10, 11], [20, 11], [11, 15], [11, 12], [12, 13], [13, 14], [14, 16], [16, 17], [17, 2],
 ];
 
-const NW = 184, NH = 56, CY = 500, GAP = 104, LOOP_Y = 900;
+const NW = 200, NH = 66, CY = 500, GAP = 112, LOOP_Y = 920;
 
 export default function AgentsConsolePage() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
@@ -63,27 +52,20 @@ export default function AgentsConsolePage() {
     try {
       const res = await fetch("/api/connections", { cache: "no-store" });
       if (res.ok) setConnectors((await res.json()).connectors || []);
-    } catch {
-      /* ignore */
-    } finally {
-      setLoading(false);
-    }
+    } catch { /* ignore */ } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
   const modeOf = (key: string): Mode => (connectors.find((c) => c.key === key)?.mode as Mode) || "notbuilt";
-
-  // Compute each stage's status from its dependencies (worst wins).
   const stageMode = (s: Stage): Mode => {
-    const modes = s.deps.map(modeOf);
-    if (modes.includes("offline")) return "offline";
-    if (modes.includes("notbuilt")) return "notbuilt";
-    if (modes.includes("simulated")) return "simulated";
-    if (modes.includes("configured")) return "configured";
+    const m = s.deps.map(modeOf);
+    if (m.includes("offline")) return "offline";
+    if (m.includes("notbuilt")) return "notbuilt";
+    if (m.includes("simulated")) return "simulated";
+    if (m.includes("configured")) return "configured";
     return "live";
   };
 
-  // Position each stage within its column, vertically centred.
   const byCol: Record<number, Stage[]> = {};
   STAGES.forEach((s) => { (byCol[s.col] ||= []).push(s); });
   const pos: Record<number, { x: number; y: number; s: Stage }> = {};
@@ -95,17 +77,9 @@ export default function AgentsConsolePage() {
 
   const edgePath = (a: number, b: number) => {
     const s = pos[a], t = pos[b];
-    if (a === 17 && b === 2) {
-      return `M ${s.x} ${s.y + NH / 2} C ${s.x} ${LOOP_Y}, ${t.x} ${LOOP_Y}, ${t.x} ${t.y + NH / 2}`;
-    }
-    if (t.s.col > s.s.col) {
-      const sx = s.x + NW / 2, tx = t.x - NW / 2;
-      return `M ${sx} ${s.y} C ${sx + 70} ${s.y}, ${tx - 70} ${t.y}, ${tx} ${t.y}`;
-    }
-    // same column (vertical)
-    const down = t.y > s.y;
-    const sy = down ? s.y + NH / 2 : s.y - NH / 2;
-    const ty = down ? t.y - NH / 2 : t.y + NH / 2;
+    if (a === 17 && b === 2) return `M ${s.x} ${s.y + NH / 2} C ${s.x} ${LOOP_Y}, ${t.x} ${LOOP_Y}, ${t.x} ${t.y + NH / 2}`;
+    if (t.s.col > s.s.col) { const sx = s.x + NW / 2, tx = t.x - NW / 2; return `M ${sx} ${s.y} C ${sx + 60} ${s.y}, ${tx - 60} ${t.y}, ${tx} ${t.y}`; }
+    const down = t.y > s.y; const sy = down ? s.y + NH / 2 : s.y - NH / 2; const ty = down ? t.y - NH / 2 : t.y + NH / 2;
     return `M ${s.x} ${sy} C ${s.x} ${(sy + ty) / 2}, ${t.x} ${(sy + ty) / 2}, ${t.x} ${ty}`;
   };
 
@@ -114,75 +88,80 @@ export default function AgentsConsolePage() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
-            <Share2 className="w-6 h-6 text-indigo-400" />
-            <span>Agents Console</span>
+            <Share2 className="w-6 h-6 text-indigo-400" /><span>Agents Console</span>
           </h1>
-          <p className="text-sm text-slate-500 mt-1">The full agentic workflow — onboarding to continuous learning. Neon flows show it working live; colour tells the status.</p>
+          <p className="text-sm text-slate-500 mt-1">Every agent in the workflow, the exact model it runs on, and where a human uploads. Neon flows show it working live.</p>
         </div>
-        <button onClick={load} disabled={loading}
-          className="px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider bg-slate-900 border border-slate-800 hover:border-indigo-600 text-white flex items-center space-x-2 cursor-pointer disabled:opacity-60">
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-          <span>Refresh</span>
+        <button onClick={load} disabled={loading} className="px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider bg-slate-900 border border-slate-800 hover:border-indigo-600 text-white flex items-center space-x-2 cursor-pointer disabled:opacity-60">
+          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}<span>Refresh</span>
         </button>
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-[11px]">
         {(Object.keys(COLOR) as Mode[]).map((m) => (
           <span key={m} className="flex items-center space-x-1.5 text-slate-400">
-            <span className="w-2.5 h-2.5 rounded-full" style={{ background: COLOR[m], boxShadow: `0 0 6px ${COLOR[m]}` }} />
-            <span>{MODE_LABEL[m]}</span>
+            <span className="w-2.5 h-2.5 rounded-full" style={{ background: COLOR[m], boxShadow: `0 0 6px ${COLOR[m]}` }} /><span>{MODE_LABEL[m]}</span>
           </span>
         ))}
+        <span className="flex items-center space-x-1.5 text-slate-400"><User className="w-3 h-3" /><span>Manual (human) step — dashed</span></span>
       </div>
 
+      {/* Flow diagram */}
       <div className="bg-slate-950/50 border border-slate-900 rounded-3xl p-4 overflow-x-auto">
-        <svg viewBox="0 0 1560 960" className="w-full" style={{ minWidth: 1100 }}>
-          <style>{`
-            .ac-flow { fill:none; stroke-width:2.4; stroke-linecap:round; stroke-dasharray:8 20; animation: ac-dash 1s linear infinite; }
-            @keyframes ac-dash { to { stroke-dashoffset:-28; } }
-          `}</style>
-
-          {/* Phase headers */}
-          {PHASES.map((p, i) => (
-            <text key={p} x={COL_X[i]} y={70} textAnchor="middle" fill="#64748b" fontSize={13} fontWeight={800} letterSpacing="1">{p.toUpperCase()}</text>
-          ))}
-
-          {/* Edges */}
+        <svg viewBox="0 0 1640 980" className="w-full" style={{ minWidth: 1200 }}>
+          <style>{`.ac-flow{fill:none;stroke-width:2.4;stroke-linecap:round;stroke-dasharray:8 20;animation:ac-dash 1s linear infinite}@keyframes ac-dash{to{stroke-dashoffset:-28}}`}</style>
+          {PHASES.map((p, i) => (<text key={p} x={COL_X[i]} y={44} textAnchor="middle" fill="#64748b" fontSize={13} fontWeight={800} letterSpacing="1">{p.toUpperCase()}</text>))}
           {EDGES.map(([a, b], i) => {
-            const loop = a === 17 && b === 2;
-            const col = COLOR[stageMode(pos[a].s)];
-            const d = edgePath(a, b);
-            return (
-              <g key={i}>
-                <path d={d} fill="none" stroke={loop ? "#818cf8" : col} strokeWidth={2.4} opacity={loop ? 0.18 : 0.12} strokeDasharray={loop ? "6 8" : undefined} />
-                <path d={d} className="ac-flow" stroke={loop ? "#818cf8" : col} style={{ filter: `drop-shadow(0 0 4px ${loop ? "#818cf8" : col})` }} />
-              </g>
-            );
+            const loop = a === 17 && b === 2; const col = COLOR[stageMode(pos[a].s)]; const d = edgePath(a, b);
+            return (<g key={i}>
+              <path d={d} fill="none" stroke={loop ? "#818cf8" : col} strokeWidth={2.4} opacity={loop ? 0.18 : 0.12} strokeDasharray={loop ? "6 8" : undefined} />
+              <path d={d} className="ac-flow" stroke={loop ? "#818cf8" : col} style={{ filter: `drop-shadow(0 0 4px ${loop ? "#818cf8" : col})` }} />
+            </g>);
           })}
-          {/* learning-loop label */}
           <text x={(COL_X[0] + COL_X[5]) / 2} y={LOOP_Y - 8} textAnchor="middle" fill="#818cf8" fontSize={12} fontWeight={700}>↺ Results & feedback return to the Brand Brain</text>
-
-          {/* Nodes */}
           {STAGES.map((s) => {
-            const p = pos[s.n];
-            const mode = stageMode(s);
-            const col = COLOR[mode];
+            const p = pos[s.n]; const mode = stageMode(s); const col = COLOR[mode];
             const x = p.x - NW / 2, y = p.y - NH / 2;
-            return (
-              <g key={s.n}>
-                <title>{`${s.n}. ${s.label} — ${MODE_LABEL[mode]}`}</title>
-                <rect x={x} y={y} width={NW} height={NH} rx={13} fill="#0b1220" stroke={col} strokeWidth={1.6} style={{ filter: `drop-shadow(0 0 8px ${col}40)` }} />
-                <circle cx={x + 20} cy={p.y} r={13} fill="#0f172a" stroke={col} strokeWidth={1.4} />
-                <text x={x + 20} y={p.y + 4} textAnchor="middle" fill={col} fontSize={12} fontWeight={800}>{s.n}</text>
-                <text x={x + 42} y={p.y - 4} fill="#fff" fontSize={13.5} fontWeight={700}>{s.label}</text>
-                <text x={x + 42} y={p.y + 13} fill="#94a3b8" fontSize={10.5}>{s.sub}</text>
-              </g>
-            );
+            return (<g key={s.n}>
+              <title>{`${s.n}. ${s.label} (${s.manual ? "Manual" : "Agent"}) — ${MODE_LABEL[mode]}\n${s.tech.join(" · ")}\n${s.brief}`}</title>
+              <rect x={x} y={y} width={NW} height={NH} rx={13} fill="#0b1220" stroke={col} strokeWidth={1.6} strokeDasharray={s.manual ? "5 4" : undefined} style={{ filter: `drop-shadow(0 0 8px ${col}40)` }} />
+              <circle cx={x + 22} cy={p.y} r={14} fill="#0f172a" stroke={col} strokeWidth={1.4} />
+              <text x={x + 22} y={p.y + 4} textAnchor="middle" fill={col} fontSize={12} fontWeight={800}>{s.n}</text>
+              <text x={x + 46} y={p.y - 10} fill="#fff" fontSize={13} fontWeight={700}>{s.label}</text>
+              <text x={x + 46} y={p.y + 5} fill="#94a3b8" fontSize={10}>{s.manual ? "👤 " : "🤖 "}{s.sub}</text>
+              <text x={x + 46} y={p.y + 19} fill={col} fontSize={9.5} fontWeight={600}>{s.tech.slice(0, 2).join(" · ")}</text>
+            </g>);
           })}
         </svg>
       </div>
 
-      <p className="text-[11px] text-slate-600 text-center">Hover any step for its status · Green = working live · Amber = simulated (needs a real connection) · Grey = not built.</p>
+      {/* Agent briefings */}
+      <div>
+        <h2 className="text-sm font-bold text-white mb-3">Agent Briefings</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {STAGES.map((s) => {
+            const mode = stageMode(s); const col = COLOR[mode];
+            return (
+              <div key={s.n} className="bg-slate-950/60 border border-slate-900 rounded-2xl p-3.5" style={{ borderLeft: `3px solid ${col}` }}>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <div className="flex items-center space-x-2 min-w-0">
+                    <span className="text-[10px] font-black w-5 h-5 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center shrink-0" style={{ color: col }}>{s.n}</span>
+                    <h3 className="text-xs font-bold text-white truncate">{s.label}</h3>
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border border-slate-800 text-slate-400 flex items-center space-x-1 shrink-0">
+                      {s.manual ? <User className="w-2.5 h-2.5" /> : <Bot className="w-2.5 h-2.5" />}<span>{s.manual ? "Manual" : "Agent"}</span>
+                    </span>
+                  </div>
+                  <span className="text-[9px] font-black px-2 py-0.5 rounded-full border shrink-0" style={{ color: col, borderColor: `${col}55`, background: `${col}18` }}>{MODE_LABEL[mode]}</span>
+                </div>
+                <div className="flex flex-wrap gap-1 mb-1.5">
+                  {s.tech.map((t) => (<span key={t} className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400">{t}</span>))}
+                </div>
+                <p className="text-[11px] text-slate-500 leading-relaxed">{s.brief}</p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
