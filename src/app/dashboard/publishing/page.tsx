@@ -63,7 +63,7 @@ export default function AdPublishingPage() {
     meta_page_id: string;
   }
 
-  const [activeTab, setActiveTab] = useState<"queue" | "scheduled" | "history" | "settings">("queue");
+  const [activeTab, setActiveTab] = useState<"queue" | "uploads" | "scheduled" | "history" | "settings">("queue");
   
   // Clients list for settings dropdown
   const [clients, setClients] = useState<ClientItem[]>([]);
@@ -72,6 +72,8 @@ export default function AdPublishingPage() {
   const [history, setHistory] = useState<CreativeItem[]>([]);
   // Scheduled manual posts
   const [scheduledPosts, setScheduledPosts] = useState<ScheduledPostItem[]>([]);
+  const [designerUploads, setDesignerUploads] = useState<Array<{ id: string; file_url: string; file_name: string | null; media_type: string; content_type: string; caption: string | null; clients?: { name: string } | null }>>([]);
+  const [scheduleForms, setScheduleForms] = useState<Record<string, { caption: string; platform: string; scheduledFor: string }>>({});
   // Credentials list mapping
   const [credentials, setCredentials] = useState<Record<string, CredentialItem>>({});
 
@@ -150,6 +152,53 @@ export default function AdPublishingPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const fetchDesignerUploads = useCallback(async () => {
+    try {
+      const res = await fetch("/api/content-hub");
+      if (res.ok) {
+        const data = await res.json();
+        setDesignerUploads((data.uploads || []).filter((u: { status: string }) => u.status === "uploaded"));
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  useEffect(() => {
+    fetchDesignerUploads();
+  }, [fetchDesignerUploads]);
+
+  const setForm = (id: string, patch: Partial<{ caption: string; platform: string; scheduledFor: string }>) =>
+    setScheduleForms((prev) => {
+      const base = prev[id] || { caption: "", platform: "instagram", scheduledFor: "" };
+      return { ...prev, [id]: { ...base, ...patch } };
+    });
+
+  const handleSendToPublishing = async (id: string) => {
+    const f = scheduleForms[id];
+    if (!f?.scheduledFor) {
+      setError("Pick a date & time to schedule this post.");
+      return;
+    }
+    setActionLoading(id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/content-hub/${id}/send-to-publishing`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ caption: f.caption, platform: f.platform || "instagram", scheduledFor: new Date(f.scheduledFor).toISOString() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to schedule");
+      await fetchDesignerUploads();
+      await fetchData();
+      setActiveTab("scheduled");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to schedule");
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   // Load client credentials when selected changes
   useEffect(() => {
@@ -350,7 +399,19 @@ export default function AdPublishingPage() {
             <ListOrdered className="w-3.5 h-3.5" />
             <span>Queue</span>
           </button>
-          
+
+          <button
+            onClick={() => setActiveTab("uploads")}
+            className={`flex items-center space-x-1 px-4 py-2 rounded-lg cursor-pointer transition-all ${
+              activeTab === "uploads"
+                ? "bg-indigo-600 text-white shadow-lg"
+                : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <UploadCloud className="w-3.5 h-3.5" />
+            <span>Designer Uploads{designerUploads.length > 0 ? ` (${designerUploads.length})` : ""}</span>
+          </button>
+
           <button
             onClick={() => setActiveTab("scheduled")}
             className={`flex items-center space-x-1 px-4 py-2 rounded-lg cursor-pointer transition-all ${
@@ -483,6 +544,71 @@ export default function AdPublishingPage() {
           )}
 
           {/* Tab: Scheduled Posts */}
+          {activeTab === "uploads" && (
+            <div className="space-y-4">
+              <div className="bg-slate-900/10 border border-slate-900/60 p-4 rounded-2xl text-[10px] text-slate-400">
+                Creatives uploaded by designers in the <span className="text-slate-200 font-semibold">Content Hub</span>. Add a caption, pick a platform &amp; time, then schedule — it moves to Scheduled Posts and publishes to Meta automatically.
+              </div>
+              {designerUploads.length === 0 ? (
+                <p className="text-xs text-slate-600 py-10 text-center">No pending designer uploads.</p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {designerUploads.map((u) => {
+                    const f = scheduleForms[u.id] || { caption: "", platform: "instagram", scheduledFor: "" };
+                    return (
+                      <div key={u.id} className="bg-slate-950/60 border border-slate-900 rounded-2xl p-4 space-y-3">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-16 h-16 rounded-lg overflow-hidden bg-slate-900 border border-slate-800 shrink-0">
+                            {u.media_type === "video" ? (
+                              <video src={u.file_url} className="w-full h-full object-cover" muted />
+                            ) : (
+                              <img src={u.file_url} alt={u.file_name || ""} className="w-full h-full object-cover" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-white truncate">{u.file_name}</p>
+                            <p className="text-[10px] text-slate-500">{u.clients?.name || "—"} · <span className="capitalize">{u.content_type}</span></p>
+                          </div>
+                        </div>
+                        <textarea
+                          placeholder="Caption…"
+                          value={f.caption}
+                          onChange={(e) => setForm(u.id, { caption: e.target.value })}
+                          rows={2}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-[11px] text-white placeholder-slate-600 resize-none focus:outline-none focus:border-indigo-500"
+                        />
+                        <div className="grid grid-cols-2 gap-2">
+                          <select
+                            value={f.platform}
+                            onChange={(e) => setForm(u.id, { platform: e.target.value })}
+                            className="bg-slate-950 border border-slate-800 rounded-lg p-2 text-[11px] text-white focus:outline-none"
+                          >
+                            <option value="instagram">Instagram</option>
+                            <option value="facebook">Facebook</option>
+                          </select>
+                          <input
+                            type="datetime-local"
+                            value={f.scheduledFor}
+                            onChange={(e) => setForm(u.id, { scheduledFor: e.target.value })}
+                            className="bg-slate-950 border border-slate-800 rounded-lg p-2 text-[11px] text-white focus:outline-none"
+                          />
+                        </div>
+                        <button
+                          disabled={!!actionLoading}
+                          onClick={() => handleSendToPublishing(u.id)}
+                          className="w-full py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-1.5"
+                        >
+                          {actionLoading === u.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Calendar className="w-3.5 h-3.5" />}
+                          <span>Schedule to Post</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {activeTab === "scheduled" && (
             <div className="space-y-4">
               <div className="flex justify-between items-center">
