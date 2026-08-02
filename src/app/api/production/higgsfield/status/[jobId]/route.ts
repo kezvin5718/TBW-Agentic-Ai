@@ -11,6 +11,29 @@ import { generateOpenAIImage, OPENAI_IMAGE_CONFIG, describeImageViaVision } from
 import { storeFromUrl, storeFromBuffer } from "@/lib/google-drive";
 import * as crypto from "crypto";
 
+// Build the overlay address line from brand_brain.addresses, combining the
+// address and contact number when both are present ("address  •  phone").
+function extractAddressText(addresses: unknown): string | null {
+  if (!addresses) return null;
+  if (typeof addresses === "string") return addresses;
+  if (Array.isArray(addresses) && addresses[0]) {
+    const first = addresses[0];
+    if (typeof first === "string") return first;
+    if (first && typeof first === "object") {
+      const o = first as Record<string, unknown>;
+      const addr = String(o.address || o.text || "").trim();
+      const phone = String(o.phone || "").trim();
+      const combined = [addr, phone].filter(Boolean).join("  •  ");
+      return combined || null;
+    }
+  }
+  if (typeof addresses === "object") {
+    const o = addresses as Record<string, unknown>;
+    return (String(o.primary || o.address || o.text || "").trim()) || null;
+  }
+  return null;
+}
+
 // Resolve a client name (for the Drive folder path) from a client id.
 async function resolveClientName(
   supabase: ReturnType<typeof createServiceRoleClient>,
@@ -141,9 +164,7 @@ export async function GET(
                 .single();
 
               const logoUrl = brandingConfig?.logo_url || null;
-              const address = brandingConfig?.addresses && Array.isArray(brandingConfig.addresses) && brandingConfig.addresses.length > 0
-                ? brandingConfig.addresses[0]
-                : null;
+              const address = extractAddressText(brandingConfig?.addresses);
 
               const brandedBuffer = await applyClientBrandingOverlay(baseBuffer, {
                 logoUrl,
@@ -317,18 +338,7 @@ export async function GET(
                   .maybeSingle();
 
                 const logoUrl = clientData?.logo_url || null;
-                let addressText: string | null = null;
-                if (brainData?.addresses) {
-                  if (typeof brainData.addresses === "string") {
-                    addressText = brainData.addresses;
-                  } else if (Array.isArray(brainData.addresses) && brainData.addresses[0]) {
-                    const first = brainData.addresses[0];
-                    addressText = typeof first === "string" ? first : (first.address || first.text || JSON.stringify(first));
-                  } else if (typeof brainData.addresses === "object") {
-                    const obj = brainData.addresses as Record<string, unknown>;
-                    addressText = (obj.primary || obj.address || obj.text) as string;
-                  }
-                }
+                const addressText = extractAddressText(brainData?.addresses);
 
                 const brandingConfig = (brainData?.design_preferences as Record<string, unknown>)?.branding_config as Record<string, unknown> | undefined;
 

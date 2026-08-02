@@ -31,6 +31,8 @@ export async function POST(request: Request) {
       deliverablesPerMonth,
       adBudget,
       whatsappGroupId,
+      address,
+      contactNumber,
     } = body;
 
     if (!name || !name.trim()) {
@@ -59,7 +61,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: clientError?.message || "Failed to create client" }, { status: 500 });
     }
 
-    // 4. Initialize an empty Brand Brain record
+    // 4. Initialize the Brand Brain record — seed the address + contact number so
+    // the Image Studio Client Branding Overlay has them. Stored as a structured
+    // entry: addresses[0] = { address, phone }. The overlay reads `.address`.
+    const addressEntry = (address && String(address).trim()) || (contactNumber && String(contactNumber).trim())
+      ? [{ address: String(address || "").trim(), phone: String(contactNumber || "").trim() }]
+      : [];
+
     const { data: brandBrain, error: brainError } = await supabase
       .from("brand_brain")
       .insert({
@@ -68,7 +76,7 @@ export async function POST(request: Request) {
         fonts: [],
         caption_tone: "",
         design_preferences: {},
-        addresses: [],
+        addresses: addressEntry,
         past_creatives: [],
         feedback_log: [],
         results_log: [],

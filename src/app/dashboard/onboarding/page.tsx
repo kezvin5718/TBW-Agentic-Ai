@@ -47,6 +47,8 @@ export default function OnboardingPage() {
   const [deliverablesPerMonth, setDeliverablesPerMonth] = useState("4");
   const [adBudget, setAdBudget] = useState("50000");
   const [whatsappGroupId, setWhatsappGroupId] = useState("");
+  const [address, setAddress] = useState("");
+  const [contactNumber, setContactNumber] = useState("");
 
   // File objects
   const [logoFile, setLogoFile] = useState<File | null>(null);
@@ -135,6 +137,8 @@ export default function OnboardingPage() {
           deliverablesPerMonth: Number(deliverablesPerMonth),
           adBudget: Number(adBudget),
           whatsappGroupId,
+          address,
+          contactNumber,
         }),
       });
 
@@ -267,6 +271,28 @@ export default function OnboardingPage() {
                     placeholder="e.g. 1203632148729_swad@g.us"
                     value={whatsappGroupId}
                     onChange={(e) => setWhatsappGroupId(e.target.value)}
+                    className="w-full bg-slate-900/40 border border-slate-800 rounded-xl py-2.5 px-3.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/80 transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Business Address <span className="text-slate-600 normal-case font-medium">(used on the branding overlay)</span></label>
+                  <textarea
+                    rows={2}
+                    placeholder="e.g. 12 MG Road, Indiranagar, Bangalore 560038"
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    className="w-full bg-slate-900/40 border border-slate-800 rounded-xl py-2.5 px-3.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/80 transition-all resize-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Contact Number</label>
+                  <input
+                    type="tel"
+                    placeholder="e.g. +91 98765 43210"
+                    value={contactNumber}
+                    onChange={(e) => setContactNumber(e.target.value)}
                     className="w-full bg-slate-900/40 border border-slate-800 rounded-xl py-2.5 px-3.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/80 transition-all"
                   />
                 </div>
