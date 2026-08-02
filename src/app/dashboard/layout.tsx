@@ -23,7 +23,8 @@ import {
   Image,
   Settings,
   Activity,
-  FolderUp
+  FolderUp,
+  Share2
 } from "lucide-react";
 
 export default async function DashboardLayout({
@@ -61,6 +62,7 @@ export default async function DashboardLayout({
     { name: "Reporting & Analytics", href: "/dashboard/reporting", icon: LineChart, roles: ["founder", "employee", "client"] },
     { name: "Agency Brain", href: "/dashboard/agency-brain", icon: Layers, roles: ["founder"] },
     { name: "Integrations", href: "/dashboard/settings/integrations", icon: Settings, roles: ["founder"] },
+    { name: "Connections", href: "/dashboard/connections", icon: Share2, roles: ["founder", "employee"] },
     { name: "System Diagnostics", href: "/dashboard/diagnostics", icon: Activity, roles: ["founder"] },
   ];
 
