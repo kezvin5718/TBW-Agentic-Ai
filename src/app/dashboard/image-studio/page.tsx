@@ -120,7 +120,8 @@ function ImageStudioWorkspace() {
 
   // Credit Tracking
   const [monthlyCredits, setMonthlyCredits] = useState(0);
-  const [creditAlert, setCreditAlert] = useState(false);
+  const [pricing, setPricing] = useState<Array<{ id: string; name: string; engine: string; costs: Record<string, number | null> }>>([]);
+  const [pricingLive, setPricingLive] = useState(false);
 
   // Connection Tracking
   const [higgsfieldConnected, setHiggsfieldConnected] = useState<boolean | null>(null);
@@ -242,6 +243,24 @@ function ImageStudioWorkspace() {
 
   useEffect(() => {
     fetchModels();
+  }, []);
+
+  // Load the per-model / per-resolution credit price table.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/production/higgsfield/pricing");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            setPricing(data.pricing || []);
+            setPricingLive(!!data.live);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load credit pricing:", err);
+      }
+    })();
   }, []);
 
   const getSupportedResolutionsForModel = (modelName: string): string[] => {
@@ -520,7 +539,6 @@ function ImageStudioWorkspace() {
       if (!error && data) {
         const total = data.reduce((sum, item) => sum + Number(item.cost), 0);
         setMonthlyCredits(total);
-        setCreditAlert(total >= HIGGSFIELD_CONFIG.monthlyLimitAlert);
       }
     } catch (err) {
       console.error("Failed to load monthly credit costs:", err);
@@ -867,9 +885,6 @@ function ImageStudioWorkspace() {
             throw new Error(data.error || "Submission failed");
           }
 
-          if (data.creditWarning) {
-            setCreditAlert(true);
-          }
           setMonthlyCredits(data.totalCredits || monthlyCredits);
 
           job.status = 'processing';
@@ -1176,29 +1191,41 @@ function ImageStudioWorkspace() {
             <span>Sync from Higgsfield</span>
           </button>
 
-          {/* Credit Alert Metric Box */}
-          <div className="bg-slate-950/60 border border-slate-900 rounded-xl p-3 flex flex-col justify-center min-w-[200px]">
-            <div className="flex items-center justify-between text-[10px] font-bold tracking-wider text-slate-500 uppercase">
-              <span>Higgsfield Credits Usage</span>
-              {creditAlert && (
-                <span className="flex items-center space-x-1 text-amber-500">
-                  <AlertTriangle className="w-3 h-3" />
-                  <span>Limit warning</span>
-                </span>
-              )}
+          {/* Credit Pricing table — credits per image by model & resolution */}
+          <div className="bg-slate-950/60 border border-slate-900 rounded-xl p-3 min-w-[260px]">
+            <div className="flex items-center justify-between text-[10px] font-bold tracking-wider text-slate-500 uppercase mb-2">
+              <span>Credit Pricing — per image</span>
+              <span className={`text-[8px] px-1.5 py-0.5 rounded-full border ${pricingLive ? "bg-emerald-950/40 border-emerald-900 text-emerald-400" : "bg-slate-900 border-slate-800 text-slate-500"}`}>
+                {pricingLive ? "live" : "estimated"}
+              </span>
             </div>
-            <div className="flex items-baseline space-x-1 mt-1.5">
-              <span className="text-2xl font-black text-white">{monthlyCredits.toFixed(1)}</span>
-              <span className="text-[10px] font-semibold text-slate-500">/ {HIGGSFIELD_CONFIG.monthlyLimitAlert} credits</span>
-            </div>
-            <div className="w-full bg-slate-900 rounded-full h-1 mt-2 overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-500 ${
-                  creditAlert ? "bg-amber-500" : "bg-indigo-600"
-                }`}
-                style={{ width: `${Math.min((monthlyCredits / HIGGSFIELD_CONFIG.monthlyLimitAlert) * 100, 100)}%` }}
-              />
-            </div>
+            {pricing.length === 0 ? (
+              <p className="text-[10px] text-slate-600">Loading prices…</p>
+            ) : (
+              <table className="w-full text-[10px]">
+                <thead>
+                  <tr className="text-slate-500">
+                    <th className="text-left font-bold pb-1">Model</th>
+                    <th className="text-center font-bold pb-1">1K</th>
+                    <th className="text-center font-bold pb-1">2K</th>
+                    <th className="text-center font-bold pb-1">4K</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pricing.map((row) => (
+                    <tr key={row.id} className="text-white">
+                      <td className="text-left py-0.5 font-semibold text-slate-300">{row.name}</td>
+                      {["1k", "2k", "4k"].map((r) => (
+                        <td key={r} className="text-center py-0.5 font-bold">
+                          {row.costs[r] == null ? <span className="text-slate-700">—</span> : row.costs[r]}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <p className="text-[8px] text-slate-600 mt-1.5 leading-tight">Credits charged per image. Your exact cost shows in the estimate before you generate.</p>
           </div>
         </div>
       </div>
