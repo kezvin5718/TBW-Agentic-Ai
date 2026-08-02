@@ -1,3 +1,4 @@
+import React from "react";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -47,23 +48,25 @@ export default async function DashboardLayout({
 
   // Full map of modular nav items
   const allNavItems = [
-    { name: "Console Home", href: "/dashboard", icon: LayoutDashboard, roles: ["founder", "employee", "client"] },
-    { name: "Bron Assistant", href: "/dashboard/jarvis", icon: Bot, roles: ["founder"] },
-    { name: "Image Studio", href: "/dashboard/image-studio", icon: Image, roles: ["founder", "employee"] },
-    { name: "Client Onboarding", href: "/dashboard/onboarding", icon: UserPlus, roles: ["founder"] },
-    { name: "Brand Brain", href: "/dashboard/brand-brain", icon: BrainCircuit, roles: ["founder", "employee", "client"] },
-    { name: "Campaign Planning", href: "/dashboard/planning", icon: ClipboardList, roles: ["founder", "employee"] },
-    { name: "Approvals Flow", href: "/dashboard/approvals", icon: CheckSquare, roles: ["founder", "employee"] },
-    { name: "Creative Approvals", href: "/dashboard/creatives-review", icon: Shield, roles: ["founder", "employee"] },
-    { name: "Ad Production", href: "/dashboard/production", icon: Clapperboard, roles: ["founder", "employee"] },
-    { name: "Ad Publishing", href: "/dashboard/publishing", icon: UploadCloud, roles: ["founder", "employee"] },
-    { name: "Content Hub", href: "/dashboard/content-hub", icon: FolderUp, roles: ["founder", "employee"] },
-    { name: "Meta Ads Manager", href: "/dashboard/ads", icon: Megaphone, roles: ["founder", "employee"] },
-    { name: "Reporting & Analytics", href: "/dashboard/reporting", icon: LineChart, roles: ["founder", "employee", "client"] },
-    { name: "Agency Brain", href: "/dashboard/agency-brain", icon: Layers, roles: ["founder"] },
-    { name: "Integrations", href: "/dashboard/settings/integrations", icon: Settings, roles: ["founder"] },
-    { name: "Agents Console", href: "/dashboard/connections", icon: Share2, roles: ["founder", "employee"] },
-    { name: "System Diagnostics", href: "/dashboard/diagnostics", icon: Activity, roles: ["founder"] },
+    { name: "Console Home", href: "/dashboard", icon: LayoutDashboard, roles: ["founder", "employee", "client"], section: "Overview" },
+
+    { name: "1 · Client Onboarding", href: "/dashboard/onboarding", icon: UserPlus, roles: ["founder"], section: "Client Workflow" },
+    { name: "2 · Brand Brain", href: "/dashboard/brand-brain", icon: BrainCircuit, roles: ["founder", "employee", "client"], section: "Client Workflow" },
+    { name: "3 · Campaign Planning", href: "/dashboard/planning", icon: ClipboardList, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "4 · Approvals Flow", href: "/dashboard/approvals", icon: CheckSquare, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "5 · Ad Production", href: "/dashboard/production", icon: Clapperboard, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "6 · Image Studio", href: "/dashboard/image-studio", icon: Image, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "7 · Creative Approvals", href: "/dashboard/creatives-review", icon: Shield, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "8 · Content Hub", href: "/dashboard/content-hub", icon: FolderUp, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "9 · Ad Publishing", href: "/dashboard/publishing", icon: UploadCloud, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "10 · Meta Ads Manager", href: "/dashboard/ads", icon: Megaphone, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "11 · Reporting & Analytics", href: "/dashboard/reporting", icon: LineChart, roles: ["founder", "employee", "client"], section: "Client Workflow" },
+    { name: "12 · Agency Brain", href: "/dashboard/agency-brain", icon: Layers, roles: ["founder"], section: "Client Workflow" },
+
+    { name: "Bron Assistant", href: "/dashboard/jarvis", icon: Bot, roles: ["founder"], section: "Assistant & System" },
+    { name: "Agents Console", href: "/dashboard/connections", icon: Share2, roles: ["founder", "employee"], section: "Assistant & System" },
+    { name: "System Diagnostics", href: "/dashboard/diagnostics", icon: Activity, roles: ["founder"], section: "Assistant & System" },
+    { name: "Integrations", href: "/dashboard/settings/integrations", icon: Settings, roles: ["founder"], section: "Assistant & System" },
   ];
 
   const filteredNavItems = allNavItems.filter((item) => item.roles.includes(role));
@@ -122,21 +125,27 @@ export default async function DashboardLayout({
           </div>
         </div>
 
-        {/* Sidebar Nav */}
-        <nav className="flex-1 p-4 space-y-1.5 overflow-y-auto">
-          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-3 mb-2">Available Modules</p>
-          {filteredNavItems.map((item) => {
+        {/* Sidebar Nav — ordered to follow the workflow, grouped by section */}
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+          {filteredNavItems.map((item, idx) => {
             const Icon = item.icon;
+            const showHeader = idx === 0 || filteredNavItems[idx - 1].section !== item.section;
             return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-900/50 border border-transparent hover:border-slate-900 transition-all group"
-              >
-                <Icon className="w-4 h-4 text-slate-500 group-hover:text-indigo-400 transition-colors" />
-                <span className="font-medium">{item.name}</span>
-                {item.href === "/dashboard/diagnostics" && <DiagnosticsStatusDot />}
-              </Link>
+              <React.Fragment key={item.href}>
+                {showHeader && (
+                  <p className={`text-[10px] font-bold text-slate-500 uppercase tracking-wider px-3 mb-2 ${idx === 0 ? "" : "mt-4"}`}>
+                    {item.section}
+                  </p>
+                )}
+                <Link
+                  href={item.href}
+                  className="flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-900/50 border border-transparent hover:border-slate-900 transition-all group"
+                >
+                  <Icon className="w-4 h-4 text-slate-500 group-hover:text-indigo-400 transition-colors" />
+                  <span className="font-medium">{item.name}</span>
+                  {item.href === "/dashboard/diagnostics" && <DiagnosticsStatusDot />}
+                </Link>
+              </React.Fragment>
             );
           })}
         </nav>
