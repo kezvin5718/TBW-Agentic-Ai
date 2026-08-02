@@ -114,7 +114,7 @@ export async function applyClientBrandingOverlay(
             dominant-baseline="middle"
             text-anchor="middle"
             fill="#FFFFFF"
-            font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+            font-family="'DejaVu Sans', sans-serif"
             font-size="${fontSize}px"
             font-weight="700"
             letter-spacing="0.5px"

@@ -19,6 +19,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Fonts + fontconfig so sharp/librsvg can render SVG <text> (the branding address
+# strip). Without these, Alpine has no fonts and text silently renders blank.
+RUN apk add --no-cache fontconfig ttf-dejavu && fc-cache -f
+
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
