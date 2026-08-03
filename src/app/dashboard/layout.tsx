@@ -27,7 +27,8 @@ import {
   Share2,
   MessageSquare,
   Link2,
-  Users
+  Users,
+  Send
 } from "lucide-react";
 
 export default async function DashboardLayout({
@@ -61,10 +62,11 @@ export default async function DashboardLayout({
     { name: "6 · Image Studio", href: "/dashboard/image-studio", icon: Image, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "7 · Creative Approvals", href: "/dashboard/creatives-review", icon: Shield, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "8 · Content Hub", href: "/dashboard/content-hub", icon: FolderUp, roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "9 · Ad Publishing", href: "/dashboard/publishing", icon: UploadCloud, roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "10 · Meta Ads Manager", href: "/dashboard/ads", icon: Megaphone, roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "11 · Reporting & Analytics", href: "/dashboard/reporting", icon: LineChart, roles: ["founder", "employee", "client"], section: "Client Workflow" },
-    { name: "12 · Agency Brain", href: "/dashboard/agency-brain", icon: Layers, roles: ["founder"], section: "Client Workflow" },
+    { name: "9 · Social Publisher", href: "/dashboard/social-publisher", icon: Send, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "10 · Ad Publishing", href: "/dashboard/publishing", icon: UploadCloud, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "11 · Meta Ads Manager", href: "/dashboard/ads", icon: Megaphone, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "12 · Reporting & Analytics", href: "/dashboard/reporting", icon: LineChart, roles: ["founder", "employee", "client"], section: "Client Workflow" },
+    { name: "13 · Agency Brain", href: "/dashboard/agency-brain", icon: Layers, roles: ["founder"], section: "Client Workflow" },
 
     { name: "Team & Access", href: "/dashboard/team", icon: Users, roles: ["founder"], section: "Assistant & System" },
     { name: "Bron Assistant", href: "/dashboard/jarvis", icon: Bot, roles: ["founder"], section: "Assistant & System" },
