@@ -1,26 +1,78 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ink: #050505;
+  --panel: #0a0a0a;
+  --yellow: #ffd400;
+  --neon: #00e5ff;
+  --background: var(--ink);
+  --foreground: #ffffff;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: var(--ink);
+  --color-foreground: #ffffff;
+  --font-sans: "Helvetica Neue", Inter, system-ui, sans-serif;
+  --font-mono: "SF Mono", Menlo, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ---- TBW design-system palette, applied at the token level so it flows to
+   every screen that already uses slate / indigo utilities ------------------ */
+@theme {
+  /* Canvas — true-black, layered surfaces */
+  --color-slate-950: #050505;
+  --color-slate-900: #0b0b0d;
+  --color-slate-850: #101013;
+  --color-slate-800: #17171b;
+  --color-slate-700: #262630;
+
+  /* Primary accent → Signal Yellow (text, borders, dots, CTAs) */
+  --color-indigo-300: #ffe24d;
+  --color-indigo-400: #ffd400;
+  --color-indigo-500: #ffd400;
+  --color-indigo-600: #ffcc00;
+  --color-indigo-650: #ffcc00;
+  --color-indigo-700: #e6b800;
+  --color-indigo-800: #4d4000;
+  --color-indigo-900: #3a3000;
+  --color-indigo-950: #161200;
+
+  /* Gradient partner (from-indigo → to-purple) → warm gold */
+  --color-purple-500: #ffc400;
+  --color-purple-600: #ffb800;
+  --color-purple-900: #2a2000;
+  --color-purple-950: #1a1400;
+
+  /* Violet accents → yellow */
+  --color-violet-400: #ffd400;
+  --color-violet-500: #ffd400;
+  --color-violet-900: #3a3000;
+  --color-violet-950: #161200;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--ink);
+  color: #fff;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
 }
+
+/* Keep primary-CTA text readable now that indigo/purple fills are gold */
+button[class*="from-indigo"], a[class*="from-indigo"],
+button[class*="bg-indigo-6"], a[class*="bg-indigo-6"],
+button[class*="bg-indigo-5"], a[class*="bg-indigo-5"] {
+  color: #000 !important;
+}
+
+/* Neon "signal" text — use for status / tokens / live values */
+.signal {
+  color: var(--neon);
+  text-shadow: 0 0 8px rgba(0, 229, 255, 0.6);
+  font-family: var(--font-mono);
+}
+
+/* Signature ambient layer */
+.tbw-glow { position: fixed; border-radius: 50%; filter: blur(90px); z-index: 0; pointer-events: none; }
+.tbw-glow.a { width: 55vw; height: 55vw; top: -10vh; left: -10vw; background: radial-gradient(circle, rgba(255, 212, 0, 0.13), transparent 65%); }
+.tbw-glow.b { width: 48vw; height: 48vw; bottom: -10vh; right: -5vw; background: radial-gradient(circle, rgba(0, 229, 255, 0.08), transparent 65%); }
+.tbw-grid { position: fixed; inset: 0; z-index: 0; pointer-events: none; background-image: linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px); background-size: 80px 80px; }

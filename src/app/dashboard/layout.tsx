@@ -167,12 +167,14 @@ export default async function DashboardLayout({
       </aside>
 
       {/* Main dashboard content */}
-      <main className="flex-1 flex flex-col min-w-0 relative">
-        {/* Glow effect */}
-        <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-indigo-950/10 blur-[100px] pointer-events-none" />
-        
+      <main className="flex-1 flex flex-col min-w-0 relative overflow-hidden">
+        {/* TBW ambient layer — gold + cyan glows behind a faint grid */}
+        <div className="absolute top-[-12%] left-[-8%] w-[45%] h-[45%] rounded-full blur-[90px] pointer-events-none z-0" style={{ background: "radial-gradient(circle, rgba(255,212,0,0.13), transparent 65%)" }} />
+        <div className="absolute bottom-[-12%] right-[-6%] w-[42%] h-[42%] rounded-full blur-[90px] pointer-events-none z-0" style={{ background: "radial-gradient(circle, rgba(0,229,255,0.08), transparent 65%)" }} />
+        <div className="absolute inset-0 pointer-events-none z-0" style={{ backgroundImage: "linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px)", backgroundSize: "80px 80px" }} />
+
         {/* Content wrapper */}
-        <div className="flex-1 p-6 md:p-10 z-10 overflow-y-auto">
+        <div className="flex-1 p-6 md:p-10 z-10 overflow-y-auto relative">
           {children}
         </div>
       </main>
