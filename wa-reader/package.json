@@ -1,0 +1,15 @@
+{
+  "name": "tbw-wa-reader",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only WhatsApp group reader that feeds the TBW OS WhatsApp Task Bar.",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.7",
+    "@whiskeysockets/baileys": "^6.7.9",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
