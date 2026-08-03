@@ -90,17 +90,16 @@ export default async function DashboardLayout({
       <aside className="w-full lg:w-72 bg-slate-950/60 backdrop-blur-md border-b lg:border-b-0 lg:border-r border-slate-900 flex flex-col shrink-0">
         {/* Brand header */}
         <div className="h-20 flex items-center px-6 border-b border-slate-900 justify-between">
-          <Link href="/dashboard" className="flex items-center space-x-3 group">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-950/50">
-              <Layers className="w-4 h-4 text-white" />
+          <Link href="/dashboard" className="flex items-center group">
+            {/* If you add public/tbw-logo.png it will show; otherwise the wordmark below. */}
+            <div className="leading-none">
+              <span className="font-extrabold text-2xl text-white tracking-[-0.07em] group-hover:text-[var(--yellow)] transition-colors">TBW</span>
+              <span className="block text-[7.5px] font-bold text-slate-500 tracking-[0.3em] uppercase mt-1">The Brand Wagon</span>
             </div>
-            <span className="font-bold text-lg text-white tracking-tight group-hover:text-indigo-400 transition-colors">
-              tbw-os
-            </span>
           </Link>
           <div className="flex items-center space-x-1.5 bg-slate-900/50 border border-slate-800/60 px-2 py-0.5 rounded-full">
-            <Sparkles className="w-3 h-3 text-indigo-400 animate-pulse" />
-            <span className="text-[10px] font-semibold text-slate-400 tracking-wider">v0.1</span>
+            <Sparkles className="w-3 h-3 text-[var(--yellow)]" />
+            <span className="text-[10px] font-semibold text-slate-400 tracking-wider signal">v0.1</span>
           </div>
         </div>
 
