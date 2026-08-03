@@ -44,9 +44,23 @@ async function start() {
 
   sock.ev.on("creds.update", saveCreds);
 
+  // Pairing-code login (easier over SSH than scanning a QR). Set PAIRING_NUMBER
+  // to the dedicated number in full international format, digits only (e.g. 9198…).
+  if (process.env.PAIRING_NUMBER && !sock.authState.creds.registered) {
+    const num = process.env.PAIRING_NUMBER.replace(/[^0-9]/g, "");
+    setTimeout(async () => {
+      try {
+        const code = await sock.requestPairingCode(num);
+        console.log(`\n🔑 PAIRING CODE: ${code}\nOn the dedicated phone: WhatsApp → Settings → Linked Devices → Link a device → "Link with phone number instead" → enter this code.\n`);
+      } catch (e) {
+        console.error("Pairing code request failed:", e?.message || e);
+      }
+    }, 3000);
+  }
+
   sock.ev.on("connection.update", (u) => {
     const { connection, lastDisconnect, qr } = u;
-    if (qr) {
+    if (qr && !process.env.PAIRING_NUMBER) {
       console.log("\nScan this QR with the DEDICATED WhatsApp number (Linked Devices → Link a device):\n");
       qrcode.generate(qr, { small: true });
     }
