@@ -37,7 +37,35 @@ export default function SocialPublisherPage() {
   const [mediaName, setMediaName] = useState("");
   const [mediaIsVideo, setMediaIsVideo] = useState(false);
   const [thumbUrl, setThumbUrl] = useState("");
-  const [scheduledFor, setScheduledFor] = useState("");
+  const [scheduledDate, setScheduledDate] = useState(""); // YYYY-MM-DD
+  const [scheduledTime, setScheduledTime] = useState(""); // HH:mm
+
+  // Compose the schedule (empty = post now). Date without time defaults to 10:00;
+  // time without date defaults to today.
+  const composeSchedule = (): string => {
+    if (!scheduledDate && !scheduledTime) return "";
+    const d = scheduledDate || new Date().toISOString().slice(0, 10);
+    const t = scheduledTime || "10:00";
+    return `${d}T${t}`;
+  };
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const applyPreset = (preset: "now" | "plus1h" | "tonight" | "tomorrow10") => {
+    const now = new Date();
+    if (preset === "now") { setScheduledDate(""); setScheduledTime(""); return; }
+    const d = new Date(now);
+    if (preset === "plus1h") d.setHours(d.getHours() + 1);
+    if (preset === "tonight") d.setHours(19, 0, 0, 0);
+    if (preset === "tomorrow10") { d.setDate(d.getDate() + 1); d.setHours(10, 0, 0, 0); }
+    setScheduledDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+    setScheduledTime(`${pad(d.getHours())}:${pad(d.getMinutes())}`);
+  };
+
+  // Clicking anywhere on the field opens the native calendar / clock picker.
+  const openPicker = (e: React.MouseEvent<HTMLInputElement>) => {
+    const el = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
+    try { el.showPicker?.(); } catch { /* browser needs direct interaction — fine */ }
+  };
 
   // ui state
   const [uploading, setUploading] = useState<"media" | "thumb" | null>(null);
@@ -118,14 +146,14 @@ export default function SocialPublisherPage() {
     try {
       const res = await fetch("/api/social-publisher", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, platforms, contentType, title, caption, mediaUrl, thumbnailUrl: thumbUrl || undefined, scheduledFor }),
+        body: JSON.stringify({ clientId, platforms, contentType, title, caption, mediaUrl, thumbnailUrl: thumbUrl || undefined, scheduledFor: composeSchedule() }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Send failed");
       const okCount = (data.results || []).filter((r: { ok: boolean }) => r.ok).length;
       const failCount = (data.results || []).length - okCount;
       setNotice({ ok: failCount === 0, text: failCount === 0 ? `Sent to Zapier for ${okCount} platform(s) ✅` : `${okCount} sent, ${failCount} failed — see history below.` });
-      if (failCount === 0) { setTitle(""); setCaption(""); setCaptionBrief(""); setMediaUrl(""); setMediaName(""); setThumbUrl(""); setScheduledFor(""); }
+      if (failCount === 0) { setTitle(""); setCaption(""); setCaptionBrief(""); setMediaUrl(""); setMediaName(""); setThumbUrl(""); setScheduledDate(""); setScheduledTime(""); }
       await loadHistory();
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Send failed" });
@@ -271,16 +299,48 @@ export default function SocialPublisherPage() {
         </div>
 
         {/* 4. Schedule + send */}
-        <div className="flex items-end justify-between gap-4 flex-wrap border-t border-slate-900 pt-4">
-          <div>
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5 flex items-center space-x-1"><Clock className="w-3 h-3" /><span>Post date &amp; time (empty = now)</span></label>
-            <input type="datetime-local" value={scheduledFor} onChange={(e) => setScheduledFor(e.target.value)}
-              className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500" />
+        <div className="border-t border-slate-900 pt-4 space-y-3">
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center space-x-1"><Clock className="w-3 h-3" /><span>When to post</span></label>
+
+          {/* Quick presets */}
+          <div className="flex flex-wrap gap-2">
+            {[
+              { k: "now" as const, label: "🚀 Post now" },
+              { k: "plus1h" as const, label: "+1 hour" },
+              { k: "tonight" as const, label: "Tonight 7 PM" },
+              { k: "tomorrow10" as const, label: "Tomorrow 10 AM" },
+            ].map((p) => (
+              <button key={p.k} type="button" onClick={() => applyPreset(p.k)}
+                className="px-3 py-1.5 rounded-full text-[11px] font-bold border bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-indigo-500 cursor-pointer transition-all">
+                {p.label}
+              </button>
+            ))}
           </div>
-          <button onClick={submit} disabled={!canSend} className={`px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center space-x-2 transition-all ${canSend ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>
-            {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            <span>{sending ? "Sending…" : `Send to Zapier (${platforms.length})`}</span>
-          </button>
+
+          <div className="flex items-end justify-between gap-4 flex-wrap">
+            <div className="flex gap-3 flex-wrap">
+              <div>
+                <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">📅 Date (click for calendar)</label>
+                <input type="date" value={scheduledDate} onClick={openPicker} onChange={(e) => setScheduledDate(e.target.value)}
+                  min={new Date().toISOString().slice(0, 10)}
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 cursor-pointer [color-scheme:dark]" />
+              </div>
+              <div>
+                <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">🕐 Time (click to pick)</label>
+                <input type="time" value={scheduledTime} onClick={openPicker} onChange={(e) => setScheduledTime(e.target.value)}
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 cursor-pointer [color-scheme:dark]" />
+              </div>
+              <div className="self-end pb-1 text-[11px] text-slate-500">
+                {composeSchedule()
+                  ? <>Scheduled: <span className="signal">{new Date(composeSchedule()).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span></>
+                  : "Posts immediately"}
+              </div>
+            </div>
+            <button onClick={submit} disabled={!canSend} className={`px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center space-x-2 transition-all ${canSend ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>
+              {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              <span>{sending ? "Sending…" : `Send to Zapier (${platforms.length})`}</span>
+            </button>
+          </div>
         </div>
       </div>
 
