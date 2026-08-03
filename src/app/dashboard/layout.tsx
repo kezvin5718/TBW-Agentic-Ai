@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import GlobalErrorMonitor from "./GlobalErrorMonitor";
+import BrandLogo from "./BrandLogo";
 import {
   Sparkles,
   LayoutDashboard,
@@ -91,11 +92,7 @@ export default async function DashboardLayout({
         {/* Brand header */}
         <div className="h-20 flex items-center px-6 border-b border-slate-900 justify-between">
           <Link href="/dashboard" className="flex items-center group">
-            {/* If you add public/tbw-logo.png it will show; otherwise the wordmark below. */}
-            <div className="leading-none">
-              <span className="font-extrabold text-2xl text-white tracking-[-0.07em] group-hover:text-[var(--yellow)] transition-colors">TBW</span>
-              <span className="block text-[7.5px] font-bold text-slate-500 tracking-[0.3em] uppercase mt-1">The Brand Wagon</span>
-            </div>
+            <BrandLogo />
           </Link>
           <div className="flex items-center space-x-1.5 bg-slate-900/50 border border-slate-800/60 px-2 py-0.5 rounded-full">
             <Sparkles className="w-3 h-3 text-[var(--yellow)]" />
