@@ -5,6 +5,11 @@ import { createClient } from "@/lib/supabase/client";
 import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock } from "lucide-react";
 
 interface ClientRow { id: string; name: string }
+interface HubUpload {
+  id: string; client_id: string; file_url: string; file_name: string | null;
+  media_type: string; content_type: "post" | "reel" | "story"; status: string;
+  created_at: string; clients?: { name: string } | null; profiles?: { name: string } | null;
+}
 interface PostRow {
   id: string; platform: string; content_type: string; title: string | null; caption: string | null;
   media_url: string; thumbnail_url: string | null; scheduled_for: string | null; status: string;
@@ -28,7 +33,12 @@ export default function SocialPublisherPage() {
   // form state
   const [clientId, setClientId] = useState("");
   const [platforms, setPlatforms] = useState<string[]>(["instagram"]);
-  const [contentType, setContentType] = useState<(typeof TYPES)[number]>("post");
+  const [contentTypes, setContentTypes] = useState<string[]>(["post"]);
+
+  // Content Hub tray
+  const [hubUploads, setHubUploads] = useState<HubUpload[]>([]);
+  const [hubFilter, setHubFilter] = useState<string>("all");
+  const [selectedUpload, setSelectedUpload] = useState<{ id: string; name: string } | null>(null);
   const [title, setTitle] = useState("");
   const [caption, setCaption] = useState("");
   const [captionBrief, setCaptionBrief] = useState("");
@@ -85,6 +95,35 @@ export default function SocialPublisherPage() {
     } catch { /* ignore */ }
   }, []);
 
+  const loadHubUploads = useCallback(async () => {
+    try {
+      const res = await fetch("/api/content-hub");
+      if (res.ok) {
+        const data = await res.json();
+        setHubUploads(((data.uploads || []) as HubUpload[]).filter((u) => u.status === "uploaded"));
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  // Fill the composer from a Content Hub item: client, media and content type auto-select.
+  const applyHubUpload = (u: HubUpload) => {
+    setClientId(u.client_id);
+    setMediaUrl(u.file_url);
+    setMediaName(u.file_name || "Content Hub file");
+    setMediaIsVideo(u.media_type === "video");
+    setContentTypes([u.content_type]);
+    setSelectedUpload({ id: u.id, name: u.file_name || "Content Hub file" });
+    setNotice({ ok: true, text: `Loaded "${u.file_name}" for ${u.clients?.name || "client"} — type auto-set to ${u.content_type}.` });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  // Content type: select 1 or 2 (e.g. Reel + Story).
+  const toggleType = (t: string) =>
+    setContentTypes((prev) => {
+      if (prev.includes(t)) return prev.length > 1 ? prev.filter((x) => x !== t) : prev;
+      return prev.length >= 2 ? [prev[1], t] : [...prev, t];
+    });
+
   useEffect(() => {
     (async () => {
       const supabase = createClient();
@@ -102,7 +141,8 @@ export default function SocialPublisherPage() {
       } catch { /* ignore */ }
     })();
     loadHistory();
-  }, [loadHistory]);
+    loadHubUploads();
+  }, [loadHistory, loadHubUploads]);
 
   const togglePlatform = (p: string) =>
     setPlatforms((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
@@ -130,7 +170,7 @@ export default function SocialPublisherPage() {
     try {
       const res = await fetch("/api/social-publisher/generate-caption", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, platform: platforms[0], contentType, brief: captionBrief, model: aiModel }),
+        body: JSON.stringify({ clientId, platform: platforms[0], contentType: contentTypes[0], brief: captionBrief, model: aiModel }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Generation failed");
@@ -146,15 +186,16 @@ export default function SocialPublisherPage() {
     try {
       const res = await fetch("/api/social-publisher", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, platforms, contentType, title, caption, mediaUrl, thumbnailUrl: thumbUrl || undefined, scheduledFor: composeSchedule() }),
+        body: JSON.stringify({ clientId, platforms, contentTypes, title, caption, mediaUrl, thumbnailUrl: thumbUrl || undefined, scheduledFor: composeSchedule(), uploadId: selectedUpload?.id }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Send failed");
       const okCount = (data.results || []).filter((r: { ok: boolean }) => r.ok).length;
       const failCount = (data.results || []).length - okCount;
       setNotice({ ok: failCount === 0, text: failCount === 0 ? `Sent to Zapier for ${okCount} platform(s) ✅` : `${okCount} sent, ${failCount} failed — see history below.` });
-      if (failCount === 0) { setTitle(""); setCaption(""); setCaptionBrief(""); setMediaUrl(""); setMediaName(""); setThumbUrl(""); setScheduledDate(""); setScheduledTime(""); }
+      if (failCount === 0) { setTitle(""); setCaption(""); setCaptionBrief(""); setMediaUrl(""); setMediaName(""); setThumbUrl(""); setScheduledDate(""); setScheduledTime(""); setSelectedUpload(null); }
       await loadHistory();
+      await loadHubUploads();
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Send failed" });
     } finally { setSending(false); }
@@ -175,7 +216,7 @@ export default function SocialPublisherPage() {
     } finally { setSavingHook(false); }
   };
 
-  const canSend = !!clientId && platforms.length > 0 && !!mediaUrl && !sending;
+  const canSend = !!clientId && platforms.length > 0 && contentTypes.length > 0 && !!mediaUrl && !sending;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -209,6 +250,48 @@ export default function SocialPublisherPage() {
         </details>
       )}
 
+      {/* Received from Content Hub — what designers have delivered, per client */}
+      <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5">
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <h3 className="text-sm font-bold text-white flex items-center space-x-2">
+            <UploadCloud className="w-4 h-4 text-[var(--yellow)]" />
+            <span>Received from Content Hub</span>
+            {hubUploads.length > 0 && <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-950/40 border border-indigo-900 text-indigo-400">{hubUploads.length} waiting</span>}
+          </h3>
+          {hubUploads.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              <button onClick={() => setHubFilter("all")} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border cursor-pointer ${hubFilter === "all" ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>All</button>
+              {Array.from(new Set(hubUploads.map((u) => u.clients?.name || "Unknown"))).map((n) => (
+                <button key={n} onClick={() => setHubFilter(n)} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border cursor-pointer ${hubFilter === n ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>{n}</button>
+              ))}
+            </div>
+          )}
+        </div>
+        {hubUploads.length === 0 ? (
+          <p className="text-xs text-slate-600 py-3 text-center">Nothing waiting — new designer uploads will appear here, grouped by client.</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {hubUploads.filter((u) => hubFilter === "all" || (u.clients?.name || "Unknown") === hubFilter).map((u) => (
+              <div key={u.id} className={`rounded-xl border p-3 space-y-2 ${selectedUpload?.id === u.id ? "border-indigo-500 bg-indigo-950/20" : "border-slate-900 bg-slate-950/60"}`}>
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-11 h-11 rounded-lg overflow-hidden bg-slate-900 border border-slate-800 shrink-0 flex items-center justify-center">
+                    {u.media_type === "video" ? <span className="text-slate-500">▶</span> : <img src={u.file_url} alt="" className="w-full h-full object-cover" />}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold text-white truncate">{u.file_name || "file"}</p>
+                    <p className="text-[10px] text-slate-500 truncate">{u.clients?.name || "—"} · <span className="capitalize text-[var(--yellow)]">{u.content_type}</span></p>
+                    <p className="text-[9px] text-slate-600">by {u.profiles?.name || "—"} · {new Date(u.created_at).toLocaleDateString()}</p>
+                  </div>
+                </div>
+                <button onClick={() => applyHubUpload(u)} className="w-full py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[11px] font-bold cursor-pointer">
+                  {selectedUpload?.id === u.id ? "Loaded ✓" : "Use this →"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Composer */}
       <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-5">
         {/* 1. Client + platforms + type */}
@@ -221,10 +304,10 @@ export default function SocialPublisherPage() {
             </select>
           </div>
           <div>
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Content Type</label>
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Content Type <span className="text-slate-600 normal-case font-medium">(pick 1–2, e.g. Reel + Story)</span></label>
             <div className="flex gap-2">
               {TYPES.map((t) => (
-                <button key={t} onClick={() => setContentType(t)} className={`px-4 py-2 rounded-full text-xs font-bold border capitalize cursor-pointer transition-all ${contentType === t ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>{t}</button>
+                <button key={t} onClick={() => toggleType(t)} className={`px-4 py-2 rounded-full text-xs font-bold border capitalize cursor-pointer transition-all ${contentTypes.includes(t) ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>{t}</button>
               ))}
             </div>
           </div>
@@ -338,7 +421,7 @@ export default function SocialPublisherPage() {
             </div>
             <button onClick={submit} disabled={!canSend} className={`px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center space-x-2 transition-all ${canSend ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>
               {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              <span>{sending ? "Sending…" : `Send to Zapier (${platforms.length})`}</span>
+              <span>{sending ? "Sending…" : `Send to Zapier (${platforms.length * contentTypes.length})`}</span>
             </button>
           </div>
         </div>
