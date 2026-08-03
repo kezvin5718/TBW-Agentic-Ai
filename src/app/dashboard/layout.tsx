@@ -24,7 +24,8 @@ import {
   Settings,
   FolderUp,
   Share2,
-  MessageSquare
+  MessageSquare,
+  Link2
 } from "lucide-react";
 
 export default async function DashboardLayout({
@@ -64,6 +65,7 @@ export default async function DashboardLayout({
     { name: "12 · Agency Brain", href: "/dashboard/agency-brain", icon: Layers, roles: ["founder"], section: "Client Workflow" },
 
     { name: "Bron Assistant", href: "/dashboard/jarvis", icon: Bot, roles: ["founder"], section: "Assistant & System" },
+    { name: "WhatsApp Reader", href: "/dashboard/whatsapp-reader", icon: Link2, roles: ["founder"], section: "Assistant & System" },
     { name: "Agents Console", href: "/dashboard/connections", icon: Share2, roles: ["founder", "employee"], section: "Assistant & System" },
     { name: "Integrations", href: "/dashboard/settings/integrations", icon: Settings, roles: ["founder"], section: "Assistant & System" },
   ];
