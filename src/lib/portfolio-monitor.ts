@@ -7,7 +7,7 @@
 
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { ALERTS } from "@/lib/portfolio-config";
-import { fetchQuote, fetchHoldings, buildSnapshot } from "@/lib/portfolio-data";
+import { fetchQuotes, fetchHoldings, buildSnapshot } from "@/lib/portfolio-data";
 
 const IST_OFFSET_MIN = 5.5 * 60;
 
@@ -35,9 +35,7 @@ export async function runIntradayWatch(): Promise<{ checked: number; fired: numb
   for (const h of holdings) nameByTicker[h.ticker] = h.name;
 
   const tickers = Array.from(new Set(ALERTS.map((a) => a.ticker)));
-  const quotes = Object.fromEntries(
-    await Promise.all(tickers.map(async (t) => [t, await fetchQuote(t)] as const))
-  );
+  const quotes = await fetchQuotes(tickers);
 
   let fired = 0;
   for (const a of ALERTS) {

@@ -96,22 +96,91 @@ export async function fetchQuote(ticker: string, retries = 3): Promise<Quote | n
   return null;
 }
 
-/** Fetch many tickers politely: limited concurrency + spacing (rate-limit safe). */
-export async function fetchQuotes(
-  tickers: string[],
-  concurrency = 3
-): Promise<Record<string, Quote | null>> {
-  const out: Record<string, Quote | null> = {};
-  let idx = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, tickers.length) }, async () => {
-      while (idx < tickers.length) {
-        const t = tickers[idx++];
-        out[t] = await fetchQuote(t);
-        await sleep(150);
+/** Batch fetch via Yahoo spark: many symbols per request (20/chunk), retry on 429. */
+async function fetchQuotesSpark(tickers: string[]): Promise<Record<string, Quote>> {
+  const out: Record<string, Quote> = {};
+  const chunks: string[][] = [];
+  for (let i = 0; i < tickers.length; i += 20) chunks.push(tickers.slice(i, i + 20));
+
+  for (const chunk of chunks) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const host = attempt % 2 === 0 ? "query1" : "query2";
+        const url = `https://${host}.finance.yahoo.com/v7/finance/spark?symbols=${encodeURIComponent(
+          chunk.join(",")
+        )}&range=5d&interval=1d`;
+        const res = await fetch(url, {
+          headers: { "User-Agent": YAHOO_UA, Accept: "application/json" },
+          next: { revalidate: 0 },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (res.status === 429 || res.status === 503) {
+          console.warn(`[portfolio] spark ${res.status}, attempt ${attempt + 1}`);
+          await sleep(800 * (attempt + 1) + Math.random() * 400);
+          continue;
+        }
+        if (!res.ok) {
+          console.warn(`[portfolio] spark HTTP ${res.status} (giving up on chunk)`);
+          break;
+        }
+        const json = await res.json();
+        for (const r of json?.spark?.result || []) {
+          const resp = r?.response?.[0];
+          if (!resp || !r.symbol) continue;
+          const closes: number[] = (resp.indicators?.quote?.[0]?.close || []).filter(
+            (c: number | null): c is number => typeof c === "number"
+          );
+          const price = resp.meta?.regularMarketPrice ?? closes[closes.length - 1];
+          const prevClose =
+            closes.length > 1
+              ? closes[closes.length - 2]
+              : resp.meta?.chartPreviousClose ?? price;
+          if (typeof price !== "number" || typeof prevClose !== "number") continue;
+          const q: Quote = {
+            price,
+            prevClose,
+            dayPct: prevClose ? ((price - prevClose) / prevClose) * 100 : 0,
+          };
+          out[r.symbol] = q;
+          quoteCache.set(r.symbol, { q, at: Date.now() });
+        }
+        break;
+      } catch (e) {
+        console.warn(`[portfolio] spark error:`, e instanceof Error ? e.message : e);
+        await sleep(500 * (attempt + 1));
       }
-    })
-  );
+    }
+    if (chunks.length > 1) await sleep(300);
+  }
+  return out;
+}
+
+/** Fetch many tickers: cache first, then ONE batch request, per-ticker fallback for stragglers. */
+export async function fetchQuotes(tickers: string[]): Promise<Record<string, Quote | null>> {
+  const out: Record<string, Quote | null> = {};
+  const need: string[] = [];
+  for (const t of tickers) {
+    const cached = quoteCache.get(t);
+    if (cached && Date.now() - cached.at < QUOTE_CACHE_MS) out[t] = cached.q;
+    else need.push(t);
+  }
+  if (need.length === 0) return out;
+
+  Object.assign(out, await fetchQuotesSpark(need));
+
+  const missing = need.filter((t) => !(t in out));
+  if (missing.length > 0) {
+    let idx = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(2, missing.length) }, async () => {
+        while (idx < missing.length) {
+          const t = missing[idx++];
+          out[t] = await fetchQuote(t, 1);
+          await sleep(250);
+        }
+      })
+    );
+  }
   return out;
 }
 
