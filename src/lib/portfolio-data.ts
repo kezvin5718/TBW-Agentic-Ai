@@ -1,14 +1,15 @@
 /**
  * Founder Zone — shared portfolio data layer.
- * Free data sources only (Yahoo Finance chart API + Google News RSS);
- * consumed by /api/founder/portfolio (dashboard) and /api/founder/portfolio/agents (LLM desks).
+ * Holdings come from the founder_holdings table (editable in the UI);
+ * prices from Yahoo Finance chart API, news from Google News RSS (both free).
+ * Consumed by /api/founder/portfolio, /api/founder/portfolio/agents, and the cron.
  */
 
+import { createServiceRoleClient } from "@/lib/supabase/server";
 import {
-  HOLDINGS,
   WATCHLIST,
   ALERTS,
-  NEWS_QUERIES,
+  MAX_NEWS_QUERIES,
   MAX_HEADLINES_PER_QUERY,
   NEWS_LOOKBACK_HOURS,
 } from "@/lib/portfolio-config";
@@ -22,6 +23,15 @@ export interface Quote {
 export interface Headline {
   title: string;
   publishedAt: string | null;
+}
+
+export interface HoldingRecord {
+  id: string;
+  account: string;
+  ticker: string;
+  name: string;
+  avg: number;
+  qty: number;
 }
 
 const YAHOO_UA =
@@ -89,20 +99,37 @@ export async function fetchNews(query: string): Promise<Headline[]> {
   }
 }
 
+export async function fetchHoldings(): Promise<HoldingRecord[]> {
+  const supabase = createServiceRoleClient();
+  const { data, error } = await supabase
+    .from("founder_holdings")
+    .select("id, account, ticker, name, avg, qty")
+    .order("account")
+    .order("name");
+  if (error) throw new Error(`Holdings fetch failed: ${error.message}`);
+  return (data || []).map((h) => ({ ...h, avg: Number(h.avg), qty: Number(h.qty) }));
+}
+
+export interface SnapshotHolding {
+  id: string;
+  account: string;
+  ticker: string;
+  name: string;
+  unavailable?: boolean;
+  price?: number;
+  dayPct?: number;
+  pnlPct?: number;
+  value?: number;
+  invested?: number;
+  qty?: number;
+  avg?: number;
+}
+
 export interface PortfolioSnapshot {
   asOf: string;
   portfolio: { totalValue: number; totalCost: number; totalPnlPct: number };
-  holdings: Array<{
-    ticker: string;
-    name: string;
-    unavailable?: boolean;
-    price?: number;
-    dayPct?: number;
-    pnlPct?: number;
-    value?: number;
-    qty?: number;
-    avg?: number;
-  }>;
+  accounts: { account: string; value: number; cost: number; pnlPct: number }[];
+  holdings: SnapshotHolding[];
   watchlist: Array<{
     ticker: string;
     name: string;
@@ -125,40 +152,49 @@ export interface PortfolioSnapshot {
 }
 
 export async function buildSnapshot(includeNews = true): Promise<PortfolioSnapshot> {
+  const holdingsRecords = await fetchHoldings();
   const tickers = Array.from(
-    new Set([...Object.keys(HOLDINGS), ...Object.keys(WATCHLIST)])
+    new Set([...holdingsRecords.map((h) => h.ticker), ...Object.keys(WATCHLIST)])
   );
 
-  const [quoteResults, newsResults] = await Promise.all([
-    Promise.all(tickers.map(async (t) => [t, await fetchQuote(t)] as const)),
-    includeNews
-      ? Promise.all(
-          NEWS_QUERIES.map(async (q) => ({ query: q, headlines: await fetchNews(q) }))
-        )
-      : Promise.resolve([]),
-  ]);
+  const quoteResults = await Promise.all(
+    tickers.map(async (t) => [t, await fetchQuote(t)] as const)
+  );
   const quotes: Record<string, Quote | null> = Object.fromEntries(quoteResults);
 
   let totalValue = 0;
   let totalCost = 0;
-  const holdings = Object.entries(HOLDINGS).map(([ticker, h]) => {
-    const q = quotes[ticker];
-    if (!q) return { ticker, name: h.name, unavailable: true };
+  const accountTotals: Record<string, { value: number; cost: number }> = {};
+
+  const holdings: SnapshotHolding[] = holdingsRecords.map((h) => {
+    const q = quotes[h.ticker];
+    const base = { id: h.id, account: h.account, ticker: h.ticker, name: h.name };
+    if (!q) return { ...base, unavailable: true, qty: h.qty, avg: h.avg };
     const value = q.price * h.qty;
     const cost = h.avg * h.qty;
     totalValue += value;
     totalCost += cost;
+    accountTotals[h.account] = accountTotals[h.account] || { value: 0, cost: 0 };
+    accountTotals[h.account].value += value;
+    accountTotals[h.account].cost += cost;
     return {
-      ticker,
-      name: h.name,
+      ...base,
       price: q.price,
       dayPct: q.dayPct,
-      pnlPct: ((q.price - h.avg) / h.avg) * 100,
+      pnlPct: h.avg ? ((q.price - h.avg) / h.avg) * 100 : 0,
       value,
+      invested: cost,
       qty: h.qty,
       avg: h.avg,
     };
   });
+
+  const accounts = Object.entries(accountTotals).map(([account, t]) => ({
+    account,
+    value: t.value,
+    cost: t.cost,
+    pnlPct: t.cost ? ((t.value - t.cost) / t.cost) * 100 : 0,
+  }));
 
   const watchlist = Object.entries(WATCHLIST).map(([ticker, w]) => {
     const q = quotes[ticker];
@@ -167,15 +203,37 @@ export async function buildSnapshot(includeNews = true): Promise<PortfolioSnapsh
       : { ticker, name: w.name, unavailable: true };
   });
 
+  const nameByTicker: Record<string, string> = {};
+  for (const h of holdingsRecords) nameByTicker[h.ticker] = h.name;
+  for (const [t, w] of Object.entries(WATCHLIST)) nameByTicker[t] = w.name;
+
   const triggered = ALERTS.filter((a) => {
     const q = quotes[a.ticker];
     if (!q) return false;
     return a.type === "above" ? q.price >= a.level : q.price <= a.level;
   }).map((a) => ({
     ...a,
-    name: HOLDINGS[a.ticker]?.name || WATCHLIST[a.ticker]?.name || a.ticker,
+    name: nameByTicker[a.ticker] || a.ticker,
     price: quotes[a.ticker]!.price,
   }));
+
+  // News queries: top holdings by invested value (dedup names, skip ETFs/indices)
+  let news: { query: string; headlines: Headline[] }[] = [];
+  if (includeNews) {
+    const byInvested = new Map<string, number>();
+    for (const h of holdings) {
+      if (!h.invested || h.name.toLowerCase().includes("bees")) continue;
+      byInvested.set(h.name, (byInvested.get(h.name) || 0) + h.invested);
+    }
+    const queries = Array.from(byInvested.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, MAX_NEWS_QUERIES)
+      .map(([name]) => name);
+    const newsResults = await Promise.all(
+      queries.map(async (q) => ({ query: q, headlines: await fetchNews(q) }))
+    );
+    news = newsResults.filter((n) => n.headlines.length > 0);
+  }
 
   return {
     asOf: new Date().toISOString(),
@@ -184,10 +242,11 @@ export async function buildSnapshot(includeNews = true): Promise<PortfolioSnapsh
       totalCost,
       totalPnlPct: totalCost ? ((totalValue - totalCost) / totalCost) * 100 : 0,
     },
+    accounts,
     holdings,
     watchlist,
     alerts: { rules: ALERTS.length, triggered },
-    news: newsResults.filter((n) => n.headlines.length > 0),
+    news,
   };
 }
 
@@ -196,16 +255,21 @@ export function snapshotToText(s: PortfolioSnapshot): string {
   const lines: string[] = [];
   lines.push(`AS OF: ${s.asOf}`);
   lines.push(
-    `PORTFOLIO: value ₹${(s.portfolio.totalValue / 1e5).toFixed(2)}L, cost ₹${(
+    `PORTFOLIO (all accounts): value ₹${(s.portfolio.totalValue / 1e5).toFixed(2)}L, cost ₹${(
       s.portfolio.totalCost / 1e5
     ).toFixed(2)}L, overall ${s.portfolio.totalPnlPct.toFixed(1)}%`
   );
+  for (const a of s.accounts) {
+    lines.push(
+      `  ${a.account}: ₹${(a.value / 1e5).toFixed(2)}L (${a.pnlPct >= 0 ? "+" : ""}${a.pnlPct.toFixed(1)}%)`
+    );
+  }
   lines.push("HOLDINGS:");
   for (const h of s.holdings) {
     lines.push(
       h.unavailable
-        ? `- ${h.name}: price unavailable`
-        : `- ${h.name} (${h.ticker}): ₹${h.price!.toFixed(2)}, day ${h.dayPct!.toFixed(
+        ? `- ${h.name} [${h.account}]: price unavailable`
+        : `- ${h.name} [${h.account}] (${h.ticker}): ₹${h.price!.toFixed(2)}, day ${h.dayPct!.toFixed(
             1
           )}%, overall ${h.pnlPct!.toFixed(0)}%, weight ${(
             ((h.value || 0) / s.portfolio.totalValue) * 100

@@ -3,6 +3,10 @@
 import React, { useState, useEffect, useCallback } from "react";
 import AgentDesks from "./AgentDesks";
 import ThesesJournal from "./ThesesJournal";
+import HoldingsManager, {
+  SnapshotHolding,
+  AccountSummary,
+} from "./HoldingsManager";
 import {
   Wallet,
   RefreshCw,
@@ -17,18 +21,6 @@ import {
   AlertCircle,
   ShieldAlert,
 } from "lucide-react";
-
-interface HoldingRow {
-  ticker: string;
-  name: string;
-  unavailable?: boolean;
-  price?: number;
-  dayPct?: number;
-  pnlPct?: number;
-  value?: number;
-  qty?: number;
-  avg?: number;
-}
 
 interface WatchRow {
   ticker: string;
@@ -50,7 +42,8 @@ interface TriggeredAlert {
 interface PortfolioData {
   asOf: string;
   portfolio: { totalValue: number; totalCost: number; totalPnlPct: number };
-  holdings: HoldingRow[];
+  accounts: AccountSummary[];
+  holdings: SnapshotHolding[];
   watchlist: WatchRow[];
   alerts: { rules: number; triggered: TriggeredAlert[] };
   news: { query: string; headlines: { title: string; publishedAt: string | null }[] }[];
@@ -245,62 +238,12 @@ export default function FounderZonePage() {
             </div>
           )}
 
-          {/* Holdings */}
-          <div className="bg-slate-950/60 border border-slate-900 rounded-2xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-900 flex items-center space-x-2">
-              <TrendingUp className="w-4 h-4 text-emerald-400" />
-              <h2 className="text-sm font-bold text-white">Holdings</h2>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-[10px] uppercase tracking-wider text-slate-500 border-b border-slate-900">
-                    <th className="text-left px-5 py-3 font-bold">Stock</th>
-                    <th className="text-right px-5 py-3 font-bold">Price</th>
-                    <th className="text-right px-5 py-3 font-bold">Day</th>
-                    <th className="text-right px-5 py-3 font-bold">Overall</th>
-                    <th className="text-right px-5 py-3 font-bold">Value</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.holdings.map((h) => (
-                    <tr
-                      key={h.ticker}
-                      className="border-b border-slate-900/50 last:border-0 hover:bg-slate-900/30"
-                    >
-                      <td className="px-5 py-3">
-                        <p className="font-semibold text-slate-200">{h.name}</p>
-                        <p className="text-[10px] text-slate-600">
-                          {h.ticker}
-                          {h.qty ? ` · ${h.qty.toLocaleString("en-IN")} @ ${inr(h.avg!)}` : ""}
-                        </p>
-                      </td>
-                      {h.unavailable ? (
-                        <td colSpan={4} className="px-5 py-3 text-right text-xs text-slate-600">
-                          price unavailable
-                        </td>
-                      ) : (
-                        <>
-                          <td className="px-5 py-3 text-right font-semibold text-white">
-                            {inr(h.price!)}
-                          </td>
-                          <td className="px-5 py-3 text-right">
-                            <PctBadge value={h.dayPct!} />
-                          </td>
-                          <td className="px-5 py-3 text-right">
-                            <PctBadge value={h.pnlPct!} />
-                          </td>
-                          <td className="px-5 py-3 text-right text-slate-300">
-                            {lakh(h.value!)}
-                          </td>
-                        </>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          {/* Holdings (grouped by account, editable) */}
+          <HoldingsManager
+            holdings={data.holdings}
+            accounts={data.accounts}
+            onChanged={() => fetchData(true)}
+          />
 
           {/* Watchlist + News */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

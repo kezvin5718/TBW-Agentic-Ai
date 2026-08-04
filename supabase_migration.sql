@@ -104,3 +104,27 @@ CREATE POLICY "Founder only journal" ON public.founder_journal
   FOR ALL TO authenticated
   USING (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'founder'))
   WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'founder'));
+
+-- ============================================================
+-- Founder Zone: holdings moved to DB (applied 2026-08-04 via
+-- migration founder_holdings_table_and_seed, seeded with 42 positions)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.founder_holdings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account text NOT NULL DEFAULT 'Main',
+  ticker text NOT NULL,
+  name text NOT NULL DEFAULT '',
+  avg numeric NOT NULL DEFAULT 0,
+  qty numeric NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (account, ticker)
+);
+
+ALTER TABLE public.founder_holdings ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Founder only holdings" ON public.founder_holdings;
+CREATE POLICY "Founder only holdings" ON public.founder_holdings
+  FOR ALL TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'founder'))
+  WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'founder'));
