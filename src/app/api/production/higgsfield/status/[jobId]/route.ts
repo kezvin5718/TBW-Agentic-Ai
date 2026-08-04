@@ -81,7 +81,9 @@ export async function GET(
 
     const elapsed = Date.now() - job.createdAt;
     const isVideo = job.model.includes("video") || job.prompt.toLowerCase().includes("video");
-    const timeoutMs = isVideo ? 8 * 60 * 1000 : 3 * 60 * 1000; // 8 mins video, 3 mins image
+    // High-res (2K/4K) image generations regularly exceed 3 minutes — allow 8.
+    const timeoutMinutes = isVideo ? 10 : 8;
+    const timeoutMs = timeoutMinutes * 60 * 1000;
 
     // Hard Timeout enforcement (Requirement 4 & 5)
     if (elapsed > timeoutMs) {
@@ -89,7 +91,7 @@ export async function GET(
       activeJobs.delete(jobId);
       return NextResponse.json({
         status: "timed_out",
-        error: `Generation timed out after ${isVideo ? "8" : "3"} minutes.`,
+        error: `Generation timed out after ${timeoutMinutes} minutes. If it finished on Higgsfield's side, use "Sync from Higgsfield" to pull it in.`,
         jobId,
         canRetry: true,
       });
