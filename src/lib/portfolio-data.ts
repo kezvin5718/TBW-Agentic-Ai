@@ -37,36 +37,81 @@ export interface HoldingRecord {
 const YAHOO_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
-export async function fetchQuote(ticker: string): Promise<Quote | null> {
-  try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
-      ticker
-    )}?range=5d&interval=1d`;
-    const res = await fetch(url, {
-      headers: { "User-Agent": YAHOO_UA },
-      next: { revalidate: 0 },
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    const result = json?.chart?.result?.[0];
-    if (!result) return null;
+// Yahoo rate-limits datacenter IPs hard: cache quotes briefly, fetch with low
+// concurrency, and back off + retry on 429 instead of failing the whole board.
+const QUOTE_CACHE_MS = 90_000;
+const quoteCache = new Map<string, { q: Quote; at: number }>();
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-    const closes: number[] = (result.indicators?.quote?.[0]?.close || []).filter(
-      (c: number | null): c is number => typeof c === "number"
-    );
-    const price = result.meta?.regularMarketPrice ?? closes[closes.length - 1];
-    const prevClose =
-      closes.length > 1 ? closes[closes.length - 2] : result.meta?.chartPreviousClose ?? price;
-    if (typeof price !== "number" || typeof prevClose !== "number") return null;
+export async function fetchQuote(ticker: string, retries = 3): Promise<Quote | null> {
+  const cached = quoteCache.get(ticker);
+  if (cached && Date.now() - cached.at < QUOTE_CACHE_MS) return cached.q;
 
-    return {
-      price,
-      prevClose,
-      dayPct: prevClose ? ((price - prevClose) / prevClose) * 100 : 0,
-    };
-  } catch {
-    return null;
+  const hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"];
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const host = hosts[attempt % hosts.length];
+      const url = `https://${host}/v8/finance/chart/${encodeURIComponent(
+        ticker
+      )}?range=5d&interval=1d`;
+      const res = await fetch(url, {
+        headers: { "User-Agent": YAHOO_UA, Accept: "application/json" },
+        next: { revalidate: 0 },
+      });
+      if (res.status === 429 || res.status === 503) {
+        console.warn(`[portfolio] Yahoo ${res.status} for ${ticker}, attempt ${attempt + 1}`);
+        await sleep(600 * (attempt + 1) + Math.random() * 400);
+        continue;
+      }
+      if (!res.ok) {
+        console.warn(`[portfolio] Yahoo ${res.status} for ${ticker} (giving up)`);
+        return null;
+      }
+      const json = await res.json();
+      const result = json?.chart?.result?.[0];
+      if (!result) return null;
+
+      const closes: number[] = (result.indicators?.quote?.[0]?.close || []).filter(
+        (c: number | null): c is number => typeof c === "number"
+      );
+      const price = result.meta?.regularMarketPrice ?? closes[closes.length - 1];
+      const prevClose =
+        closes.length > 1 ? closes[closes.length - 2] : result.meta?.chartPreviousClose ?? price;
+      if (typeof price !== "number" || typeof prevClose !== "number") return null;
+
+      const q: Quote = {
+        price,
+        prevClose,
+        dayPct: prevClose ? ((price - prevClose) / prevClose) * 100 : 0,
+      };
+      quoteCache.set(ticker, { q, at: Date.now() });
+      return q;
+    } catch (e) {
+      console.warn(`[portfolio] quote fetch error for ${ticker}:`, e instanceof Error ? e.message : e);
+      if (attempt === retries) return null;
+      await sleep(400 * (attempt + 1));
+    }
   }
+  return null;
+}
+
+/** Fetch many tickers politely: limited concurrency + spacing (rate-limit safe). */
+export async function fetchQuotes(
+  tickers: string[],
+  concurrency = 3
+): Promise<Record<string, Quote | null>> {
+  const out: Record<string, Quote | null> = {};
+  let idx = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, tickers.length) }, async () => {
+      while (idx < tickers.length) {
+        const t = tickers[idx++];
+        out[t] = await fetchQuote(t);
+        await sleep(150);
+      }
+    })
+  );
+  return out;
 }
 
 export async function fetchNews(query: string): Promise<Headline[]> {
@@ -157,10 +202,11 @@ export async function buildSnapshot(includeNews = true): Promise<PortfolioSnapsh
     new Set([...holdingsRecords.map((h) => h.ticker), ...Object.keys(WATCHLIST)])
   );
 
-  const quoteResults = await Promise.all(
-    tickers.map(async (t) => [t, await fetchQuote(t)] as const)
-  );
-  const quotes: Record<string, Quote | null> = Object.fromEntries(quoteResults);
+  const quotes = await fetchQuotes(tickers);
+  const failedCount = tickers.filter((t) => !quotes[t]).length;
+  if (failedCount > 0) {
+    console.warn(`[portfolio] ${failedCount}/${tickers.length} quotes unavailable this refresh`);
+  }
 
   let totalValue = 0;
   let totalCost = 0;
