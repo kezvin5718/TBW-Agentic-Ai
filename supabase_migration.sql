@@ -128,3 +128,28 @@ CREATE POLICY "Founder only holdings" ON public.founder_holdings
   FOR ALL TO authenticated
   USING (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'founder'))
   WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'founder'));
+
+-- ============================================================
+-- Founder Zone: EOD portfolio history log (applied 2026-08-04
+-- via migration founder_market_log)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.founder_market_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  logged_at timestamptz NOT NULL DEFAULT now(),
+  kind text NOT NULL DEFAULT 'eod',
+  total_value numeric NOT NULL DEFAULT 0,
+  total_cost numeric NOT NULL DEFAULT 0,
+  data jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS founder_market_log_logged_at_idx
+  ON public.founder_market_log (logged_at DESC);
+
+ALTER TABLE public.founder_market_log ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Founder only market log" ON public.founder_market_log;
+CREATE POLICY "Founder only market log" ON public.founder_market_log
+  FOR ALL TO authenticated
+  USING (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'founder'))
+  WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'founder'));

@@ -122,15 +122,14 @@ const DESKS: {
     key: "review",
     name: "Performance Review",
     icon: ClipboardCheck,
-    tagline: "Monthly scorecard vs benchmark — process first, results second",
+    tagline: "Reads auto-logged EOD history — process first, results second",
     cost: "smart model · monthly",
     fields: [
       {
         key: "scorecard",
-        label: "Scorecard data",
-        placeholder: "Portfolio return vs index, closed positions, drawdown, process notes…",
+        label: "Extra notes (optional — EOD history loads automatically)",
+        placeholder: "Closed positions, benchmark return, process notes…",
         textarea: true,
-        required: true,
       },
     ],
   },

@@ -92,7 +92,39 @@ export function startCronScheduler() {
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;
 
-  // 6. Founder Portfolio Morning Brief (Weekdays at 8:45 AM IST, before market open)
+  // 6a. Founder Portfolio Intraday Alert Watcher (every 15 min; self-guards to market hours, no LLM)
+  cron.schedule("*/15 9-16 * * 1-5", async () => {
+    try {
+      const { runIntradayWatch } = await import("@/lib/portfolio-monitor");
+      const res = await runIntradayWatch();
+      if (res.checked > 0) {
+        cronSchedulerStatus.lastRun["portfolio_watch"] = new Date().toISOString();
+        if (res.fired > 0)
+          console.log(`🚨 In-App Cron: Portfolio watcher filed ${res.fired} alert(s) in journal.`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: Portfolio watcher failed:", msg);
+    }
+  }, { timezone: "Asia/Kolkata" });
+  cronSchedulerStatus.jobsScheduledCount++;
+
+  // 6b. Founder Portfolio EOD Logger (Weekdays at 3:45 PM IST, after market close)
+  cron.schedule("45 15 * * 1-5", async () => {
+    console.log("⏰ In-App Cron: Logging Founder Portfolio EOD snapshot...");
+    try {
+      const { runEodLog } = await import("@/lib/portfolio-monitor");
+      const res = await runEodLog();
+      cronSchedulerStatus.lastRun["portfolio_eod"] = new Date().toISOString();
+      console.log(`✅ In-App Cron: EOD logged. Portfolio value ₹${(res.totalValue / 1e5).toFixed(2)}L`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: Portfolio EOD log failed:", msg);
+    }
+  }, { timezone: "Asia/Kolkata" });
+  cronSchedulerStatus.jobsScheduledCount++;
+
+  // 6c. Founder Portfolio Morning Brief (Weekdays at 8:45 AM IST, before market open)
   cron.schedule("45 8 * * 1-5", async () => {
     console.log("⏰ In-App Cron: Starting Founder Portfolio Morning Brief...");
     try {

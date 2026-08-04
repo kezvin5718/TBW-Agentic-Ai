@@ -126,18 +126,21 @@ export async function POST(request: Request) {
       }
 
       case "review": {
-        if (!body.scorecard) {
+        maxTokens = 1500;
+        roleLine = "Desk: PERFORMANCE REVIEWER.";
+        const { getEodTrend, trendToText } = await import("@/lib/portfolio-monitor");
+        const trend = trendToText(await getEodTrend(30));
+        if (!body.scorecard && !trend) {
           return NextResponse.json(
-            { error: "Performance reviewer needs: your monthly scorecard data (returns vs benchmark, closed positions, process notes)." },
+            { error: "No history logged yet and no scorecard pasted. The EOD logger builds history automatically each market day — try again after a few days, or paste your scorecard data." },
             { status: 400 }
           );
         }
-        maxTokens = 1500;
-        roleLine = "Desk: PERFORMANCE REVIEWER.";
         userPrompt =
-          "Write the monthly performance review from the scorecard below. Lead with PROCESS adherence (were theses written before buys, were rules followed), then results vs benchmark, then one honest lesson the data suggests. " +
+          "Write the performance review from the data below. Lead with PROCESS adherence (were theses written before buys, were rules followed), then results (use the value trend; compare to the Nifty 50 only if benchmark data is provided — never from memory), then one honest lesson the data suggests. " +
           "If the active picks trail the benchmark, say so plainly and note that indexing more is a valid outcome.\n\n" +
-          "SCORECARD DATA:\n" + body.scorecard;
+          (trend ? trend + "\n\n" : "") +
+          (body.scorecard ? "SCORECARD / NOTES FROM THE MANAGER:\n" + body.scorecard : "");
         break;
       }
 

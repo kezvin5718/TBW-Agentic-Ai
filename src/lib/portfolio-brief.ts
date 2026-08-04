@@ -8,17 +8,21 @@ import { complete } from "@/lib/llm";
 import { MODEL_FAST } from "@/lib/llm-config";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { buildSnapshot, snapshotToText } from "@/lib/portfolio-data";
+import { getEodTrend, trendToText } from "@/lib/portfolio-monitor";
 
 export const BRIEF_SYSTEM = `You are the morning-brief desk of a personal "AI hedge fund" for an Indian retail investor. The human is the portfolio manager; you only summarize.
 HARD LIMITS: never predict prices or returns; never give buy/sell/hold recommendations or entry/exit signals; only use numbers provided in the prompt; currency is INR (₹). End with one short line: analysis only, not financial advice.`;
 
 export async function generateMorningBrief(): Promise<string> {
-  const snapshot = await buildSnapshot(true);
+  const [snapshot, trend] = await Promise.all([buildSnapshot(true), getEodTrend(7)]);
+  const trendText = trendToText(trend);
   const prompt =
     "Below is today's raw portfolio audit data. Write a morning brief in under 150 words: " +
-    "(1) one-line market read from the data shown, (2) whether any of MY OWN written alert rules triggered and what the rule says, " +
+    "(1) one-line market read from the data shown (mention the value trend if it shows a clear move), " +
+    "(2) whether any of MY OWN written alert rules triggered and what the rule says, " +
     "(3) at most ONE data point worth watching today — only if the data clearly shows one; do not invent ideas. Be blunt and calm.\n\n" +
-    snapshotToText(snapshot);
+    snapshotToText(snapshot) +
+    (trendText ? "\n\n" + trendText : "");
 
   return complete({
     system: BRIEF_SYSTEM,
