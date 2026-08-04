@@ -57,6 +57,7 @@ export async function fetchQuote(ticker: string, retries = 3): Promise<Quote | n
       const res = await fetch(url, {
         headers: { "User-Agent": YAHOO_UA, Accept: "application/json" },
         next: { revalidate: 0 },
+        signal: AbortSignal.timeout(6000),
       });
       if (res.status === 429 || res.status === 503) {
         console.warn(`[portfolio] Yahoo ${res.status} for ${ticker}, attempt ${attempt + 1}`);
@@ -120,7 +121,10 @@ export async function fetchNews(query: string): Promise<Headline[]> {
       "https://news.google.com/rss/search?q=" +
       encodeURIComponent(query) +
       "&hl=en-IN&gl=IN&ceid=IN:en";
-    const res = await fetch(url, { next: { revalidate: 0 } });
+    const res = await fetch(url, {
+      next: { revalidate: 0 },
+      signal: AbortSignal.timeout(6000),
+    });
     if (!res.ok) return [];
     const xml = await res.text();
 
