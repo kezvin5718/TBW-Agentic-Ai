@@ -28,7 +28,8 @@ import {
   MessageSquare,
   Link2,
   Users,
-  Send
+  Send,
+  Wallet
 } from "lucide-react";
 
 export default async function DashboardLayout({
@@ -73,6 +74,8 @@ export default async function DashboardLayout({
     { name: "WhatsApp Reader", href: "/dashboard/whatsapp-reader", icon: Link2, roles: ["founder"], section: "Assistant & System" },
     { name: "Agents Console", href: "/dashboard/connections", icon: Share2, roles: ["founder", "employee"], section: "Assistant & System" },
     { name: "Integrations", href: "/dashboard/settings/integrations", icon: Settings, roles: ["founder"], section: "Assistant & System" },
+
+    { name: "Portfolio Desk", href: "/dashboard/founder-zone", icon: Wallet, roles: ["founder"], section: "Founder Zone" },
   ];
 
   const filteredNavItems = allNavItems.filter((item) => item.roles.includes(role));

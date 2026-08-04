@@ -54,7 +54,8 @@ export async function middleware(request: NextRequest) {
   if (
     path.startsWith("/dashboard/jarvis") ||
     path.startsWith("/dashboard/onboarding") ||
-    path.startsWith("/dashboard/team")
+    path.startsWith("/dashboard/team") ||
+    path.startsWith("/dashboard/founder-zone")
   ) {
     if (role !== "founder") {
       const homeUrl = new URL("/dashboard", baseAppUrl);

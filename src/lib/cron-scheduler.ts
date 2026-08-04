@@ -92,6 +92,21 @@ export function startCronScheduler() {
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;
 
+  // 6. Founder Portfolio Morning Brief (Weekdays at 8:45 AM IST, before market open)
+  cron.schedule("45 8 * * 1-5", async () => {
+    console.log("⏰ In-App Cron: Starting Founder Portfolio Morning Brief...");
+    try {
+      const { runPortfolioMorningBrief } = await import("@/lib/portfolio-brief");
+      await runPortfolioMorningBrief();
+      cronSchedulerStatus.lastRun["portfolio_brief"] = new Date().toISOString();
+      console.log("✅ In-App Cron: Portfolio Morning Brief filed in founder journal.");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: Portfolio Morning Brief failed:", msg);
+    }
+  }, { timezone: "Asia/Kolkata" });
+  cronSchedulerStatus.jobsScheduledCount++;
+
   console.log(`⏱️ In-App Cron: Scheduler active. Total jobs scheduled: ${cronSchedulerStatus.jobsScheduledCount}`);
 }
 export default startCronScheduler;
