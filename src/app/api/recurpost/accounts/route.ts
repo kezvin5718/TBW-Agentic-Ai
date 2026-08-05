@@ -25,14 +25,37 @@ export async function GET() {
 
   try {
     const res = await listSocialAccounts();
-    // Response shape can vary — normalise into an array of accounts.
-    const raw = (Array.isArray(res) ? res : (res as Record<string, unknown>).accounts || (res as Record<string, unknown>).data || (res as Record<string, unknown>).social_accounts || []) as Array<Record<string, unknown>>;
-    const accounts = (Array.isArray(raw) ? raw : []).map((a) => ({
-      id: String(a.id ?? a.account_id ?? ""),
-      name: String(a.name ?? a.account_name ?? a.username ?? a.title ?? "Account"),
-      platform: String(a.social_media ?? a.platform ?? a.type ?? a.account_type ?? "").toLowerCase(),
-      raw: a,
-    }));
+    // RecurPost shape: { status, message, social_accounts: [{ smpa_id, smpa_name, status }] }
+    // The platform lives inside smpa_name, e.g. "Shri jewels [Page] (Facebook Page)".
+    const detectPlatform = (label: string): string => {
+      const l = label.toLowerCase();
+      if (l.includes("instagram")) return "instagram";
+      if (l.includes("facebook")) return "facebook";
+      if (l.includes("pinterest")) return "pinterest";
+      if (l.includes("linkedin")) return "linkedin";
+      if (l.includes("youtube")) return "youtube";
+      if (l.includes("tiktok")) return "tiktok";
+      if (l.includes("google")) return "gbp";
+      if (l.includes("threads")) return "threads";
+      if (l.includes("bluesky")) return "bluesky";
+      if (l.includes("twitter") || l.includes("(x)")) return "twitter";
+      return "";
+    };
+    const raw = (Array.isArray(res) ? res : (res as Record<string, unknown>).social_accounts || (res as Record<string, unknown>).accounts || (res as Record<string, unknown>).data || []) as Array<Record<string, unknown>>;
+    const accounts = (Array.isArray(raw) ? raw : [])
+      .map((a) => {
+        const full = String(a.smpa_name ?? a.name ?? a.account_name ?? "Account");
+        const typeLabel = full.match(/\(([^)]+)\)\s*$/)?.[1] || "";
+        const display = full.replace(/\s*\[[^\]]*\]/g, "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+        return {
+          id: String(a.smpa_id ?? a.id ?? a.account_id ?? ""),
+          name: display || full,
+          platform: detectPlatform(typeLabel || full),
+          typeLabel,
+          connected: String(a.status ?? "").toLowerCase() === "connected",
+        };
+      })
+      .filter((a) => a.id);
     return NextResponse.json({ success: true, configured: true, accounts, mapping });
   } catch (err: unknown) {
     return NextResponse.json({ success: true, configured: true, accounts: [], mapping, error: err instanceof Error ? err.message : "Failed to list accounts" });
