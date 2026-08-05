@@ -126,6 +126,30 @@ export default function SocialPublisherPage() {
   };
   const mediaRef = useRef<HTMLInputElement>(null);
   const thumbRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Capture the currently-paused video frame and use it as the thumbnail.
+  const captureFrame = async () => {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth) {
+      setNotice({ ok: false, text: "Video not loaded yet — press play, pause on the frame you want, then capture." });
+      return;
+    }
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = v.videoWidth;
+      canvas.height = v.videoHeight;
+      canvas.getContext("2d")!.drawImage(v, 0, 0);
+      const blob = await new Promise<Blob>((resolve, reject) =>
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not read the frame (video host blocked it)."))), "image/jpeg", 0.92)
+      );
+      const file = new File([blob], `frame-thumb-${Date.now()}.jpg`, { type: "image/jpeg" });
+      await upload("thumb", file);
+      setNotice({ ok: true, text: "Frame captured and set as thumbnail ✅" });
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Frame capture failed" });
+    }
+  };
 
   const loadHistory = useCallback(async () => {
     try {
@@ -411,6 +435,36 @@ export default function SocialPublisherPage() {
             {thumbUrl && <img src={thumbUrl} alt="thumb" className="mt-2 h-24 rounded-lg object-cover border border-slate-800" />}
           </div>
         </div>
+
+        {/* Pick a thumbnail frame directly from the uploaded video */}
+        {mediaIsVideo && mediaUrl && (
+          <div className="border border-slate-900 rounded-xl p-4 space-y-3 bg-slate-950/40">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+              Pick thumbnail from video <span className="text-slate-600 normal-case font-medium">— pause on the frame you want, then capture</span>
+            </label>
+            <video
+              ref={videoRef}
+              src={mediaUrl}
+              controls
+              muted
+              playsInline
+              crossOrigin="anonymous"
+              className="w-full max-h-64 rounded-xl border border-slate-800 bg-black"
+            />
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                type="button"
+                onClick={captureFrame}
+                disabled={uploading === "thumb"}
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold cursor-pointer disabled:opacity-50 flex items-center space-x-1.5"
+              >
+                {uploading === "thumb" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
+                <span>{uploading === "thumb" ? "Saving frame…" : "📸 Use current frame as thumbnail"}</span>
+              </button>
+              {thumbUrl && <span className="text-[11px] text-emerald-400 font-bold">Thumbnail set ✓ (capture again or upload a file to replace)</span>}
+            </div>
+          </div>
+        )}
 
         {/* 3. Title + caption with AI */}
         <div>
