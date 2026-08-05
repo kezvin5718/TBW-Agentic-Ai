@@ -32,7 +32,8 @@ import {
   Link2,
   Users,
   Send,
-  Wallet
+  Wallet,
+  ListTodo
 } from "lucide-react";
 
 export default async function DashboardLayout({
@@ -69,6 +70,7 @@ export default async function DashboardLayout({
     { name: "3 · Campaign Planning", href: "/dashboard/planning", icon: ClipboardList, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "4 · Approvals Flow", href: "/dashboard/approvals", icon: CheckSquare, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "WhatsApp Task Bar", href: "/dashboard/whatsapp-inbox", icon: MessageSquare, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "Team Tasks", href: "/dashboard/team-tasks", icon: ListTodo, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "5 · Ad Production", href: "/dashboard/production", icon: Clapperboard, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "6 · Image Studio", href: "/dashboard/image-studio", icon: Image, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "7 · Creative Approvals", href: "/dashboard/creatives-review", icon: Shield, roles: ["founder", "employee"], section: "Client Workflow" },

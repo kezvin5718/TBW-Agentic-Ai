@@ -153,3 +153,59 @@ CREATE POLICY "Founder only market log" ON public.founder_market_log
   FOR ALL TO authenticated
   USING (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'founder'))
   WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role = 'founder'));
+
+
+-- ============================================================
+-- Applied 2026-08-05 via Supabase MCP as migration "team_tasks_module"
+-- Team Tasks / CRM module: tasks become the single master task table
+-- (plan tasks keep plan_id; team tasks have plan_id NULL). Also creates
+-- team_members directory. Data import (49 clients, 21 members, 113 tasks
+-- from "TBW Worksheet" Excel) was run separately as one-time inserts.
+-- ============================================================
+ALTER TABLE public.tasks
+  ADD COLUMN IF NOT EXISTS title TEXT,
+  ADD COLUMN IF NOT EXISTS description TEXT,
+  ADD COLUMN IF NOT EXISTS client_id UUID REFERENCES public.clients(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assignee_name TEXT,
+  ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual',
+  ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE;
+
+UPDATE public.tasks SET source = 'plan' WHERE plan_id IS NOT NULL AND source = 'manual';
+
+ALTER TABLE public.tasks DROP CONSTRAINT IF EXISTS tasks_source_check;
+ALTER TABLE public.tasks ADD CONSTRAINT tasks_source_check
+  CHECK (source IN ('plan', 'manual', 'whatsapp', 'excel_import'));
+
+ALTER TABLE public.tasks DROP CONSTRAINT IF EXISTS tasks_type_check;
+ALTER TABLE public.tasks ADD CONSTRAINT tasks_type_check
+  CHECK (type IN ('copy', 'image', 'video', 'ads', 'design', 'video_edit', 'ai_video', 'script', 'planning', 'packaging', 'print', 'other'));
+
+CREATE INDEX IF NOT EXISTS idx_tasks_client_id ON public.tasks(client_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON public.tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee_name ON public.tasks(assignee_name);
+
+CREATE TABLE IF NOT EXISTS public.team_members (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL UNIQUE,
+  role_title TEXT,
+  department TEXT,
+  profile_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+ALTER TABLE public.team_members ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated read team members" ON public.team_members;
+CREATE POLICY "Authenticated read team members"
+  ON public.team_members FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Founder/Employee manage team members" ON public.team_members;
+CREATE POLICY "Founder/Employee manage team members"
+  ON public.team_members FOR ALL TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE profiles.id = auth.uid() AND (profiles.role = 'founder' OR profiles.role = 'employee')
+    )
+  );

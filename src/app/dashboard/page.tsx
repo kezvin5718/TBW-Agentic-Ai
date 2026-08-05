@@ -28,6 +28,8 @@ interface FounderMetrics {
   roasLastWeek: number;
   spendThisWeek: number;
   alerts: string[];
+  teamOpenTasks: number;
+  teamDueToday: number;
 }
 
 interface EmployeeTask {
@@ -35,10 +37,15 @@ interface EmployeeTask {
   status: string;
   type: string;
   deadline: string;
+  title: string | null;
+  plan_id: string | null;
   plan: {
     clients: {
       name: string;
     } | null;
+  } | null;
+  client: {
+    name: string;
   } | null;
 }
 
@@ -99,6 +106,8 @@ export default async function DashboardPage() {
     roasLastWeek: 0,
     spendThisWeek: 0,
     alerts: [],
+    teamOpenTasks: 0,
+    teamDueToday: 0,
   };
   let employeeTasks: EmployeeTask[] = [];
   let clientData: ClientData = {
@@ -112,6 +121,16 @@ export default async function DashboardPage() {
   };
 
   if (role === "founder") {
+    // Team task board pulse (plan-less master tasks)
+    const { data: teamTaskRows } = await supabase
+      .from("tasks")
+      .select("id, deadline")
+      .is("plan_id", null)
+      .neq("status", "done");
+    const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999);
+    const teamOpenTasks = teamTaskRows?.length || 0;
+    const teamDueToday = (teamTaskRows || []).filter((t) => new Date(t.deadline) <= endOfToday).length;
+
     // Lead Pipeline Summary
     const { data: leads } = await supabase.from("leads").select("*");
     const leadCount = leads?.length || 0;
@@ -189,6 +208,8 @@ export default async function DashboardPage() {
       roasLastWeek,
       spendThisWeek,
       alerts,
+      teamOpenTasks,
+      teamDueToday,
     };
   }
 
@@ -196,8 +217,9 @@ export default async function DashboardPage() {
     // Tasks assigned to this profile
     const { data: myTasks } = await supabase
       .from("tasks")
-      .select("*, plan:monthly_plans(clients(name))")
+      .select("*, plan:monthly_plans(clients(name)), client:clients(name)")
       .eq("assignee_id", user.id)
+      .neq("status", "done")
       .order("deadline", { ascending: true });
 
     employeeTasks = myTasks || [];
@@ -319,6 +341,12 @@ export default async function DashboardPage() {
               <h3 className="text-2xl font-extrabold text-red-400">{overdueTasks?.length || 0}</h3>
               <p className="text-[9px] text-slate-550 font-medium">Missed deadlines alert</p>
             </div>
+
+            <Link href="/dashboard/team-tasks" className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-2 hover:border-indigo-800 transition-colors block">
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center space-x-1"><ListTodo className="w-3 h-3 text-indigo-400" /><span>Team Tasks Open</span></p>
+              <h3 className="text-2xl font-extrabold text-white">{founderMetrics.teamOpenTasks}</h3>
+              <p className="text-[9px] text-amber-400 font-bold">{founderMetrics.teamDueToday} due by end of today</p>
+            </Link>
 
             <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-2">
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Weekly Spend</p>
@@ -476,7 +504,7 @@ export default async function DashboardPage() {
                   <div key={t.id} className="bg-slate-955/20 border border-slate-900 rounded-2xl p-5 space-y-4 hover:border-slate-850 transition-colors flex flex-col justify-between text-xs">
                     <div className="space-y-2">
                       <div className="flex justify-between items-start">
-                        <span className="font-extrabold text-slate-200">{t.plan?.clients?.name || "Client"}</span>
+                        <span className="font-extrabold text-slate-200">{t.plan?.clients?.name || t.client?.name || "Client"}</span>
                         <span className={`px-2 py-0.5 rounded text-[8px] font-extrabold uppercase tracking-wider ${
                           t.status === "review"
                             ? "bg-amber-955/20 text-amber-400 border border-amber-900/50"
@@ -489,8 +517,8 @@ export default async function DashboardPage() {
                       </div>
 
                       <div className="space-y-1">
-                        <div className="text-[10px] text-slate-500 uppercase tracking-widest font-mono">Assignment Category</div>
-                        <h4 className="font-extrabold text-white text-sm capitalize">{t.type} Production</h4>
+                        <div className="text-[10px] text-slate-500 uppercase tracking-widest font-mono">{t.title ? "Task" : "Assignment Category"}</div>
+                        <h4 className="font-extrabold text-white text-sm">{t.title || <span className="capitalize">{t.type} Production</span>}</h4>
                       </div>
                     </div>
 
@@ -502,8 +530,8 @@ export default async function DashboardPage() {
                         <span>Due: {new Date(t.deadline).toLocaleDateString()}</span>
                       </span>
 
-                      <Link href="/dashboard/production" className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 py-1.5 rounded-lg text-[9px] uppercase tracking-wider transition-all">
-                        Edit Card
+                      <Link href={t.plan_id ? "/dashboard/production" : "/dashboard/team-tasks"} className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 py-1.5 rounded-lg text-[9px] uppercase tracking-wider transition-all">
+                        {t.plan_id ? "Edit Card" : "Open Board"}
                       </Link>
                     </div>
                   </div>

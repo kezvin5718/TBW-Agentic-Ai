@@ -35,6 +35,43 @@ export async function PATCH(request: NextRequest) {
   if (!id || !action) return NextResponse.json({ error: "id and action are required" }, { status: 400 });
 
   const admin = createServiceRoleClient();
+
+  // create_task — convert this WhatsApp message into a Team Task (wa_inbox.task_id links back)
+  if (action === "create_task") {
+    const { data: item } = await admin.from("wa_inbox").select("*").eq("id", id).single();
+    if (!item) return NextResponse.json({ error: "Inbox item not found" }, { status: 404 });
+    if (item.task_id) return NextResponse.json({ error: "Task already created for this message" }, { status: 400 });
+
+    const assigneeProfileId = (assignedTo as string) || item.assigned_to || null;
+    let assigneeName: string | null = null;
+    if (assigneeProfileId) {
+      const { data: prof } = await admin.from("profiles").select("name").eq("id", assigneeProfileId).maybeSingle();
+      assigneeName = prof?.name || null;
+    }
+
+    const title = (item.ai_summary || item.message_text || "WhatsApp task").slice(0, 200);
+    const { data: task, error: taskErr } = await admin.from("tasks").insert({
+      title,
+      description: item.message_text || null,
+      client_id: item.client_id || null,
+      type: "other",
+      priority: item.urgency === "high" ? "high" : "medium",
+      status: "todo",
+      deadline: new Date(Date.now() + 2 * 24 * 3600 * 1000).toISOString(),
+      source: "whatsapp",
+      assignee_id: assigneeProfileId,
+      assignee_name: assigneeName,
+      metadata: { wa_inbox_id: item.id, group_name: item.group_name, sender: item.sender_name },
+    }).select("id").single();
+    if (taskErr) return NextResponse.json({ error: taskErr.message }, { status: 500 });
+
+    const inboxPatch: Record<string, unknown> = { task_id: task.id, status: "assigned" };
+    if (assigneeProfileId) inboxPatch.assigned_to = assigneeProfileId;
+    const { error: linkErr } = await admin.from("wa_inbox").update(inboxPatch).eq("id", id);
+    if (linkErr) return NextResponse.json({ error: linkErr.message }, { status: 500 });
+    return NextResponse.json({ success: true, taskId: task.id });
+  }
+
   const patch: Record<string, unknown> = {};
   if (action === "assign") {
     patch.status = "assigned";

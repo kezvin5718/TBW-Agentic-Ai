@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { getHiggsfieldCredentials } from "@/lib/higgsfield-mcp";
 import { getDriveStatus } from "@/lib/google-drive";
+import { isRecurPostConfigured } from "@/lib/recurpost";
 
 export const dynamic = "force-dynamic";
 
@@ -117,6 +118,54 @@ export async function GET() {
   connectors.push({ key: "google_drive", name: "Google Drive", category: "Storage", purpose: "Permanent image storage (your 20TB)", mode: driveMode, detail: driveDetail });
 
   // --- Publishing / social --------------------------------------------------
+
+  // RecurPost — the live social posting engine (Social Publisher).
+  let rpMode: Mode = "notbuilt";
+  let rpDetail = "RECURPOST_EMAIL / RECURPOST_API_KEY not set on the server.";
+  if (isRecurPostConfigured()) {
+    try {
+      const client = createServiceRoleClient();
+      const { data: mapRow } = await client.from("agency_settings").select("value").eq("key", "recurpost_account_map").maybeSingle();
+      const mapping = (mapRow?.value as Record<string, { client_id?: string }>) || {};
+      const mapped = Object.values(mapping).filter((m) => m?.client_id).length;
+      if (mapped > 0) {
+        rpMode = "live";
+        rpDetail = `Connected — ${mapped} social account(s) mapped to clients. Posts go out through RecurPost.`;
+      } else {
+        rpMode = "configured";
+        rpDetail = "Keys set, but no accounts mapped yet — map them in Social Publisher → RecurPost Accounts.";
+      }
+    } catch (e: unknown) {
+      rpMode = "configured";
+      rpDetail = e instanceof Error ? e.message : "Could not read the account mapping.";
+    }
+  }
+  connectors.push({ key: "recurpost", name: "RecurPost", category: "Publishing", purpose: "Posting to Instagram, Facebook, Pinterest, LinkedIn & YouTube", mode: rpMode, detail: rpDetail });
+
+  // WhatsApp group reader (Baileys) — feeds the WhatsApp Task Bar.
+  let wrMode: Mode = "notbuilt";
+  let wrDetail = "Reader has never reported in — start the wa-reader container on the server.";
+  try {
+    const client = createServiceRoleClient();
+    const { data: st } = await client.from("wa_reader_status").select("status, last_seen_at").eq("id", 1).maybeSingle();
+    if (st) {
+      const fresh = st.last_seen_at && Date.now() - new Date(st.last_seen_at as string).getTime() < 5 * 60 * 1000;
+      if (st.status === "connected" && fresh) {
+        wrMode = "live";
+        wrDetail = "Linked and reading client group messages into the Task Bar.";
+      } else if (st.status === "waiting_scan") {
+        wrMode = "configured";
+        wrDetail = "Running but not linked — scan the QR in Dashboard → WhatsApp Reader.";
+      } else {
+        wrMode = "offline";
+        wrDetail = `Status "${st.status}"${fresh ? "" : " and no heartbeat in the last 5 min"} — check the reader container / re-link.`;
+      }
+    }
+  } catch {
+    /* keep notbuilt */
+  }
+  connectors.push({ key: "wa_reader", name: "WhatsApp Reader", category: "Publishing", purpose: "Reads client group messages into the WhatsApp Task Bar", mode: wrMode, detail: wrDetail });
+
   const metaConfigured = has(process.env.META_ACCESS_TOKEN) && has(process.env.META_AD_ACCOUNT_ID);
   connectors.push({
     key: "meta",

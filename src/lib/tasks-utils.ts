@@ -59,6 +59,8 @@ export async function generateTasksForPlan(planId: string) {
 
     tasksToInsert.push({
       plan_id: planId,
+      title: item.concept || `${item.format || "content"} post`,
+      source: "plan",
       type: taskType,
       deadline: deadlineDate.toISOString(),
       assignee_id: assigneeId,

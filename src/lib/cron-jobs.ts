@@ -86,7 +86,7 @@ export async function runOverdueDigest() {
   // Query overdue tasks (status is not done and deadline has passed)
   const { data: overdueTasks, error: taskErr } = await supabase
     .from("tasks")
-    .select("*, profiles!tasks_assignee_id_fkey(name), monthly_plans!tasks_plan_id_fkey(month, clients(name))")
+    .select("*, profiles!tasks_assignee_id_fkey(name), client:clients(name), monthly_plans!tasks_plan_id_fkey(month, clients(name))")
     .neq("status", "done")
     .lt("deadline", now)
     .order("deadline", { ascending: true });
@@ -110,7 +110,10 @@ export async function runOverdueDigest() {
     type: string;
     status: string;
     deadline: string;
+    title: string | null;
+    assignee_name: string | null;
     profiles: { name: string } | null;
+    client: { name: string } | null;
     monthly_plans: {
       month: string;
       clients: { name: string } | null;
@@ -119,13 +122,13 @@ export async function runOverdueDigest() {
 
   overdueTasks.forEach((rawTask: unknown, i: number) => {
     const t = rawTask as OverdueTaskItem;
-    const clientName = t.monthly_plans?.clients?.name || "Agency Project";
-    const assigneeName = t.profiles?.name || "Unassigned";
+    const clientName = t.monthly_plans?.clients?.name || t.client?.name || "Agency Project";
+    const assigneeName = t.profiles?.name || t.assignee_name || "Unassigned";
     const delayDays = Math.ceil(
       (Date.now() - new Date(t.deadline).getTime()) / (1000 * 3600 * 24)
     );
 
-    digestMsg += `${i + 1}. *[${clientName}]* ${t.type.toUpperCase()} Task\n`;
+    digestMsg += `${i + 1}. *[${clientName}]* ${t.title || `${t.type.toUpperCase()} Task`}\n`;
     digestMsg += `   - Assignee: ${assigneeName}\n`;
     digestMsg += `   - Overdue by: ${delayDays} day(s)\n`;
     digestMsg += `   - Status: ${t.status.toUpperCase()}\n\n`;

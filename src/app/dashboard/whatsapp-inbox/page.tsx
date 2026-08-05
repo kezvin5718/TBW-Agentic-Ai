@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { MessageSquare, RefreshCw, Loader2, UserPlus, Check, X, AlertTriangle } from "lucide-react";
+import { MessageSquare, RefreshCw, Loader2, UserPlus, Check, X, AlertTriangle, ListTodo } from "lucide-react";
 
 interface Item {
   id: string;
@@ -15,6 +15,7 @@ interface Item {
   urgency: "low" | "medium" | "high" | null;
   status: string;
   extracted: boolean;
+  task_id: string | null;
   clients?: { name: string } | null;
   profiles?: { name: string } | null;
 }
@@ -117,8 +118,12 @@ export default function WhatsAppInboxPage() {
               {i.profiles?.name && <p className="text-[10px] text-emerald-400">Assigned to {i.profiles.name}</p>}
 
               <div className="flex items-center gap-2 flex-wrap pt-1">
+                {i.task_id && <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-indigo-950/40 border border-indigo-900 text-indigo-300 flex items-center space-x-1"><ListTodo className="w-2.5 h-2.5" /><span>ON TASK BOARD</span></span>}
                 {tab !== "done" && (
                   <>
+                    {!i.task_id && (
+                      <button disabled={!!busy} onClick={() => act(i.id, "create_task")} className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer flex items-center space-x-1"><ListTodo className="w-3 h-3" /><span>Make Task</span></button>
+                    )}
                     <button disabled={!!busy} onClick={() => act(i.id, "assign", me || undefined)} className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-indigo-950/40 border border-indigo-900 text-indigo-300 hover:bg-indigo-900/40 cursor-pointer flex items-center space-x-1"><UserPlus className="w-3 h-3" /><span>Assign to me</span></button>
                     <select disabled={!!busy} onChange={(e) => e.target.value && act(i.id, "assign", e.target.value)} defaultValue="" className="text-[10px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-300 cursor-pointer focus:outline-none">
                       <option value="">Assign to…</option>

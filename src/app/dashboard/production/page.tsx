@@ -153,6 +153,7 @@ export default function KanbanBoardPage() {
           ),
           creatives(*)
         `)
+        .not("plan_id", "is", null)
         .order("deadline", { ascending: true });
 
       if (err) throw err;

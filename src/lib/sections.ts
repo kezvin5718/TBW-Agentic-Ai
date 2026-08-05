@@ -17,6 +17,7 @@ export const SECTIONS = [
   { key: "ads", num: 11, name: "Meta Ads Manager", path: "/dashboard/ads" },
   { key: "reporting", num: 12, name: "Reporting & Analytics", path: "/dashboard/reporting" },
   { key: "agency-brain", num: 13, name: "Agency Brain", path: "/dashboard/agency-brain" },
+  { key: "team-tasks", num: 14, name: "Team Tasks", path: "/dashboard/team-tasks" },
 ] as const;
 
 export type SectionKey = (typeof SECTIONS)[number]["key"];
