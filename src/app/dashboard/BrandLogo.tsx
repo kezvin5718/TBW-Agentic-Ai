@@ -17,7 +17,7 @@ export default function BrandLogo() {
         src="/tbw-logo.png"
         alt="TBW — The Brand Wagon"
         onError={() => setImgOk(false)}
-        className="h-9 w-auto max-w-[150px] object-contain"
+        className="brand-logo-img h-9 w-auto max-w-[150px] object-contain"
         style={{ filter: "invert(1)" }}
       />
     );

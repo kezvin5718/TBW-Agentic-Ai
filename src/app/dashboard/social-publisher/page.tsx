@@ -819,8 +819,8 @@ export default function SocialPublisherPage() {
         </div>
       </div>
 
-      {/* Social preview panel */}
-      <div className="lg:sticky lg:top-4 space-y-3">
+      {/* Social preview panel — .pv keeps true white inside even in day view */}
+      <div className="pv lg:sticky lg:top-4 space-y-3">
         <h3 className="text-sm font-bold text-white flex items-center gap-2"><Eye className="w-4 h-4 text-[var(--yellow)]" /><span>Social preview</span></h3>
         {platforms.length > 1 && (
           <div className="flex flex-wrap gap-1.5">

@@ -13,7 +13,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        {/* Apply saved day/night theme before paint to avoid a flash */}
+        <script dangerouslySetInnerHTML={{ __html: `try{if(localStorage.getItem("tbw_theme")==="light")document.documentElement.classList.add("light")}catch(e){}` }} />
+        {children}
+      </body>
     </html>
   );
 }

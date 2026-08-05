@@ -5,6 +5,7 @@ import Link from "next/link";
 import GlobalErrorMonitor from "./GlobalErrorMonitor";
 import BrandLogo from "./BrandLogo";
 import PendingSignupsBadge from "./PendingSignupsBadge";
+import ThemeToggle from "./ThemeToggle";
 import { sectionKeyForPath } from "@/lib/sections";
 import {
   Sparkles,
@@ -109,7 +110,7 @@ export default async function DashboardLayout({
   const RoleBadgeIcon = currentRoleStyle.icon;
 
   return (
-    <div className="min-h-screen bg-[#07070a] text-slate-100 flex flex-col lg:flex-row font-sans">
+    <div className="min-h-screen bg-[var(--ink)] text-slate-100 flex flex-col lg:flex-row font-sans">
       {/* Sidebar - Desktop */}
       <aside className="w-full lg:w-72 bg-slate-950/60 backdrop-blur-md border-b lg:border-b-0 lg:border-r border-slate-900 flex flex-col shrink-0">
         {/* Brand header */}
@@ -172,8 +173,9 @@ export default async function DashboardLayout({
           })}
         </nav>
 
-        {/* Sidebar Footer / Signout */}
+        {/* Sidebar Footer / Theme + Signout */}
         <div className="p-4 border-t border-slate-900">
+          <ThemeToggle />
           <form action="/auth/signout" method="POST">
             <button
               type="submit"
@@ -191,7 +193,7 @@ export default async function DashboardLayout({
         {/* TBW ambient layer — gold + cyan glows behind a faint grid */}
         <div className="absolute top-[-12%] left-[-8%] w-[45%] h-[45%] rounded-full blur-[90px] pointer-events-none z-0" style={{ background: "radial-gradient(circle, rgba(255,212,0,0.13), transparent 65%)" }} />
         <div className="absolute bottom-[-12%] right-[-6%] w-[42%] h-[42%] rounded-full blur-[90px] pointer-events-none z-0" style={{ background: "radial-gradient(circle, rgba(0,229,255,0.08), transparent 65%)" }} />
-        <div className="absolute inset-0 pointer-events-none z-0" style={{ backgroundImage: "linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px)", backgroundSize: "80px 80px" }} />
+        <div className="tbw-grid-layer" />
 
         {/* Content wrapper */}
         <div className="flex-1 p-6 md:p-10 z-10 overflow-y-auto relative">
