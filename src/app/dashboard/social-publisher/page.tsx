@@ -331,6 +331,24 @@ export default function SocialPublisherPage() {
 
   const canSend = !!clientId && platforms.length > 0 && contentTypes.length > 0 && !!mediaUrl && !sending;
 
+  // Per-client sequence numbers for the Content Hub tray (upload order = 1,2,3…)
+  const hubSeq: Record<string, number> = {};
+  const hubClientTotals: Record<string, number> = {};
+  {
+    const byClient: Record<string, HubUpload[]> = {};
+    hubUploads.forEach((u) => { (byClient[u.client_id] ||= []).push(u); });
+    Object.values(byClient).forEach((list) => {
+      list.sort((a, b) => a.created_at.localeCompare(b.created_at));
+      list.forEach((u, i) => { hubSeq[u.id] = i + 1; });
+      const cname = list[0]?.clients?.name || "Unknown";
+      hubClientTotals[cname] = list.length;
+    });
+  }
+  const hubSorted = [...hubUploads].sort((a, b) => {
+    const ca = a.clients?.name || "", cb = b.clients?.name || "";
+    return ca === cb ? (hubSeq[a.id] || 0) - (hubSeq[b.id] || 0) : ca.localeCompare(cb);
+  });
+
   // --- Live social preview ---------------------------------------------------
   const [previewPlat, setPreviewPlat] = useState("instagram");
   const [previewType, setPreviewType] = useState("post");
@@ -569,8 +587,10 @@ export default function SocialPublisherPage() {
           {hubUploads.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               <button onClick={() => setHubFilter("all")} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border cursor-pointer ${hubFilter === "all" ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>All</button>
-              {Array.from(new Set(hubUploads.map((u) => u.clients?.name || "Unknown"))).map((n) => (
-                <button key={n} onClick={() => setHubFilter(n)} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border cursor-pointer ${hubFilter === n ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>{n}</button>
+              {Array.from(new Set(hubUploads.map((u) => u.clients?.name || "Unknown"))).sort().map((n) => (
+                <button key={n} onClick={() => setHubFilter(n)} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border cursor-pointer ${hubFilter === n ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>
+                  {n} <span className="font-black">({hubClientTotals[n] || 0})</span>
+                </button>
               ))}
             </div>
           )}
@@ -579,15 +599,18 @@ export default function SocialPublisherPage() {
           <p className="text-xs text-slate-600 py-3 text-center">Nothing waiting — new designer uploads will appear here, grouped by client.</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {hubUploads.filter((u) => hubFilter === "all" || (u.clients?.name || "Unknown") === hubFilter).map((u) => (
+            {hubSorted.filter((u) => hubFilter === "all" || (u.clients?.name || "Unknown") === hubFilter).map((u) => (
               <div key={u.id} className={`rounded-xl border p-3 space-y-2 ${selectedUpload?.id === u.id ? "border-indigo-500 bg-indigo-950/20" : "border-slate-900 bg-slate-950/60"}`}>
                 <div className="flex items-center space-x-2.5">
+                  <span className="w-7 h-7 rounded-full bg-[var(--yellow)] text-black text-[11px] font-black flex items-center justify-center shrink-0" title={`Item ${hubSeq[u.id]} of ${u.clients?.name || "client"}'s ${hubClientTotals[u.clients?.name || "Unknown"] || 0} waiting`}>
+                    {hubSeq[u.id]}
+                  </span>
                   <div className="w-11 h-11 rounded-lg overflow-hidden bg-slate-900 border border-slate-800 shrink-0 flex items-center justify-center">
                     {u.media_type === "video" ? <span className="text-slate-500">▶</span> : <img src={u.file_url} alt="" className="w-full h-full object-cover" />}
                   </div>
                   <div className="min-w-0">
                     <p className="text-[11px] font-bold text-white truncate">{u.file_name || "file"}</p>
-                    <p className="text-[10px] text-slate-500 truncate">{u.clients?.name || "—"} · <span className="capitalize text-[var(--yellow)]">{u.content_type}</span></p>
+                    <p className="text-[10px] text-slate-500 truncate"><span className="font-bold text-slate-300">{u.clients?.name || "—"}</span> · #{hubSeq[u.id]} of {hubClientTotals[u.clients?.name || "Unknown"] || 0} · <span className="capitalize text-[var(--yellow)]">{u.content_type}</span></p>
                     <p className="text-[9px] text-slate-600">by {u.profiles?.name || "—"} · {new Date(u.created_at).toLocaleDateString()}</p>
                     {u.qc_status === "mismatch" && (
                       <p title={`${u.qc_detected_brand ? `Looks like: ${u.qc_detected_brand}. ` : ""}${u.qc_note || ""}`} className="text-[9px] font-bold text-rose-400 cursor-help">
@@ -597,7 +620,7 @@ export default function SocialPublisherPage() {
                   </div>
                 </div>
                 <button onClick={() => applyHubUpload(u)} className="w-full py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[11px] font-bold cursor-pointer">
-                  {selectedUpload?.id === u.id ? "Loaded ✓" : "Use this →"}
+                  {selectedUpload?.id === u.id ? `Loaded #${hubSeq[u.id]} ✓` : `Use #${hubSeq[u.id]} →`}
                 </button>
               </div>
             ))}
