@@ -131,6 +131,7 @@ export default function SocialPublisherPage() {
   const [frames, setFrames] = useState<Array<{ t: number; url: string }>>([]);
   const [framesBusy, setFramesBusy] = useState(false);
   const [selFrame, setSelFrame] = useState<number | null>(null);
+  const [videoDims, setVideoDims] = useState<{ w: number; h: number } | null>(null);
   const frameVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const loadVideoEl = (src: string) =>
@@ -160,9 +161,11 @@ export default function SocialPublisherPage() {
     try {
       const v = await loadVideoEl(src);
       frameVideoRef.current = v;
+      setVideoDims({ w: v.videoWidth, h: v.videoHeight });
       const dur = v.duration || 1;
       const N = 8;
       const canvas = document.createElement("canvas");
+      // Preview thumbs keep the video's true aspect — portrait stays portrait.
       const w = 200;
       canvas.width = w;
       canvas.height = Math.max(1, Math.round((v.videoHeight / v.videoWidth) * w) || 112);
@@ -184,7 +187,7 @@ export default function SocialPublisherPage() {
 
   useEffect(() => {
     if (mediaIsVideo && mediaUrl) extractFrames(mediaUrl);
-    else { setFrames([]); setSelFrame(null); frameVideoRef.current = null; }
+    else { setFrames([]); setSelFrame(null); setVideoDims(null); frameVideoRef.current = null; }
   }, [mediaIsVideo, mediaUrl, extractFrames]);
 
   // Click a frame → capture it at full resolution → set as thumbnail.
@@ -498,8 +501,13 @@ export default function SocialPublisherPage() {
         {mediaIsVideo && mediaUrl && (
           <div className="border border-slate-900 rounded-xl p-4 space-y-3 bg-slate-950/40">
             <div className="flex items-center justify-between gap-2 flex-wrap">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                Pick thumbnail from video <span className="text-slate-600 normal-case font-medium">— click the frame you want</span>
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                <span>Pick thumbnail from video <span className="text-slate-600 normal-case font-medium">— click the frame you want</span></span>
+                {videoDims && (
+                  <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400 normal-case">
+                    {videoDims.h > videoDims.w ? `Story/Reel ${videoDims.w}×${videoDims.h}` : `Landscape ${videoDims.w}×${videoDims.h}`}
+                  </span>
+                )}
               </label>
               {framesBusy && (
                 <span className="text-[10px] text-slate-500 flex items-center space-x-1.5">
@@ -510,7 +518,7 @@ export default function SocialPublisherPage() {
             {frames.length === 0 && !framesBusy ? (
               <p className="text-[11px] text-slate-600">No frames could be read from this video — upload a thumbnail file manually instead.</p>
             ) : (
-              <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+              <div className={`grid gap-2 ${videoDims && videoDims.h > videoDims.w ? "grid-cols-4 sm:grid-cols-6 lg:grid-cols-8" : "grid-cols-2 sm:grid-cols-4 lg:grid-cols-8"}`}>
                 {frames.map((f) => (
                   <button
                     key={f.t}
@@ -523,7 +531,12 @@ export default function SocialPublisherPage() {
                     }`}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={f.url} alt={`frame ${Math.round(f.t)}s`} className="w-full aspect-video object-cover" />
+                    <img
+                      src={f.url}
+                      alt={`frame ${Math.round(f.t)}s`}
+                      className="w-full object-cover"
+                      style={{ aspectRatio: videoDims ? `${videoDims.w} / ${videoDims.h}` : "16 / 9" }}
+                    />
                     <span className="absolute bottom-0 right-0 text-[8px] font-bold bg-black/70 text-white px-1 rounded-tl">{Math.round(f.t)}s</span>
                     {selFrame === f.t && uploading === "thumb" && (
                       <span className="absolute inset-0 bg-black/50 flex items-center justify-center"><Loader2 className="w-4 h-4 animate-spin text-white" /></span>
