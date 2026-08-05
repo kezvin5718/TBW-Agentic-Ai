@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import GlobalErrorMonitor from "./GlobalErrorMonitor";
 import BrandLogo from "./BrandLogo";
+import PendingSignupsBadge from "./PendingSignupsBadge";
 import {
   Sparkles,
   LayoutDashboard,
@@ -147,6 +148,7 @@ export default async function DashboardLayout({
                 >
                   <Icon className="w-4 h-4 text-slate-500 group-hover:text-indigo-400 transition-colors" />
                   <span className="font-medium">{item.name}</span>
+                  {item.href === "/dashboard/team" && <PendingSignupsBadge />}
                 </Link>
               </React.Fragment>
             );
