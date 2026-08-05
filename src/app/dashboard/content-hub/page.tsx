@@ -292,8 +292,8 @@ export default function ContentHubPage() {
                 </div>
 
                 {/* Staged files — review order, remove mistakes, then Upload */}
-                {(staged[key]?.length || 0) > 0 && (
-                  <div className="mt-3 space-y-2">
+                <div className="mt-3 space-y-2">
+                  {(staged[key]?.length || 0) > 0 && (
                     <div className="max-h-32 overflow-y-auto space-y-1 pr-1">
                       {staged[key].map((f, i) => (
                         <div key={`${f.name}-${f.size}`} className="flex items-center justify-between gap-2 bg-slate-950/80 border border-slate-900 rounded-lg px-2 py-1">
@@ -304,20 +304,26 @@ export default function ContentHubPage() {
                         </div>
                       ))}
                     </div>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        disabled={busy || !selectedClient}
-                        onClick={() => uploadStaged(key)}
-                        title={!selectedClient ? "Select a client first" : ""}
-                        className={`flex-1 py-2 rounded-lg text-white text-xs font-bold ${a.btn} disabled:opacity-50 cursor-pointer`}
-                      >
-                        {busy ? "Uploading…" : `⬆ Upload ${staged[key].length} file${staged[key].length > 1 ? "s" : ""}`}
-                      </button>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={busy || !selectedClient || (staged[key]?.length || 0) === 0}
+                      onClick={() => uploadStaged(key)}
+                      title={!selectedClient ? "Select a client first" : (staged[key]?.length || 0) === 0 ? "Add files first" : ""}
+                      className={`flex-1 py-2 rounded-lg text-white text-xs font-bold ${a.btn} disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer`}
+                    >
+                      {busy
+                        ? `Uploading ${uploadCount ? `${uploadCount.done + 1}/${uploadCount.total}` : ""}…`
+                        : (staged[key]?.length || 0) === 0
+                        ? "⬆ Upload (add files first)"
+                        : `⬆ Upload ${staged[key].length} file${staged[key].length > 1 ? "s" : ""} & run QC`}
+                    </button>
+                    {(staged[key]?.length || 0) > 0 && (
                       <button type="button" disabled={busy} onClick={() => clearStaged(key)} className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-xs font-bold cursor-pointer">Clear</button>
-                    </div>
+                    )}
                   </div>
-                )}
+                </div>
                 <div className="mt-3 text-[9px] text-slate-600 leading-relaxed">
                   <p className="font-bold text-slate-500 uppercase tracking-wider">Recommended</p>
                   <p>{size}</p>
