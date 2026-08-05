@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
+import { sectionKeyForPath } from "@/lib/sections";
 
 export async function middleware(request: NextRequest) {
   const { supabase, user, response } = await updateSession(request);
@@ -34,9 +35,11 @@ export async function middleware(request: NextRequest) {
 
   // 3.5 Account-approval gate — new signups must be approved by a founder.
   let isApproved = true;
+  let perms: string[] | null = null;
   try {
-    const { data: myProfile } = await supabase.from("profiles").select("approved").eq("id", user.id).maybeSingle();
+    const { data: myProfile } = await supabase.from("profiles").select("approved, permissions").eq("id", user.id).maybeSingle();
     isApproved = myProfile?.approved === true;
+    perms = (myProfile?.permissions as string[] | null) ?? null;
   } catch {
     isApproved = true; // fail open if the check errors (don't lock people out on a glitch)
   }
@@ -53,13 +56,27 @@ export async function middleware(request: NextRequest) {
 
   if (
     path.startsWith("/dashboard/jarvis") ||
-    path.startsWith("/dashboard/onboarding") ||
     path.startsWith("/dashboard/team") ||
     path.startsWith("/dashboard/founder-zone")
   ) {
     if (role !== "founder") {
       const homeUrl = new URL("/dashboard", baseAppUrl);
       return NextResponse.redirect(homeUrl);
+    }
+  }
+
+  // Onboarding: founder, or an employee explicitly granted the section.
+  if (path.startsWith("/dashboard/onboarding")) {
+    const allowed = role === "founder" || (role === "employee" && Array.isArray(perms) && perms.includes("onboarding"));
+    if (!allowed) return NextResponse.redirect(new URL("/dashboard", baseAppUrl));
+  }
+
+  // Employee section permissions: when an explicit list is set, only those
+  // workflow sections are reachable — direct URLs included.
+  if (role === "employee" && Array.isArray(perms)) {
+    const sectionKey = sectionKeyForPath(path);
+    if (sectionKey && !perms.includes(sectionKey)) {
+      return NextResponse.redirect(new URL("/dashboard", baseAppUrl));
     }
   }
 

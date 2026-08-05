@@ -5,6 +5,7 @@ import Link from "next/link";
 import GlobalErrorMonitor from "./GlobalErrorMonitor";
 import BrandLogo from "./BrandLogo";
 import PendingSignupsBadge from "./PendingSignupsBadge";
+import { sectionKeyForPath } from "@/lib/sections";
 import {
   Sparkles,
   LayoutDashboard,
@@ -51,6 +52,13 @@ export default async function DashboardLayout({
   const brandName = user.user_metadata?.brand_name || "";
   const name = user.user_metadata?.name || user.email?.split("@")[0] || "User";
 
+  // Per-user section permissions (employees): NULL = default set; array = only those.
+  let perms: string[] | null = null;
+  if (role === "employee") {
+    const { data: prof } = await supabase.from("profiles").select("permissions").eq("id", user.id).maybeSingle();
+    perms = (prof?.permissions as string[] | null) ?? null;
+  }
+
   // Full map of modular nav items
   const allNavItems = [
     { name: "Console Home", href: "/dashboard", icon: LayoutDashboard, roles: ["founder", "employee", "client"], section: "Overview" },
@@ -79,7 +87,16 @@ export default async function DashboardLayout({
     { name: "Portfolio Desk", href: "/dashboard/founder-zone", icon: Wallet, roles: ["founder"], section: "Founder Zone" },
   ];
 
-  const filteredNavItems = allNavItems.filter((item) => item.roles.includes(role));
+  const filteredNavItems = allNavItems.filter((item) => {
+    const sectionKey = sectionKeyForPath(item.href);
+    if (role === "employee" && perms) {
+      // Explicit permission list: workflow sections follow the list exactly
+      // (including granting normally-founder-only ones like Onboarding).
+      if (sectionKey) return perms.includes(sectionKey);
+      return item.roles.includes(role);
+    }
+    return item.roles.includes(role);
+  });
 
   // Role styles
   const roleStyles = {

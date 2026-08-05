@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Users, Loader2, Check, X, Shield } from "lucide-react";
+import { Users, Loader2, Check, X, Shield, KeyRound } from "lucide-react";
+import { SECTIONS } from "@/lib/sections";
 
 interface UserRow {
   id: string;
@@ -9,6 +10,7 @@ interface UserRow {
   role: string;
   brand_name: string | null;
   approved: boolean;
+  permissions: string[] | null;
   created_at: string;
 }
 
@@ -33,6 +35,30 @@ export default function TeamPage() {
     setBusy(userId);
     try {
       await fetch("/api/team", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId, action, role }) });
+      await load();
+    } finally { setBusy(null); }
+  };
+
+  // Section-permission editing (local draft per user, saved on click)
+  const [permDraft, setPermDraft] = useState<Record<string, string[] | null>>({});
+  const draftFor = (u: UserRow): string[] | null => (u.id in permDraft ? permDraft[u.id] : u.permissions);
+  const togglePerm = (u: UserRow, key: string) => {
+    const cur = draftFor(u) ?? SECTIONS.filter((s) => !["onboarding", "agency-brain"].includes(s.key)).map((s) => s.key);
+    setPermDraft((p) => ({ ...p, [u.id]: cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key] }));
+  };
+  const savePerms = async (u: UserRow) => {
+    setBusy(u.id);
+    try {
+      await fetch("/api/team", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: u.id, action: "set_permissions", permissions: draftFor(u) }) });
+      setPermDraft((p) => { const n = { ...p }; delete n[u.id]; return n; });
+      await load();
+    } finally { setBusy(null); }
+  };
+  const setFullAccess = async (u: UserRow) => {
+    setBusy(u.id);
+    try {
+      await fetch("/api/team", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: u.id, action: "set_permissions", permissions: null }) });
+      setPermDraft((p) => { const n = { ...p }; delete n[u.id]; return n; });
       await load();
     } finally { setBusy(null); }
   };
@@ -92,23 +118,59 @@ export default function TeamPage() {
           <div>
             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Active users ({active.length})</h2>
             <div className="space-y-2">
-              {active.map((u) => (
-                <div key={u.id} className="bg-slate-950/60 border border-slate-900 rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap">
-                  <div className="min-w-0 flex items-center space-x-2">
-                    <Shield className="w-4 h-4 text-slate-600 shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold text-white truncate">{u.name || "(no name)"}{u.brand_name ? <span className="text-slate-500 font-normal"> · {u.brand_name}</span> : ""}</p>
+              {active.map((u) => {
+                const d = draftFor(u);
+                const dirty = u.id in permDraft;
+                return (
+                  <div key={u.id} className="bg-slate-950/60 border border-slate-900 rounded-2xl p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="min-w-0 flex items-center space-x-2">
+                        <Shield className="w-4 h-4 text-slate-600 shrink-0" />
+                        <p className="text-sm font-bold text-white truncate">{u.name || "(no name)"}{u.brand_name ? <span className="text-slate-500 font-normal"> · {u.brand_name}</span> : ""}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select value={u.role} onChange={(e) => act(u.id, "set_role", e.target.value)} disabled={!!busy} className={`text-[10px] font-bold rounded-lg px-2 py-1 border cursor-pointer focus:outline-none ${roleBadge(u.role)}`}>
+                          {ROLES.map((r) => <option key={r} value={r} className="bg-slate-900 text-white">{r}</option>)}
+                        </select>
+                        <button disabled={!!busy} onClick={() => act(u.id, "revoke")} className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-500 hover:text-rose-400 cursor-pointer">Revoke</button>
+                        {busy === u.id && <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />}
+                      </div>
                     </div>
+
+                    {/* Section permissions — employees only */}
+                    {u.role === "employee" && (
+                      <details className="border-t border-slate-900/70 pt-2">
+                        <summary className="cursor-pointer text-[11px] font-bold text-slate-400 flex items-center space-x-1.5 list-none">
+                          <KeyRound className="w-3.5 h-3.5" />
+                          <span>
+                            Section access:{" "}
+                            {d === null
+                              ? <span className="text-emerald-400">Full (default)</span>
+                              : <span className="text-amber-400">{d.length} of {SECTIONS.length} sections</span>}
+                            {dirty && <span className="text-rose-400"> · unsaved</span>}
+                          </span>
+                        </summary>
+                        <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                          {SECTIONS.map((s) => {
+                            const list = d ?? SECTIONS.filter((x) => !["onboarding", "agency-brain"].includes(x.key)).map((x) => x.key);
+                            const on = list.includes(s.key);
+                            return (
+                              <label key={s.key} className={`flex items-center space-x-2 px-2.5 py-1.5 rounded-lg border cursor-pointer text-[11px] ${on ? "bg-indigo-950/30 border-indigo-900 text-white" : "bg-slate-950 border-slate-900 text-slate-500"}`}>
+                                <input type="checkbox" checked={on} onChange={() => togglePerm(u, s.key)} className="accent-[#FFD400]" />
+                                <span><span className="font-bold">{s.num}</span> · {s.name}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <div className="flex items-center gap-2 mt-2">
+                          <button disabled={!!busy || !dirty} onClick={() => savePerms(u)} className="text-[11px] font-bold px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 cursor-pointer disabled:opacity-40">Save access</button>
+                          <button disabled={!!busy} onClick={() => setFullAccess(u)} className="text-[11px] font-bold px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-emerald-700 text-slate-300 cursor-pointer">Give full access</button>
+                        </div>
+                      </details>
+                    )}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <select value={u.role} onChange={(e) => act(u.id, "set_role", e.target.value)} disabled={!!busy} className={`text-[10px] font-bold rounded-lg px-2 py-1 border cursor-pointer focus:outline-none ${roleBadge(u.role)}`}>
-                      {ROLES.map((r) => <option key={r} value={r} className="bg-slate-900 text-white">{r}</option>)}
-                    </select>
-                    <button disabled={!!busy} onClick={() => act(u.id, "revoke")} className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-500 hover:text-rose-400 cursor-pointer">Revoke</button>
-                    {busy === u.id && <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </>
