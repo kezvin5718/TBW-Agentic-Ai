@@ -90,6 +90,8 @@ export default function SocialPublisherPage() {
   const [rpAccounts, setRpAccounts] = useState<Array<{ id: string; name: string; platform: string }>>([]);
   const [rpMapping, setRpMapping] = useState<Record<string, { client_id: string; platform: string }>>({});
   const [rpBusy, setRpBusy] = useState(false);
+  const [rpSearch, setRpSearch] = useState("");
+  const [rpPlatFilter, setRpPlatFilter] = useState("all");
 
   const loadRecurPost = useCallback(async () => {
     try {
@@ -542,8 +544,8 @@ export default function SocialPublisherPage() {
             </div>
             {rpAccounts.length === 0 ? (
               <p className="text-[11px] text-slate-600">No accounts returned — connect accounts inside RecurPost first, then Refresh.</p>
-            ) : (
-              rpAccounts.map((a) => {
+            ) : (() => {
+              const rowFor = (a: { id: string; name: string; platform: string }) => {
                 const m = rpMapping[a.id] || { client_id: "", platform: a.platform || "" };
                 return (
                   <div key={a.id} className="flex items-center gap-2 flex-wrap border-b border-slate-900/60 py-2">
@@ -559,8 +561,64 @@ export default function SocialPublisherPage() {
                     </select>
                   </div>
                 );
-              })
-            )}
+              };
+
+              const q = rpSearch.trim().toLowerCase();
+              const filtered = rpAccounts.filter((a) => {
+                const m = rpMapping[a.id];
+                const clientName = m?.client_id ? clients.find((c) => c.id === m.client_id)?.name || "" : "";
+                const matchesQ = !q || a.name.toLowerCase().includes(q) || clientName.toLowerCase().includes(q);
+                const plat = m?.platform || a.platform || "";
+                const matchesP = rpPlatFilter === "all" || plat === rpPlatFilter;
+                return matchesQ && matchesP;
+              });
+              const unmapped = filtered.filter((a) => !rpMapping[a.id]?.client_id);
+              const mapped = filtered.filter((a) => rpMapping[a.id]?.client_id);
+              const byClient: Record<string, typeof rpAccounts> = {};
+              mapped.forEach((a) => {
+                const cn = clients.find((c) => c.id === rpMapping[a.id].client_id)?.name || "Unknown client";
+                (byClient[cn] ||= []).push(a);
+              });
+              const platOptions = Array.from(new Set(rpAccounts.map((a) => rpMapping[a.id]?.platform || a.platform || "").filter(Boolean))).sort();
+
+              return (
+                <>
+                  {/* Search + platform filter */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input
+                      value={rpSearch}
+                      onChange={(e) => setRpSearch(e.target.value)}
+                      placeholder="🔍 Search account or client name…"
+                      className="flex-1 min-w-[200px] bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                    />
+                    <div className="flex gap-1.5 flex-wrap">
+                      <button onClick={() => setRpPlatFilter("all")} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border capitalize cursor-pointer ${rpPlatFilter === "all" ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>All</button>
+                      {platOptions.map((p) => (
+                        <button key={p} onClick={() => setRpPlatFilter(p)} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border capitalize cursor-pointer ${rpPlatFilter === p ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>{p}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Needs mapping first — this is the to-do list */}
+                  {unmapped.length > 0 && (
+                    <div className="mt-2">
+                      <p className="text-[10px] font-black text-amber-400 uppercase tracking-wider mb-1">⚠ Needs mapping ({unmapped.length})</p>
+                      {unmapped.map(rowFor)}
+                    </div>
+                  )}
+
+                  {/* Mapped — grouped by client */}
+                  {Object.keys(byClient).sort().map((cn) => (
+                    <div key={cn} className="mt-2">
+                      <p className="text-[10px] font-black text-emerald-400 uppercase tracking-wider mb-1">✓ {cn} ({byClient[cn].length})</p>
+                      {byClient[cn].map(rowFor)}
+                    </div>
+                  ))}
+
+                  {filtered.length === 0 && <p className="text-[11px] text-slate-600 py-3">No accounts match your search/filter.</p>}
+                </>
+              );
+            })()}
             {rpAccounts.length > 0 && (
               <button onClick={saveRpMapping} disabled={rpBusy} className="mt-1 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold cursor-pointer disabled:opacity-50">
                 {rpBusy ? "Saving…" : "Save mapping"}
