@@ -8,6 +8,7 @@ interface ClientRow { id: string; name: string }
 interface HubUpload {
   id: string; client_id: string; file_url: string; file_name: string | null;
   media_type: string; content_type: "post" | "reel" | "story"; status: string;
+  qc_status?: string; qc_detected_brand?: string | null; qc_note?: string | null;
   created_at: string; clients?: { name: string } | null; profiles?: { name: string } | null;
 }
 interface PostRow {
@@ -424,6 +425,11 @@ export default function SocialPublisherPage() {
                     <p className="text-[11px] font-bold text-white truncate">{u.file_name || "file"}</p>
                     <p className="text-[10px] text-slate-500 truncate">{u.clients?.name || "—"} · <span className="capitalize text-[var(--yellow)]">{u.content_type}</span></p>
                     <p className="text-[9px] text-slate-600">by {u.profiles?.name || "—"} · {new Date(u.created_at).toLocaleDateString()}</p>
+                    {u.qc_status === "mismatch" && (
+                      <p title={`${u.qc_detected_brand ? `Looks like: ${u.qc_detected_brand}. ` : ""}${u.qc_note || ""}`} className="text-[9px] font-bold text-rose-400 cursor-help">
+                        ⚠ Brand mismatch{u.qc_detected_brand ? ` — looks like ${u.qc_detected_brand}` : ""}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <button onClick={() => applyHubUpload(u)} className="w-full py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[11px] font-bold cursor-pointer">

@@ -13,6 +13,9 @@ interface UploadRow {
   media_type: "image" | "video";
   content_type: "post" | "reel" | "story";
   status: string;
+  qc_status?: "pending" | "match" | "mismatch" | "unsure" | "skipped";
+  qc_detected_brand?: string | null;
+  qc_note?: string | null;
   created_at: string;
   clients?: { name: string } | null;
   profiles?: { name: string } | null;
@@ -71,6 +74,22 @@ export default function ContentHubPage() {
     fetchUploads();
   }, [fetchUploads]);
 
+  // Brand QC — vision-check pending uploads against their selected brand.
+  const runQc = useCallback(async () => {
+    try {
+      const res = await fetch("/api/content-hub/qc", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.checked > 0) {
+          await fetchUploads();
+          if (data.flagged > 0) setError(`⚠ Brand QC flagged ${data.flagged} upload(s) as possibly the WRONG brand — check the Brand QC column below.`);
+        }
+      }
+    } catch { /* ignore */ }
+  }, [fetchUploads]);
+
+  useEffect(() => { runQc(); }, [runQc]); // catch anything pending from earlier
+
   const [uploadCount, setUploadCount] = useState<{ done: number; total: number } | null>(null);
 
   // Upload one or many files. Files are naturally sorted by their filename
@@ -108,6 +127,7 @@ export default function ContentHubPage() {
     setUploadCount(null);
     setUploadingType(null);
     await fetchUploads();
+    runQc(); // brand-check the fresh uploads in the background
     if (failed.length === 0) {
       setSuccess(files.length > 1
         ? `Uploaded ${ok} files as ${contentType} in filename order (${files[0].name} → ${files[files.length - 1].name}).`
@@ -243,6 +263,7 @@ export default function ContentHubPage() {
                   <th className="py-2 pr-3 font-bold">Type</th>
                   <th className="py-2 pr-3 font-bold">Size</th>
                   <th className="py-2 pr-3 font-bold">By</th>
+                  <th className="py-2 pr-3 font-bold">Brand QC</th>
                   <th className="py-2 pr-3 font-bold">Status</th>
                 </tr>
               </thead>
@@ -271,6 +292,17 @@ export default function ContentHubPage() {
                     </td>
                     <td className="py-2 pr-3">{fmtSize(u.file_size)}</td>
                     <td className="py-2 pr-3">{u.profiles?.name || "—"}</td>
+                    <td className="py-2 pr-3">
+                      {u.qc_status === "match" && <span className="px-2 py-0.5 rounded-full bg-emerald-950/40 border border-emerald-900 text-emerald-400 text-[10px] font-bold">✓ Match</span>}
+                      {u.qc_status === "mismatch" && (
+                        <span title={`${u.qc_detected_brand ? `Looks like: ${u.qc_detected_brand}. ` : ""}${u.qc_note || ""}`} className="px-2 py-0.5 rounded-full bg-rose-950/40 border border-rose-900 text-rose-400 text-[10px] font-bold cursor-help">
+                          ⚠ Wrong brand?{u.qc_detected_brand ? ` → ${u.qc_detected_brand}` : ""}
+                        </span>
+                      )}
+                      {u.qc_status === "unsure" && <span title={u.qc_note || ""} className="px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400 text-[10px] font-bold cursor-help">? Unclear</span>}
+                      {u.qc_status === "pending" && <span className="text-[10px] text-slate-500">checking…</span>}
+                      {u.qc_status === "skipped" && <span title={u.qc_note || ""} className="text-[10px] text-slate-600">—</span>}
+                    </td>
                     <td className="py-2 pr-3">
                       <span className="px-2 py-0.5 rounded-full bg-emerald-950/40 border border-emerald-900 text-emerald-400 text-[10px] font-bold capitalize">{u.status}</span>
                     </td>
