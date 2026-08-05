@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { UploadCloud, Image as ImageIcon, Film, Smartphone, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
+import { UploadCloud, Image as ImageIcon, Film, Smartphone, Loader2, CheckCircle2, AlertTriangle, Trash2 } from "lucide-react";
 
 interface ClientRow { id: string; name: string }
 interface UploadRow {
@@ -16,6 +16,7 @@ interface UploadRow {
   qc_status?: "pending" | "match" | "mismatch" | "unsure" | "skipped";
   qc_detected_brand?: string | null;
   qc_note?: string | null;
+  uploaded_by?: string | null;
   created_at: string;
   clients?: { name: string } | null;
   profiles?: { name: string } | null;
@@ -51,7 +52,46 @@ export default function ContentHubPage() {
   const [uploadingType, setUploadingType] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [me, setMe] = useState<{ id: string; role: string } | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  // Staged files per card — added first, uploaded only when "Upload" is clicked.
+  const [staged, setStaged] = useState<Record<string, File[]>>({ post: [], reel: [], story: [] });
   const inputRefs = { post: useRef<HTMLInputElement>(null), reel: useRef<HTMLInputElement>(null), story: useRef<HTMLInputElement>(null) };
+
+  const naturalSort = (a: File, b: File) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+  const addFiles = (key: string, list: FileList | File[]) => {
+    const incoming = Array.from(list);
+    if (incoming.length === 0) return;
+    setStaged((prev) => {
+      const existing = prev[key] || [];
+      const merged = [...existing];
+      for (const f of incoming) {
+        if (!merged.some((m) => m.name === f.name && m.size === f.size)) merged.push(f);
+      }
+      merged.sort(naturalSort);
+      return { ...prev, [key]: merged };
+    });
+    setSuccess(null);
+  };
+  const removeStaged = (key: string, idx: number) =>
+    setStaged((prev) => ({ ...prev, [key]: (prev[key] || []).filter((_, i) => i !== idx) }));
+  const clearStaged = (key: string) => setStaged((prev) => ({ ...prev, [key]: [] }));
+
+  const deleteUpload = async (id: string) => {
+    if (!window.confirm("Delete this upload? This removes it for the social team too.")) return;
+    setDeleting(id);
+    try {
+      const res = await fetch("/api/content-hub", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Delete failed");
+      await fetchUploads();
+      setSuccess("Upload deleted.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeleting(null);
+    }
+  };
 
   const fetchUploads = useCallback(async () => {
     try {
@@ -68,6 +108,8 @@ export default function ContentHubPage() {
   useEffect(() => {
     (async () => {
       const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) setMe({ id: user.id, role: (user.user_metadata?.role as string) || "employee" });
       const { data } = await supabase.from("clients").select("id, name").order("name");
       setClients(data || []);
     })();
@@ -75,6 +117,7 @@ export default function ContentHubPage() {
   }, [fetchUploads]);
 
   // Brand QC — vision-check pending uploads against their selected brand.
+  // Runs AFTER the user clicks Upload (and once on load to catch leftovers).
   const runQc = useCallback(async () => {
     try {
       const res = await fetch("/api/content-hub/qc", { method: "POST" });
@@ -109,6 +152,7 @@ export default function ContentHubPage() {
     setUploadingType(contentType);
     let ok = 0;
     const failed: string[] = [];
+    const failedNames: string[] = [];
     for (let i = 0; i < files.length; i++) {
       setUploadCount({ done: i, total: files.length });
       try {
@@ -122,6 +166,7 @@ export default function ContentHubPage() {
         ok++;
       } catch (err: unknown) {
         failed.push(`${files[i].name} (${err instanceof Error ? err.message : "failed"})`);
+        failedNames.push(files[i].name);
       }
     }
     setUploadCount(null);
@@ -130,11 +175,20 @@ export default function ContentHubPage() {
     runQc(); // brand-check the fresh uploads in the background
     if (failed.length === 0) {
       setSuccess(files.length > 1
-        ? `Uploaded ${ok} files as ${contentType} in filename order (${files[0].name} → ${files[files.length - 1].name}).`
-        : `Uploaded "${files[0].name}" as ${contentType}. It's now available to the social team.`);
+        ? `Uploaded ${ok} files as ${contentType} in filename order (${files[0].name} → ${files[files.length - 1].name}). Brand QC is checking them now…`
+        : `Uploaded "${files[0].name}" as ${contentType}. Brand QC is checking it now…`);
     } else {
       setError(`${ok} uploaded, ${failed.length} failed: ${failed.slice(0, 3).join("; ")}${failed.length > 3 ? "…" : ""}`);
     }
+    return failedNames;
+  };
+
+  // Upload everything staged in a card; failed files stay staged for retry.
+  const uploadStaged = async (key: string) => {
+    const files = staged[key] || [];
+    if (files.length === 0) return;
+    const failedNames = await doUpload(key, files);
+    setStaged((prev) => ({ ...prev, [key]: (prev[key] || []).filter((f) => (failedNames || []).includes(f.name)) }));
   };
 
   return (
@@ -201,9 +255,9 @@ export default function ContentHubPage() {
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
                     e.preventDefault();
-                    if (e.dataTransfer.files?.length) doUpload(key, e.dataTransfer.files);
+                    if (e.dataTransfer.files?.length) addFiles(key, e.dataTransfer.files);
                   }}
-                  className="flex-1 border border-dashed border-slate-800 rounded-xl p-5 flex flex-col items-center justify-center text-center space-y-2"
+                  className="flex-1 border border-dashed border-slate-800 rounded-xl p-4 flex flex-col items-center justify-center text-center space-y-2"
                 >
                   {busy ? (
                     <Loader2 className={`w-6 h-6 animate-spin ${a.text}`} />
@@ -222,7 +276,7 @@ export default function ContentHubPage() {
                     onClick={() => inputRefs[key].current?.click()}
                     className={`px-4 py-1.5 rounded-lg text-white text-xs font-bold ${a.btn} disabled:opacity-50 cursor-pointer`}
                   >
-                    Browse Files
+                    Add Files
                   </button>
                   <input
                     ref={inputRefs[key]}
@@ -231,11 +285,39 @@ export default function ContentHubPage() {
                     multiple
                     className="hidden"
                     onChange={(e) => {
-                      if (e.target.files?.length) doUpload(key, e.target.files);
+                      if (e.target.files?.length) addFiles(key, e.target.files);
                       e.target.value = "";
                     }}
                   />
                 </div>
+
+                {/* Staged files — review order, remove mistakes, then Upload */}
+                {(staged[key]?.length || 0) > 0 && (
+                  <div className="mt-3 space-y-2">
+                    <div className="max-h-32 overflow-y-auto space-y-1 pr-1">
+                      {staged[key].map((f, i) => (
+                        <div key={`${f.name}-${f.size}`} className="flex items-center justify-between gap-2 bg-slate-950/80 border border-slate-900 rounded-lg px-2 py-1">
+                          <span className="text-[10px] text-slate-300 truncate">
+                            <span className={`font-black mr-1.5 ${a.text}`}>{i + 1}.</span>{f.name}
+                          </span>
+                          <button type="button" disabled={busy} onClick={() => removeStaged(key, i)} className="text-slate-600 hover:text-rose-400 text-xs font-bold cursor-pointer shrink-0">✕</button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={busy || !selectedClient}
+                        onClick={() => uploadStaged(key)}
+                        title={!selectedClient ? "Select a client first" : ""}
+                        className={`flex-1 py-2 rounded-lg text-white text-xs font-bold ${a.btn} disabled:opacity-50 cursor-pointer`}
+                      >
+                        {busy ? "Uploading…" : `⬆ Upload ${staged[key].length} file${staged[key].length > 1 ? "s" : ""}`}
+                      </button>
+                      <button type="button" disabled={busy} onClick={() => clearStaged(key)} className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-xs font-bold cursor-pointer">Clear</button>
+                    </div>
+                  </div>
+                )}
                 <div className="mt-3 text-[9px] text-slate-600 leading-relaxed">
                   <p className="font-bold text-slate-500 uppercase tracking-wider">Recommended</p>
                   <p>{size}</p>
@@ -265,6 +347,7 @@ export default function ContentHubPage() {
                   <th className="py-2 pr-3 font-bold">By</th>
                   <th className="py-2 pr-3 font-bold">Brand QC</th>
                   <th className="py-2 pr-3 font-bold">Status</th>
+                  <th className="py-2 pr-3 font-bold"></th>
                 </tr>
               </thead>
               <tbody>
@@ -305,6 +388,18 @@ export default function ContentHubPage() {
                     </td>
                     <td className="py-2 pr-3">
                       <span className="px-2 py-0.5 rounded-full bg-emerald-950/40 border border-emerald-900 text-emerald-400 text-[10px] font-bold capitalize">{u.status}</span>
+                    </td>
+                    <td className="py-2 pr-3">
+                      {u.status === "uploaded" && (me?.role === "founder" || u.uploaded_by === me?.id) && (
+                        <button
+                          onClick={() => deleteUpload(u.id)}
+                          disabled={deleting === u.id}
+                          title="Delete this upload"
+                          className="text-slate-600 hover:text-rose-400 cursor-pointer disabled:opacity-50"
+                        >
+                          {deleting === u.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

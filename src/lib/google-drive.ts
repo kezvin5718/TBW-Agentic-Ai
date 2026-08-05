@@ -171,6 +171,21 @@ export async function isDriveConnected(): Promise<boolean> {
   return !!creds && creds.status === "connected";
 }
 
+/** Best-effort delete of a Drive file we created, given its view URL. */
+export async function deleteDriveFileByUrl(url: string): Promise<boolean> {
+  const m = url.match(/googleusercontent\.com\/d\/([^=/?&]+)/) || url.match(/drive\.google\.com\/file\/d\/([^/?&]+)/);
+  if (!m) return false;
+  try {
+    const drive = await getDriveService();
+    if (!drive) return false;
+    await drive.files.delete({ fileId: m[1] });
+    return true;
+  } catch (err) {
+    console.warn("Drive file delete failed (record removed anyway):", err instanceof Error ? err.message : err);
+    return false;
+  }
+}
+
 /**
  * Store a Content Hub designer upload — Google Drive when connected (under
  * "TBW Content Hub / {client} / {month}"), otherwise Supabase fallback.

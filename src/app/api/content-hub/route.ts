@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
-import { storeContentHubUpload } from "@/lib/google-drive";
+import { storeContentHubUpload, deleteDriveFileByUrl } from "@/lib/google-drive";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -87,4 +87,42 @@ export async function POST(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ success: true, upload: row });
+}
+
+// DELETE — remove a mistaken upload (uploader can delete their own; founder any).
+// Only items still in "uploaded" state; best-effort removes the stored file too.
+export async function DELETE(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = (user?.user_metadata?.role as string) || "client";
+  if (!user || !["founder", "employee"].includes(role)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const { id } = await request.json();
+  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+
+  const admin = createServiceRoleClient();
+  const { data: row } = await admin.from("creative_uploads").select("id, uploaded_by, status, file_url").eq("id", id).single();
+  if (!row) return NextResponse.json({ error: "Upload not found" }, { status: 404 });
+  if (role !== "founder" && row.uploaded_by !== user.id) {
+    return NextResponse.json({ error: "You can only delete your own uploads." }, { status: 403 });
+  }
+  if (row.status !== "uploaded") {
+    return NextResponse.json({ error: "Already scheduled/processed — remove it from Publishing instead." }, { status: 400 });
+  }
+
+  const { error } = await admin.from("creative_uploads").delete().eq("id", id);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Best-effort file cleanup (record is already gone either way).
+  const url = row.file_url as string;
+  if (url.includes("googleusercontent.com") || url.includes("drive.google.com")) {
+    await deleteDriveFileByUrl(url);
+  } else if (url.includes("/studio-outputs/")) {
+    const path = url.split("/studio-outputs/")[1]?.split("?")[0];
+    if (path) await admin.storage.from("studio-outputs").remove([path]).catch(() => {});
+  }
+
+  return NextResponse.json({ success: true });
 }
