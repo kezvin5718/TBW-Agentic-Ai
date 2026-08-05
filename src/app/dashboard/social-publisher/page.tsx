@@ -82,10 +82,6 @@ export default function SocialPublisherPage() {
   const [generating, setGenerating] = useState(false);
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
-  const [hookConfigured, setHookConfigured] = useState(true);
-  const [hookUrl, setHookUrl] = useState("");
-  const [savingHook, setSavingHook] = useState(false);
-
   // RecurPost
   const [rpConfigured, setRpConfigured] = useState(false);
   const [rpAccounts, setRpAccounts] = useState<Array<{ id: string; name: string; platform: string }>>([]);
@@ -174,14 +170,6 @@ export default function SocialPublisherPage() {
       setMyRole((user?.user_metadata?.role as string) || "employee");
       const { data } = await supabase.from("clients").select("id, name").order("name");
       setClients(data || []);
-      try {
-        const res = await fetch("/api/social-publisher/settings");
-        if (res.ok) {
-          const s = await res.json();
-          setHookConfigured(!!s.configured);
-          if (s.url) setHookUrl(s.url);
-        }
-      } catch { /* ignore */ }
     })();
     loadHistory();
     loadHubUploads();
@@ -236,28 +224,13 @@ export default function SocialPublisherPage() {
       if (!res.ok) throw new Error(data.error || "Send failed");
       const okCount = (data.results || []).filter((r: { ok: boolean }) => r.ok).length;
       const failCount = (data.results || []).length - okCount;
-      setNotice({ ok: failCount === 0, text: failCount === 0 ? `Sent to Zapier for ${okCount} platform(s) ✅` : `${okCount} sent, ${failCount} failed — see history below.` });
+      setNotice({ ok: failCount === 0, text: failCount === 0 ? `Sent via RecurPost for ${okCount} post(s) ✅` : `${okCount} sent, ${failCount} failed — see history below.` });
       if (failCount === 0) { setTitle(""); setCaption(""); setCaptionBrief(""); setMediaUrl(""); setMediaName(""); setThumbUrl(""); setScheduledDate(""); setScheduledTime(""); setSelectedUpload(null); }
       await loadHistory();
       await loadHubUploads();
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Send failed" });
     } finally { setSending(false); }
-  };
-
-  const saveHook = async () => {
-    setSavingHook(true);
-    try {
-      const res = await fetch("/api/social-publisher/settings", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: hookUrl }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Save failed");
-      setHookConfigured(true);
-      setNotice({ ok: true, text: "Zapier webhook saved." });
-    } catch (err: unknown) {
-      setNotice({ ok: false, text: err instanceof Error ? err.message : "Save failed" });
-    } finally { setSavingHook(false); }
   };
 
   const canSend = !!clientId && platforms.length > 0 && contentTypes.length > 0 && !!mediaUrl && !sending;
@@ -268,7 +241,7 @@ export default function SocialPublisherPage() {
         <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
           <Send className="w-6 h-6 text-[var(--yellow)]" /><span>Social Publisher</span>
         </h1>
-        <p className="text-sm text-slate-500 mt-1">Pick the client, upload the creative, generate an on-brand caption, set the time — it fires your Zapier posting workflow.</p>
+        <p className="text-sm text-slate-500 mt-1">Pick the client, upload the creative, generate an on-brand caption, set the time — it posts through RecurPost to your connected accounts.</p>
       </div>
 
       {notice && (
@@ -282,7 +255,7 @@ export default function SocialPublisherPage() {
       {rpConfigured && (
         <div className="bg-emerald-950/20 border border-emerald-900/50 rounded-xl p-3 text-xs text-emerald-300 flex items-center space-x-2">
           <CheckCircle2 className="w-4 h-4 shrink-0" />
-          <span>Posting via <b>RecurPost</b> — direct to your connected social accounts (Zapier not needed).</span>
+          <span>Posting via <b>RecurPost</b> — direct to your connected social accounts.</span>
         </div>
       )}
 
@@ -327,20 +300,12 @@ export default function SocialPublisherPage() {
         </details>
       )}
 
-      {/* Founder: webhook settings (shown until configured, expandable after) */}
-      {myRole === "founder" && !rpConfigured && (
-        <details className="bg-slate-950/40 border border-slate-900 rounded-2xl" open={!hookConfigured}>
-          <summary className="p-4 cursor-pointer text-xs font-bold text-slate-400 flex items-center space-x-2 list-none">
-            <Settings className="w-4 h-4" /><span>Zapier Webhook {hookConfigured ? "· configured ✅" : "· NOT CONFIGURED"}</span>
-          </summary>
-          <div className="px-4 pb-4 flex gap-2">
-            <input value={hookUrl} onChange={(e) => setHookUrl(e.target.value)} placeholder="https://hooks.zapier.com/hooks/catch/…"
-              className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500" />
-            <button onClick={saveHook} disabled={savingHook} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold cursor-pointer disabled:opacity-50">
-              {savingHook ? "Saving…" : "Save"}
-            </button>
-          </div>
-        </details>
+      {/* RecurPost not configured yet — server env missing */}
+      {!rpConfigured && (
+        <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-3 text-xs text-amber-300 flex items-center space-x-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>RecurPost is not configured — add <span className="font-mono">RECURPOST_EMAIL</span> and <span className="font-mono">RECURPOST_API_KEY</span> to the server <span className="font-mono">.env</span> and redeploy.</span>
+        </div>
       )}
 
       {/* Received from Content Hub — what designers have delivered, per client */}
@@ -514,7 +479,7 @@ export default function SocialPublisherPage() {
             </div>
             <button onClick={submit} disabled={!canSend} className={`px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center space-x-2 transition-all ${canSend ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>
               {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              <span>{sending ? "Sending…" : `${rpConfigured ? "Post via RecurPost" : "Send to Zapier"} (${platforms.length * contentTypes.length})`}</span>
+              <span>{sending ? "Sending…" : `Post via RecurPost (${platforms.length * contentTypes.length})`}</span>
             </button>
           </div>
         </div>
