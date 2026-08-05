@@ -33,7 +33,9 @@ export default function SocialPublisherPage() {
 
   // form state
   const [clientId, setClientId] = useState("");
-  const [platforms, setPlatforms] = useState<string[]>(["instagram"]);
+  // All platforms pre-selected — the team unselects what they don't want,
+  // so a platform is never forgotten by mistake.
+  const [platforms, setPlatforms] = useState<string[]>(PLATFORMS.map((p) => p.key));
   const [contentTypes, setContentTypes] = useState<string[]>(["post"]);
 
   // Content Hub tray
@@ -651,7 +653,7 @@ export default function SocialPublisherPage() {
         </div>
 
         <div>
-          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Platforms (select one or more)</label>
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Platforms <span className="text-slate-600 normal-case font-medium">— all pre-selected, click to unselect the ones you don&apos;t want</span></label>
           <div className="flex flex-wrap gap-2">
             {PLATFORMS.map((p) => (
               <button key={p.key} onClick={() => togglePlatform(p.key)} className={`px-4 py-2 rounded-full text-xs font-bold border cursor-pointer transition-all ${platforms.includes(p.key) ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
