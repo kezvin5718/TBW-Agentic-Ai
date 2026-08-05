@@ -104,7 +104,15 @@ export default function TeamPage() {
                           {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
                         </select>
                         <button disabled={!!busy} onClick={() => act(u.id, "approve", chosen)} className="text-[11px] font-bold px-3 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-900 text-emerald-300 hover:bg-emerald-900/40 cursor-pointer flex items-center space-x-1"><Check className="w-3.5 h-3.5" /><span>Approve</span></button>
-                        <button disabled={!!busy} onClick={() => act(u.id, "revoke")} className="text-[11px] font-bold px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 cursor-pointer flex items-center space-x-1"><X className="w-3.5 h-3.5" /><span>Reject</span></button>
+                        <button
+                          disabled={!!busy}
+                          onClick={() => {
+                            if (window.confirm(`Reject and remove "${u.name || "this user"}"? Their account is deleted — they can sign up again later if needed.`)) {
+                              act(u.id, "reject");
+                            }
+                          }}
+                          className="text-[11px] font-bold px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 cursor-pointer flex items-center space-x-1"
+                        ><X className="w-3.5 h-3.5" /><span>Reject</span></button>
                         {busy === u.id && <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />}
                       </div>
                     </div>

@@ -35,6 +35,16 @@ export async function PATCH(request: NextRequest) {
   }
 
   const admin = createServiceRoleClient();
+
+  // Reject = fully delete the account (auth user + profile via cascade), so the
+  // pending list clears and the person can register again later if needed.
+  if (action === "reject") {
+    if (userId === user.id) return NextResponse.json({ error: "You can't reject your own account." }, { status: 400 });
+    const { error: delErr } = await admin.auth.admin.deleteUser(userId);
+    if (delErr) return NextResponse.json({ error: `Could not remove account: ${delErr.message}` }, { status: 500 });
+    return NextResponse.json({ success: true });
+  }
+
   const patch: Record<string, unknown> = {};
   if (action === "approve") {
     patch.approved = true;
