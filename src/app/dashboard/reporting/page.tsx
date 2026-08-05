@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { createClient } from "@/lib/supabase/client";
 import {
   Sparkles,
   TrendingUp,
@@ -119,11 +120,11 @@ export default function ReportingPage() {
   const fetchAnalyticsMetrics = useCallback(async (clientId: string) => {
     if (!clientId) return;
     try {
-      // Call generate-budget to aggregate simulated/actual metrics daily summaries
-      const res = await fetch(`/api/planning/generate-budget?clientId=${clientId}`);
-      const data = await res.json();
-      
-      const spend = data.totalBudget || 50000;
+      // Use the client's actual ad budget (the old generate-budget call was a
+      // GET against a POST-only route — always 405'd and silently fell back).
+      const supabase = createClient();
+      const { data: c } = await supabase.from("clients").select("ad_budget").eq("id", clientId).single();
+      const spend = Number(c?.ad_budget) || 50000;
       const impressions = Math.round(spend * 9.5);
       const clicks = Math.round(impressions * 0.015);
       const leads = Math.round(spend / 120);
