@@ -231,6 +231,7 @@ export async function PUT(
 
     const body: SavedJSONData = await request.json();
     const { confirmedEntries, fileName, fileSize } = body;
+    const importMode = (body as { mode?: string }).mode === "replace" ? "replace" : "merge";
 
     if (!confirmedEntries || !Array.isArray(confirmedEntries) || confirmedEntries.length === 0) {
       return NextResponse.json({ error: "No confirmed entries submitted" }, { status: 400 });
@@ -286,32 +287,49 @@ export async function PUT(
       const learnings = entries.filter(e => e.category === "learnings").map(e => e.content);
       const feedback = entries.filter(e => e.category === "feedback").map(e => e.content);
 
-      // Consolidate updates
-      const newFeedback = feedback.map((f) => ({
+      // Mode: "merge" adds only NEW entries (exact duplicates skipped);
+      // "replace" clears previously-imported knowledge first so an updated
+      // export fully supersedes the old one. Manually-added entries always survive.
+      type AnyRec = Record<string, unknown>;
+      const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
+      const existingFeedback = (brandBrain.feedback_log || []) as AnyRec[];
+      const existingResults = (brandBrain.results_log || []) as AnyRec[];
+      const currentPrefs = (brandBrain.design_preferences || {}) as DesignPreferencesRecord;
+
+      const baseFeedback = importMode === "replace" ? existingFeedback.filter((f) => f?.source !== "import") : existingFeedback;
+      const baseResults = importMode === "replace" ? existingResults.filter((r) => r?.source !== "import") : existingResults;
+      const baseFacts = importMode === "replace" ? [] : (currentPrefs.imported_facts || []);
+      const basePrefsList = importMode === "replace" ? [] : (currentPrefs.imported_preferences || []);
+
+      const feedbackSeen = new Set(baseFeedback.map((f) => norm(f?.comment)));
+      const resultsSeen = new Set(baseResults.map((r) => norm(r?.learning)));
+      const factsSeen = new Set(baseFacts.map((f) => norm(f?.content)));
+      const prefsSeen = new Set(basePrefsList.map((p) => norm(p?.content)));
+
+      const newFeedback = feedback.filter((f) => !feedbackSeen.has(norm(f))).map((f) => ({
         date: importDate,
         sender: "founder",
         comment: f,
         source: "import"
       }));
-      const updatedFeedbackLog = [...(brandBrain.feedback_log || []), ...newFeedback];
+      const updatedFeedbackLog = [...baseFeedback, ...newFeedback];
 
-      const newLearningsList = learnings.map((l) => ({
+      const newLearningsList = learnings.filter((l) => !resultsSeen.has(norm(l))).map((l) => ({
         date: importDate,
         learning: l,
         source: "import"
       }));
-      const updatedResultsLog = [...(brandBrain.results_log || []), ...newLearningsList];
+      const updatedResultsLog = [...baseResults, ...newLearningsList];
 
-      const currentPrefs = (brandBrain.design_preferences || {}) as DesignPreferencesRecord;
       const updatedDesignPrefs = {
         ...currentPrefs,
         imported_facts: [
-          ...(currentPrefs.imported_facts || []),
-          ...facts.map((f) => ({ content: f, date: importDate, source: "import" }))
+          ...baseFacts,
+          ...facts.filter((f) => !factsSeen.has(norm(f))).map((f) => ({ content: f, date: importDate, source: "import" }))
         ],
         imported_preferences: [
-          ...(currentPrefs.imported_preferences || []),
-          ...preferences.map((p) => ({ content: p, date: importDate, source: "import" }))
+          ...basePrefsList,
+          ...preferences.filter((p) => !prefsSeen.has(norm(p))).map((p) => ({ content: p, date: importDate, source: "import" }))
         ]
       };
 

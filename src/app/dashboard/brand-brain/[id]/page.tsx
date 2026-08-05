@@ -127,6 +127,7 @@ export default function ClientBrandBrainPage({
   const [importedEntries, setImportedEntries] = useState<ExtractedEntry[]>([]);
   const [allClients, setAllClients] = useState<ClientProfile[]>([]);
   const [confirmingImport, setConfirmingImport] = useState(false);
+  const [importMode, setImportMode] = useState<"merge" | "replace">("merge");
 
   // Fetch core client profiles
   const fetchData = async () => {
@@ -333,7 +334,8 @@ export default function ClientBrandBrainPage({
             clientId: e.classification
           })),
           fileName: uploadedFileName,
-          fileSize: uploadedFileSize
+          fileSize: uploadedFileSize,
+          mode: importMode
         }),
       });
 
@@ -1266,6 +1268,19 @@ export default function ClientBrandBrainPage({
                       </div>
                     );
                   })}
+                </div>
+
+                {/* How to apply this import to memory already imported before */}
+                <div className="border-t border-slate-800 pt-3 space-y-1.5">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">How to apply this import</p>
+                  <label className={`flex items-start space-x-2 px-3 py-2 rounded-xl border cursor-pointer text-[11px] ${importMode === "merge" ? "bg-indigo-950/30 border-indigo-900 text-white" : "bg-slate-950 border-slate-900 text-slate-400"}`}>
+                    <input type="radio" checked={importMode === "merge"} onChange={() => setImportMode("merge")} className="mt-0.5 accent-[#FFD400]" />
+                    <span><b>Add to memory</b> — keeps everything already saved; only genuinely new entries are added (exact duplicates are skipped).</span>
+                  </label>
+                  <label className={`flex items-start space-x-2 px-3 py-2 rounded-xl border cursor-pointer text-[11px] ${importMode === "replace" ? "bg-indigo-950/30 border-indigo-900 text-white" : "bg-slate-950 border-slate-900 text-slate-400"}`}>
+                    <input type="radio" checked={importMode === "replace"} onChange={() => setImportMode("replace")} className="mt-0.5 accent-[#FFD400]" />
+                    <span><b>Replace imported memory</b> — clears what previous imports added and uses this file as the new truth. Manually-added notes and feedback are kept.</span>
+                  </label>
                 </div>
 
                 <div className="flex space-x-3 border-t border-slate-800 pt-4">
