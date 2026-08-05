@@ -85,6 +85,49 @@ export default function SocialPublisherPage() {
   const [hookConfigured, setHookConfigured] = useState(true);
   const [hookUrl, setHookUrl] = useState("");
   const [savingHook, setSavingHook] = useState(false);
+
+  // RecurPost
+  const [rpConfigured, setRpConfigured] = useState(false);
+  const [rpAccounts, setRpAccounts] = useState<Array<{ id: string; name: string; platform: string }>>([]);
+  const [rpMapping, setRpMapping] = useState<Record<string, { client_id: string; platform: string }>>({});
+  const [rpBusy, setRpBusy] = useState(false);
+
+  const loadRecurPost = useCallback(async () => {
+    try {
+      const res = await fetch("/api/recurpost/accounts");
+      if (res.ok) {
+        const data = await res.json();
+        setRpConfigured(!!data.configured);
+        setRpAccounts(data.accounts || []);
+        setRpMapping(data.mapping || {});
+        if (data.error) setNotice({ ok: false, text: `RecurPost: ${data.error}` });
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  const saveRpMapping = async () => {
+    setRpBusy(true);
+    try {
+      const res = await fetch("/api/recurpost/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mapping: rpMapping }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Save failed");
+      setNotice({ ok: true, text: "RecurPost account mapping saved." });
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Save failed" });
+    } finally { setRpBusy(false); }
+  };
+
+  const testRecurPost = async () => {
+    setRpBusy(true);
+    try {
+      const res = await fetch("/api/recurpost/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "test" }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Test failed");
+      setNotice({ ok: true, text: "RecurPost connection OK ✅" });
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "RecurPost test failed" });
+    } finally { setRpBusy(false); }
+  };
   const mediaRef = useRef<HTMLInputElement>(null);
   const thumbRef = useRef<HTMLInputElement>(null);
 
@@ -142,7 +185,8 @@ export default function SocialPublisherPage() {
     })();
     loadHistory();
     loadHubUploads();
-  }, [loadHistory, loadHubUploads]);
+    loadRecurPost();
+  }, [loadHistory, loadHubUploads, loadRecurPost]);
 
   const togglePlatform = (p: string) =>
     setPlatforms((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
@@ -186,7 +230,7 @@ export default function SocialPublisherPage() {
     try {
       const res = await fetch("/api/social-publisher", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, platforms, contentTypes, title, caption, mediaUrl, thumbnailUrl: thumbUrl || undefined, scheduledFor: composeSchedule(), uploadId: selectedUpload?.id }),
+        body: JSON.stringify({ clientId, platforms, contentTypes, title, caption, mediaUrl, mediaIsVideo, thumbnailUrl: thumbUrl || undefined, scheduledFor: composeSchedule(), uploadId: selectedUpload?.id }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Send failed");
@@ -234,8 +278,57 @@ export default function SocialPublisherPage() {
         </div>
       )}
 
+      {/* Posting connection status */}
+      {rpConfigured && (
+        <div className="bg-emerald-950/20 border border-emerald-900/50 rounded-xl p-3 text-xs text-emerald-300 flex items-center space-x-2">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>Posting via <b>RecurPost</b> — direct to your connected social accounts (Zapier not needed).</span>
+        </div>
+      )}
+
+      {/* Founder: RecurPost account → client mapping */}
+      {myRole === "founder" && rpConfigured && (
+        <details className="bg-slate-950/40 border border-slate-900 rounded-2xl">
+          <summary className="p-4 cursor-pointer text-xs font-bold text-slate-400 flex items-center space-x-2 list-none">
+            <Settings className="w-4 h-4" /><span>RecurPost Accounts — map each social account to a client ({Object.keys(rpMapping).length} mapped)</span>
+          </summary>
+          <div className="px-4 pb-4 space-y-2">
+            <div className="flex gap-2">
+              <button onClick={testRecurPost} disabled={rpBusy} className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-[11px] font-bold cursor-pointer disabled:opacity-50">Test connection</button>
+              <button onClick={loadRecurPost} disabled={rpBusy} className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-[11px] font-bold cursor-pointer disabled:opacity-50">Refresh accounts</button>
+            </div>
+            {rpAccounts.length === 0 ? (
+              <p className="text-[11px] text-slate-600">No accounts returned — connect accounts inside RecurPost first, then Refresh.</p>
+            ) : (
+              rpAccounts.map((a) => {
+                const m = rpMapping[a.id] || { client_id: "", platform: a.platform || "" };
+                return (
+                  <div key={a.id} className="flex items-center gap-2 flex-wrap border-b border-slate-900/60 py-2">
+                    <span className="text-[11px] font-bold text-white min-w-[160px] truncate">{a.name}</span>
+                    <span className="text-[10px] text-slate-500 capitalize min-w-[70px]">{a.platform || "?"}</span>
+                    <select value={m.client_id} onChange={(e) => setRpMapping((p) => ({ ...p, [a.id]: { ...m, client_id: e.target.value } }))} className="text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-white cursor-pointer focus:outline-none">
+                      <option value="">— client —</option>
+                      {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                    <select value={m.platform} onChange={(e) => setRpMapping((p) => ({ ...p, [a.id]: { ...m, platform: e.target.value } }))} className="text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-white cursor-pointer focus:outline-none">
+                      <option value="">— platform —</option>
+                      {PLATFORMS.map((pl) => <option key={pl.key} value={pl.key}>{pl.label}</option>)}
+                    </select>
+                  </div>
+                );
+              })
+            )}
+            {rpAccounts.length > 0 && (
+              <button onClick={saveRpMapping} disabled={rpBusy} className="mt-1 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold cursor-pointer disabled:opacity-50">
+                {rpBusy ? "Saving…" : "Save mapping"}
+              </button>
+            )}
+          </div>
+        </details>
+      )}
+
       {/* Founder: webhook settings (shown until configured, expandable after) */}
-      {myRole === "founder" && (
+      {myRole === "founder" && !rpConfigured && (
         <details className="bg-slate-950/40 border border-slate-900 rounded-2xl" open={!hookConfigured}>
           <summary className="p-4 cursor-pointer text-xs font-bold text-slate-400 flex items-center space-x-2 list-none">
             <Settings className="w-4 h-4" /><span>Zapier Webhook {hookConfigured ? "· configured ✅" : "· NOT CONFIGURED"}</span>
@@ -421,7 +514,7 @@ export default function SocialPublisherPage() {
             </div>
             <button onClick={submit} disabled={!canSend} className={`px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center space-x-2 transition-all ${canSend ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>
               {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              <span>{sending ? "Sending…" : `Send to Zapier (${platforms.length * contentTypes.length})`}</span>
+              <span>{sending ? "Sending…" : `${rpConfigured ? "Post via RecurPost" : "Send to Zapier"} (${platforms.length * contentTypes.length})`}</span>
             </button>
           </div>
         </div>
