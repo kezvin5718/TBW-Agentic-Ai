@@ -71,28 +71,49 @@ export default function ContentHubPage() {
     fetchUploads();
   }, [fetchUploads]);
 
-  const doUpload = async (contentType: string, file: File) => {
+  const [uploadCount, setUploadCount] = useState<{ done: number; total: number } | null>(null);
+
+  // Upload one or many files. Files are naturally sorted by their filename
+  // numbering (1, 2, … 9, 10 — not 1, 10, 2) and uploaded sequentially so the
+  // sequence is preserved for the social team.
+  const doUpload = async (contentType: string, fileList: FileList | File[]) => {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
     if (!selectedClient) {
       setError("Please select a client / brand first.");
       return;
     }
+    files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+
     setError(null);
     setSuccess(null);
     setUploadingType(contentType);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("clientId", selectedClient);
-      fd.append("contentType", contentType);
-      const res = await fetch("/api/content-hub", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Upload failed");
-      setSuccess(`Uploaded "${file.name}" as ${contentType}. It's now available to the social team.`);
-      await fetchUploads();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploadingType(null);
+    let ok = 0;
+    const failed: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      setUploadCount({ done: i, total: files.length });
+      try {
+        const fd = new FormData();
+        fd.append("file", files[i]);
+        fd.append("clientId", selectedClient);
+        fd.append("contentType", contentType);
+        const res = await fetch("/api/content-hub", { method: "POST", body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Upload failed");
+        ok++;
+      } catch (err: unknown) {
+        failed.push(`${files[i].name} (${err instanceof Error ? err.message : "failed"})`);
+      }
+    }
+    setUploadCount(null);
+    setUploadingType(null);
+    await fetchUploads();
+    if (failed.length === 0) {
+      setSuccess(files.length > 1
+        ? `Uploaded ${ok} files as ${contentType} in filename order (${files[0].name} → ${files[files.length - 1].name}).`
+        : `Uploaded "${files[0].name}" as ${contentType}. It's now available to the social team.`);
+    } else {
+      setError(`${ok} uploaded, ${failed.length} failed: ${failed.slice(0, 3).join("; ")}${failed.length > 3 ? "…" : ""}`);
     }
   };
 
@@ -160,8 +181,7 @@ export default function ContentHubPage() {
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
                     e.preventDefault();
-                    const f = e.dataTransfer.files?.[0];
-                    if (f) doUpload(key, f);
+                    if (e.dataTransfer.files?.length) doUpload(key, e.dataTransfer.files);
                   }}
                   className="flex-1 border border-dashed border-slate-800 rounded-xl p-5 flex flex-col items-center justify-center text-center space-y-2"
                 >
@@ -170,7 +190,11 @@ export default function ContentHubPage() {
                   ) : (
                     <UploadCloud className={`w-6 h-6 ${a.text}`} />
                   )}
-                  <p className="text-[11px] text-slate-500">{busy ? "Uploading…" : "Drag & drop your file here"}</p>
+                  <p className="text-[11px] text-slate-500">
+                    {busy
+                      ? `Uploading ${uploadCount ? `${uploadCount.done + 1} of ${uploadCount.total}` : ""}…`
+                      : "Drag & drop files here (multiple allowed)"}
+                  </p>
                   {!busy && <span className="text-[10px] text-slate-600">or</span>}
                   <button
                     type="button"
@@ -184,10 +208,10 @@ export default function ContentHubPage() {
                     ref={inputRefs[key]}
                     type="file"
                     accept={accept}
+                    multiple
                     className="hidden"
                     onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) doUpload(key, f);
+                      if (e.target.files?.length) doUpload(key, e.target.files);
                       e.target.value = "";
                     }}
                   />
