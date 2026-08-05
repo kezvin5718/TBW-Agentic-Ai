@@ -2,7 +2,43 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { completeVision } from "@/lib/llm-vision";
 import { safeJsonParse } from "@/lib/llm";
+import { downloadDriveFileByUrl } from "@/lib/google-drive";
 import sharp from "sharp";
+import { spawn } from "child_process";
+import { writeFile, readFile, rm } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
+
+// Pull one representative frame (t=1s) out of a video buffer with ffmpeg.
+async function extractVideoFrame(buf: Buffer): Promise<Buffer> {
+  const base = join(tmpdir(), `qc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
+  const inPath = `${base}.mp4`;
+  const outPath = `${base}.jpg`;
+  try {
+    await writeFile(inPath, buf);
+    await new Promise<void>((resolve, reject) => {
+      const p = spawn("ffmpeg", ["-y", "-ss", "1", "-i", inPath, "-frames:v", "1", "-q:v", "3", outPath]);
+      let err = "";
+      p.stderr.on("data", (d) => (err += String(d)));
+      p.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg failed (${code}): ${err.slice(-160)}`))));
+      p.on("error", reject);
+    });
+    return await readFile(outPath);
+  } finally {
+    rm(inPath, { force: true }).catch(() => {});
+    rm(outPath, { force: true }).catch(() => {});
+  }
+}
+
+async function fetchMediaBuffer(url: string): Promise<Buffer> {
+  if (url.includes("googleusercontent.com") || url.includes("drive.google.com")) {
+    const b = await downloadDriveFileByUrl(url);
+    if (b) return b;
+  }
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`could not fetch media (${resp.status})`);
+  return Buffer.from(await resp.arrayBuffer());
+}
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -39,21 +75,17 @@ export async function POST() {
   let flagged = 0;
 
   for (const row of rows) {
-    // Videos: skip in v1 (frame extraction server-side is a follow-up).
-    if (row.media_type === "video") {
-      await admin.from("creative_uploads").update({ qc_status: "skipped", qc_note: "Video — brand check not run" }).eq("id", row.id);
-      continue;
-    }
-
     const uploadedFor = (row.clients as { name?: string } | null)?.name || "Unknown";
     let status: Verdict["verdict"] | "unsure" = "unsure";
     let detected = "";
     let note = "";
     try {
-      // Fetch + downscale so any host (Drive/Supabase) works and payload stays small.
-      const resp = await fetch(row.file_url);
-      if (!resp.ok) throw new Error(`could not fetch image (${resp.status})`);
-      const buf = Buffer.from(await resp.arrayBuffer());
+      // Get an image to judge: the file itself, or a 1s frame for videos.
+      let buf = await fetchMediaBuffer(row.file_url);
+      if (row.media_type === "video") {
+        if (buf.length > 150 * 1024 * 1024) throw new Error("video too large for QC (>150MB)");
+        buf = await extractVideoFrame(buf);
+      }
       const small = await sharp(buf).resize({ width: 768, withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer();
       const dataUrl = `data:image/jpeg;base64,${small.toString("base64")}`;
 
@@ -78,6 +110,7 @@ Rules: "match" only if the visible branding clearly belongs to "${uploadedFor}".
         const other = brandNames.find((b) => b.toLowerCase() !== uploadedFor.toLowerCase() && detected.toLowerCase().includes(b.toLowerCase()));
         if (other) { status = "mismatch"; note = `Detected "${other}" but uploaded under "${uploadedFor}". ${note}`; }
       }
+      if (row.media_type === "video") note = `${note} (judged from a video frame)`.trim();
     } catch (err: unknown) {
       status = "unsure";
       note = `Check failed: ${err instanceof Error ? err.message : String(err)}`;

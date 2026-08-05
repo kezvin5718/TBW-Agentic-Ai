@@ -171,6 +171,21 @@ export async function isDriveConnected(): Promise<boolean> {
   return !!creds && creds.status === "connected";
 }
 
+/** Download a Drive file's raw bytes via the API (works for video, unlike lh3 links). */
+export async function downloadDriveFileByUrl(url: string): Promise<Buffer | null> {
+  const m = url.match(/googleusercontent\.com\/d\/([^=/?&]+)/) || url.match(/drive\.google\.com\/file\/d\/([^/?&]+)/);
+  if (!m) return null;
+  try {
+    const drive = await getDriveService();
+    if (!drive) return null;
+    const res = await drive.files.get({ fileId: m[1], alt: "media" }, { responseType: "arraybuffer" });
+    return Buffer.from(res.data as ArrayBuffer);
+  } catch (err) {
+    console.warn("Drive file download failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
 /** Best-effort delete of a Drive file we created, given its view URL. */
 export async function deleteDriveFileByUrl(url: string): Promise<boolean> {
   const m = url.match(/googleusercontent\.com\/d\/([^=/?&]+)/) || url.match(/drive\.google\.com\/file\/d\/([^/?&]+)/);
