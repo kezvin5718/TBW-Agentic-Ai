@@ -126,27 +126,85 @@ export default function SocialPublisherPage() {
   };
   const mediaRef = useRef<HTMLInputElement>(null);
   const thumbRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Capture the currently-paused video frame and use it as the thumbnail.
-  const captureFrame = async () => {
-    const v = videoRef.current;
-    if (!v || !v.videoWidth) {
-      setNotice({ ok: false, text: "Video not loaded yet — press play, pause on the frame you want, then capture." });
-      return;
-    }
+  // --- Frame-strip thumbnail picker -----------------------------------------
+  const [frames, setFrames] = useState<Array<{ t: number; url: string }>>([]);
+  const [framesBusy, setFramesBusy] = useState(false);
+  const [selFrame, setSelFrame] = useState<number | null>(null);
+  const frameVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  const loadVideoEl = (src: string) =>
+    new Promise<HTMLVideoElement>((resolve, reject) => {
+      const v = document.createElement("video");
+      v.crossOrigin = "anonymous";
+      v.muted = true;
+      v.playsInline = true;
+      v.preload = "auto";
+      v.onloadedmetadata = () => resolve(v);
+      v.onerror = () => reject(new Error("Could not load the video for frame extraction."));
+      v.src = src;
+    });
+
+  const seekTo = (v: HTMLVideoElement, t: number) =>
+    new Promise<void>((resolve, reject) => {
+      v.onseeked = () => resolve();
+      v.onerror = () => reject(new Error("Seek failed"));
+      v.currentTime = t;
+    });
+
+  // Build a strip of 8 evenly-spaced frames whenever a video is uploaded.
+  const extractFrames = useCallback(async (src: string) => {
+    setFramesBusy(true);
+    setFrames([]);
+    setSelFrame(null);
     try {
+      const v = await loadVideoEl(src);
+      frameVideoRef.current = v;
+      const dur = v.duration || 1;
+      const N = 8;
+      const canvas = document.createElement("canvas");
+      const w = 200;
+      canvas.width = w;
+      canvas.height = Math.max(1, Math.round((v.videoHeight / v.videoWidth) * w) || 112);
+      const ctx = canvas.getContext("2d")!;
+      const out: Array<{ t: number; url: string }> = [];
+      for (let i = 0; i < N; i++) {
+        const t = Math.min(Math.max(0, dur - 0.1), (dur * (i + 0.5)) / N);
+        await seekTo(v, t);
+        ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+        out.push({ t, url: canvas.toDataURL("image/jpeg", 0.7) });
+        setFrames([...out]); // progressive render
+      }
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: `${err instanceof Error ? err.message : "Frame extraction failed"} — you can still upload a thumbnail file manually.` });
+    } finally {
+      setFramesBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (mediaIsVideo && mediaUrl) extractFrames(mediaUrl);
+    else { setFrames([]); setSelFrame(null); frameVideoRef.current = null; }
+  }, [mediaIsVideo, mediaUrl, extractFrames]);
+
+  // Click a frame → capture it at full resolution → set as thumbnail.
+  const chooseFrame = async (t: number) => {
+    setSelFrame(t);
+    try {
+      let v = frameVideoRef.current;
+      if (!v) { v = await loadVideoEl(mediaUrl); frameVideoRef.current = v; }
+      await seekTo(v, t);
       const canvas = document.createElement("canvas");
       canvas.width = v.videoWidth;
       canvas.height = v.videoHeight;
       canvas.getContext("2d")!.drawImage(v, 0, 0);
       const blob = await new Promise<Blob>((resolve, reject) =>
-        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not read the frame (video host blocked it)."))), "image/jpeg", 0.92)
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not capture the frame."))), "image/jpeg", 0.92)
       );
-      const file = new File([blob], `frame-thumb-${Date.now()}.jpg`, { type: "image/jpeg" });
-      await upload("thumb", file);
-      setNotice({ ok: true, text: "Frame captured and set as thumbnail ✅" });
+      await upload("thumb", new File([blob], `frame-thumb-${Date.now()}.jpg`, { type: "image/jpeg" }));
+      setNotice({ ok: true, text: "Frame set as thumbnail ✅" });
     } catch (err: unknown) {
+      setSelFrame(null);
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Frame capture failed" });
     }
   };
@@ -436,33 +494,48 @@ export default function SocialPublisherPage() {
           </div>
         </div>
 
-        {/* Pick a thumbnail frame directly from the uploaded video */}
+        {/* Pick a thumbnail frame from the video — click a frame in the strip */}
         {mediaIsVideo && mediaUrl && (
           <div className="border border-slate-900 rounded-xl p-4 space-y-3 bg-slate-950/40">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-              Pick thumbnail from video <span className="text-slate-600 normal-case font-medium">— pause on the frame you want, then capture</span>
-            </label>
-            <video
-              ref={videoRef}
-              src={mediaUrl}
-              controls
-              muted
-              playsInline
-              crossOrigin="anonymous"
-              className="w-full max-h-64 rounded-xl border border-slate-800 bg-black"
-            />
-            <div className="flex items-center gap-3 flex-wrap">
-              <button
-                type="button"
-                onClick={captureFrame}
-                disabled={uploading === "thumb"}
-                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold cursor-pointer disabled:opacity-50 flex items-center space-x-1.5"
-              >
-                {uploading === "thumb" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
-                <span>{uploading === "thumb" ? "Saving frame…" : "📸 Use current frame as thumbnail"}</span>
-              </button>
-              {thumbUrl && <span className="text-[11px] text-emerald-400 font-bold">Thumbnail set ✓ (capture again or upload a file to replace)</span>}
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                Pick thumbnail from video <span className="text-slate-600 normal-case font-medium">— click the frame you want</span>
+              </label>
+              {framesBusy && (
+                <span className="text-[10px] text-slate-500 flex items-center space-x-1.5">
+                  <Loader2 className="w-3 h-3 animate-spin" /><span>Reading frames… {frames.length}/8</span>
+                </span>
+              )}
             </div>
+            {frames.length === 0 && !framesBusy ? (
+              <p className="text-[11px] text-slate-600">No frames could be read from this video — upload a thumbnail file manually instead.</p>
+            ) : (
+              <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+                {frames.map((f) => (
+                  <button
+                    key={f.t}
+                    type="button"
+                    onClick={() => chooseFrame(f.t)}
+                    disabled={uploading === "thumb"}
+                    title={`Use frame at ${Math.round(f.t)}s`}
+                    className={`relative rounded-lg overflow-hidden border-2 transition-all cursor-pointer disabled:opacity-60 ${
+                      selFrame === f.t ? "border-[var(--yellow)] shadow-lg" : "border-slate-800 hover:border-indigo-500"
+                    }`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={f.url} alt={`frame ${Math.round(f.t)}s`} className="w-full aspect-video object-cover" />
+                    <span className="absolute bottom-0 right-0 text-[8px] font-bold bg-black/70 text-white px-1 rounded-tl">{Math.round(f.t)}s</span>
+                    {selFrame === f.t && uploading === "thumb" && (
+                      <span className="absolute inset-0 bg-black/50 flex items-center justify-center"><Loader2 className="w-4 h-4 animate-spin text-white" /></span>
+                    )}
+                    {selFrame === f.t && uploading !== "thumb" && thumbUrl && (
+                      <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-[var(--yellow)] text-black text-[9px] font-black flex items-center justify-center">✓</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+            {thumbUrl && <p className="text-[11px] text-emerald-400 font-bold">Thumbnail set ✓ — click another frame or upload a file to replace it.</p>}
           </div>
         )}
 
