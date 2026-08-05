@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock } from "lucide-react";
+import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye } from "lucide-react";
 
-interface ClientRow { id: string; name: string }
+interface ClientRow { id: string; name: string; logo?: string }
 interface HubUpload {
   id: string; client_id: string; file_url: string; file_name: string | null;
   media_type: string; content_type: "post" | "reel" | "story"; status: string;
@@ -254,8 +254,18 @@ export default function SocialPublisherPage() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       setMyRole((user?.user_metadata?.role as string) || "employee");
-      const { data } = await supabase.from("clients").select("id, name").order("name");
-      setClients(data || []);
+      const { data } = await supabase.from("clients").select("id, name, logo_url").order("name");
+      setClients(
+        (data || []).map((c: { id: string; name: string; logo_url?: string | null }) => ({
+          id: c.id,
+          name: c.name,
+          logo: c.logo_url
+            ? c.logo_url.startsWith("http")
+              ? c.logo_url
+              : supabase.storage.from("brand-assets").getPublicUrl(c.logo_url).data.publicUrl
+            : "",
+        }))
+      );
     })();
     loadHistory();
     loadHubUploads();
@@ -320,6 +330,160 @@ export default function SocialPublisherPage() {
   };
 
   const canSend = !!clientId && platforms.length > 0 && contentTypes.length > 0 && !!mediaUrl && !sending;
+
+  // --- Live social preview ---------------------------------------------------
+  const [previewPlat, setPreviewPlat] = useState("instagram");
+  const [previewType, setPreviewType] = useState("post");
+  useEffect(() => { if (!platforms.includes(previewPlat)) setPreviewPlat(platforms[0] || "instagram"); }, [platforms, previewPlat]);
+  useEffect(() => { if (!contentTypes.includes(previewType)) setPreviewType(contentTypes[0] || "post"); }, [contentTypes, previewType]);
+
+  const pvClient = clients.find((c) => c.id === clientId);
+  const pvName = pvClient?.name || "Your Brand";
+  const pvHandle = pvName.toLowerCase().replace(/[^a-z0-9]/g, "") || "yourbrand";
+  const pvCaption = caption || "Your caption will appear here…";
+
+  const PvAvatar = ({ className }: { className: string }) =>
+    pvClient?.logo ? (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={pvClient.logo} alt="" className={`${className} rounded-full object-cover border border-slate-200 bg-white`} />
+    ) : (
+      <div className={`${className} rounded-full bg-gradient-to-tr from-amber-400 to-pink-500 flex items-center justify-center text-white font-black text-xs`}>
+        {pvName[0]?.toUpperCase() || "B"}
+      </div>
+    );
+
+  const PvMedia = ({ className = "" }: { className?: string }) =>
+    mediaUrl ? (
+      mediaIsVideo ? (
+        <video src={mediaUrl} poster={thumbUrl || undefined} muted playsInline controls className={`w-full h-full object-cover ${className}`} />
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={mediaUrl} alt="" className={`w-full h-full object-cover ${className}`} />
+      )
+    ) : (
+      <div className={`w-full h-full flex items-center justify-center bg-slate-200 text-slate-500 text-xs ${className}`}>Upload media to preview</div>
+    );
+
+  const renderPreview = () => {
+    const vertical = ["reel", "story"].includes(previewType) && ["instagram", "facebook"].includes(previewPlat);
+    if (vertical) {
+      return (
+        <div className="relative bg-black rounded-2xl overflow-hidden shadow-xl aspect-[9/16]">
+          <div className="absolute inset-0"><PvMedia /></div>
+          {previewType === "story" && (
+            <>
+              <div className="absolute top-2 left-2 right-2 h-0.5 bg-white/30 rounded-full"><div className="w-1/3 h-full bg-white rounded-full" /></div>
+              <div className="absolute top-4 left-2 flex items-center gap-2">
+                <PvAvatar className="w-7 h-7" />
+                <span className="text-white text-xs font-bold drop-shadow">{pvHandle}</span>
+                <span className="text-white/70 text-[10px]">now</span>
+              </div>
+            </>
+          )}
+          {previewType === "reel" && (
+            <>
+              <div className="absolute right-2 bottom-16 flex flex-col items-center gap-4 text-white drop-shadow">
+                <Heart className="w-6 h-6" /><MessageCircle className="w-6 h-6" /><Send className="w-6 h-6" />
+              </div>
+              <div className="absolute left-3 right-12 bottom-3 text-white drop-shadow">
+                <div className="flex items-center gap-2 mb-1.5"><PvAvatar className="w-7 h-7" /><span className="text-xs font-bold">{pvHandle}</span></div>
+                <p className="text-[11px] line-clamp-2">{pvCaption}</p>
+              </div>
+            </>
+          )}
+        </div>
+      );
+    }
+    if (previewPlat === "instagram") {
+      return (
+        <div className="bg-white rounded-2xl overflow-hidden shadow-xl text-slate-900">
+          <div className="flex items-center gap-2 px-3 py-2.5">
+            <PvAvatar className="w-8 h-8" /><span className="text-xs font-bold">{pvHandle}</span>
+            <MoreHorizontal className="w-4 h-4 ml-auto text-slate-500" />
+          </div>
+          <div className="aspect-square bg-slate-100"><PvMedia /></div>
+          <div className="px-3 pt-2.5 flex items-center gap-3 text-slate-800">
+            <Heart className="w-5 h-5" /><MessageCircle className="w-5 h-5" /><Send className="w-5 h-5" /><Bookmark className="w-5 h-5 ml-auto" />
+          </div>
+          <div className="px-3 py-2 text-xs">
+            <span className="font-bold mr-1.5">{pvHandle}</span>
+            <span className="text-slate-700">{pvCaption.slice(0, 120)}{pvCaption.length > 120 ? "… more" : ""}</span>
+            <p className="text-slate-400 mt-1">View all comments</p>
+            <p className="text-slate-400 text-[10px] uppercase mt-0.5">Just now</p>
+          </div>
+        </div>
+      );
+    }
+    if (previewPlat === "facebook") {
+      return (
+        <div className="bg-white rounded-2xl overflow-hidden shadow-xl text-slate-900">
+          <div className="flex items-center gap-2 px-3 py-2.5">
+            <PvAvatar className="w-9 h-9" />
+            <div><p className="text-xs font-bold leading-tight">{pvName}</p><p className="text-[10px] text-slate-500">Just now · 🌐</p></div>
+            <MoreHorizontal className="w-4 h-4 ml-auto text-slate-500" />
+          </div>
+          <p className="px-3 pb-2 text-xs text-slate-800">{pvCaption.slice(0, 160)}{pvCaption.length > 160 ? "… See more" : ""}</p>
+          <div className="aspect-video bg-slate-100"><PvMedia /></div>
+          <div className="px-3 py-2 flex items-center justify-around text-slate-600 text-[11px] font-semibold border-t border-slate-100">
+            <span className="flex items-center gap-1"><ThumbsUp className="w-4 h-4" />Like</span>
+            <span className="flex items-center gap-1"><MessageCircle className="w-4 h-4" />Comment</span>
+            <span className="flex items-center gap-1"><Send className="w-4 h-4" />Share</span>
+          </div>
+        </div>
+      );
+    }
+    if (previewPlat === "pinterest") {
+      return (
+        <div className="bg-white rounded-3xl overflow-hidden shadow-xl text-slate-900">
+          <div className="aspect-[3/4] bg-slate-100"><PvMedia /></div>
+          <div className="px-3 py-2.5">
+            <p className="text-sm font-bold leading-snug">{title || pvCaption.slice(0, 60)}</p>
+            <div className="flex items-center gap-2 mt-2"><PvAvatar className="w-6 h-6" /><span className="text-[11px] text-slate-600">{pvName}</span></div>
+          </div>
+        </div>
+      );
+    }
+    if (previewPlat === "linkedin") {
+      return (
+        <div className="bg-white rounded-2xl overflow-hidden shadow-xl text-slate-900">
+          <div className="flex items-center gap-2 px-3 py-2.5">
+            <PvAvatar className="w-9 h-9" />
+            <div><p className="text-xs font-bold leading-tight">{pvName}</p><p className="text-[10px] text-slate-500">Marketing · Just now</p></div>
+          </div>
+          <p className="px-3 pb-2 text-xs text-slate-800">{pvCaption.slice(0, 180)}{pvCaption.length > 180 ? "… see more" : ""}</p>
+          <div className="aspect-video bg-slate-100"><PvMedia /></div>
+          <div className="px-3 py-2 flex items-center justify-around text-slate-600 text-[11px] font-semibold border-t border-slate-100">
+            <span className="flex items-center gap-1"><ThumbsUp className="w-4 h-4" />Like</span>
+            <span className="flex items-center gap-1"><MessageCircle className="w-4 h-4" />Comment</span>
+            <span className="flex items-center gap-1"><Send className="w-4 h-4" />Send</span>
+          </div>
+        </div>
+      );
+    }
+    // youtube
+    return (
+      <div className="bg-white rounded-2xl overflow-hidden shadow-xl text-slate-900">
+        <div className="relative aspect-video bg-slate-900">
+          {thumbUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
+          ) : (
+            <PvMedia />
+          )}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-12 h-8 bg-red-600 rounded-lg flex items-center justify-center"><Play className="w-4 h-4 text-white fill-white" /></div>
+          </div>
+        </div>
+        <div className="px-3 py-2.5 flex gap-2">
+          <PvAvatar className="w-8 h-8 shrink-0" />
+          <div className="min-w-0">
+            <p className="text-xs font-bold leading-snug line-clamp-2">{title || "Your video title"}</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">{pvName} · 0 views · just now</p>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -441,7 +605,8 @@ export default function SocialPublisherPage() {
         )}
       </div>
 
-      {/* Composer */}
+      {/* Composer + live social preview */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-5 items-start">
       <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-5">
         {/* 1. Client + platforms + type */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -629,6 +794,28 @@ export default function SocialPublisherPage() {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* Social preview panel */}
+      <div className="lg:sticky lg:top-4 space-y-3">
+        <h3 className="text-sm font-bold text-white flex items-center gap-2"><Eye className="w-4 h-4 text-[var(--yellow)]" /><span>Social preview</span></h3>
+        {platforms.length > 1 && (
+          <div className="flex flex-wrap gap-1.5">
+            {platforms.map((p) => (
+              <button key={p} onClick={() => setPreviewPlat(p)} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border capitalize cursor-pointer ${previewPlat === p ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>{p}</button>
+            ))}
+          </div>
+        )}
+        {contentTypes.length > 1 && ["instagram", "facebook"].includes(previewPlat) && (
+          <div className="flex gap-1.5">
+            {contentTypes.map((t) => (
+              <button key={t} onClick={() => setPreviewType(t)} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border capitalize cursor-pointer ${previewType === t ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>{t}</button>
+            ))}
+          </div>
+        )}
+        {renderPreview()}
+        <p className="text-[10px] text-slate-600">Approximate preview — final look can differ slightly per platform.</p>
+      </div>
       </div>
 
       {/* History */}
