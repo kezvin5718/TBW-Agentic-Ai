@@ -1,6 +1,7 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { complete } from "./llm";
 import { MODEL_SMART } from "./llm-config";
+import { fmtIST } from "./time";
 
 // ==========================================
 // 1. READ TOOLS
@@ -51,12 +52,19 @@ export async function get_client_status(supabase: SupabaseClient, clientName: st
     .limit(1)
     .maybeSingle();
 
-  // Get creatives count
-  const { count: publishedCount } = await supabase
-    .from("creatives")
-    .select("*", { count: "exact", head: true })
-    .eq("founder_approval", "approved")
-    .not("published_at", "is", null);
+  // Creatives reach a client through their task — the old count had no client
+  // filter at all, so every client was shown the agency-wide total.
+  const { data: clientTaskRows } = await supabase.from("tasks").select("id").eq("client_id", client.id);
+  const taskIds = (clientTaskRows || []).map((t) => t.id);
+  let publishedCount = 0;
+  if (taskIds.length > 0) {
+    const { count } = await supabase
+      .from("creatives")
+      .select("*", { count: "exact", head: true })
+      .in("task_id", taskIds)
+      .not("published_at", "is", null);
+    publishedCount = count || 0;
+  }
 
   return `Client: ${client.name}
 Ad Budget: Rs. ${client.ad_budget}/month
@@ -115,12 +123,15 @@ export async function get_campaign_metrics(supabase: SupabaseClient, clientName:
 
 export async function get_overdue_tasks(supabase: SupabaseClient) {
   const now = new Date().toISOString();
+  // Tasks carry client_id directly now — reaching for it only through
+  // monthly_plans left every imported and WhatsApp task showing "Unknown".
   const { data, error } = await supabase
     .from("tasks")
-    .select("*, plan:monthly_plans(clients(name))")
+    .select("id, title, description, type, deadline, priority, assignee_name, client:clients(name), plan:monthly_plans(clients(name))")
     .neq("status", "done")
     .lt("deadline", now)
-    .order("deadline", { ascending: true });
+    .order("deadline", { ascending: true })
+    .limit(40);
 
   if (error) {
     return `Error fetching overdue tasks: ${error.message}`;
@@ -132,7 +143,11 @@ export async function get_overdue_tasks(supabase: SupabaseClient) {
 
   let output = `Overdue Tasks (${data.length}):\n`;
   data.forEach((task) => {
-    output += `- Task ID: ${task.id}\n  Client: ${task.plan?.clients?.name || "Unknown"}\n  Type: ${task.type.toUpperCase()}\n  Concept: ${task.concept || "No concept"}\n  Deadline: ${new Date(task.deadline).toLocaleString()}\n`;
+    const client =
+      (task.client as { name?: string } | null)?.name ||
+      (task.plan as { clients?: { name?: string } } | null)?.clients?.name ||
+      "No client";
+    output += `- ${task.title || task.description || "(untitled)"}\n  Client: ${client} | ${String(task.type).toUpperCase()} | ${task.priority}\n  With: ${task.assignee_name || "unassigned"} | Due: ${fmtIST(task.deadline as string)}\n`;
   });
   return output;
 }
@@ -528,4 +543,106 @@ export async function execute_confirmed_action(
     console.error("Action execution failed:", err);
     return `Action execution failed: ${(err as Error).message}`;
   }
+}
+
+// ==========================================
+// 4. THE PIPELINE BRON COULD NOT SEE
+// Content Hub, Social Publisher and the WhatsApp task bot were all built after
+// Bron's original tools, so he had no idea any of them existed.
+// ==========================================
+
+/** What designers have delivered that nobody has posted yet. */
+export async function get_content_hub_status(supabase: SupabaseClient, clientName?: string) {
+  let q = supabase
+    .from("creative_uploads")
+    .select("content_type, media_type, qc_status, qc_detected_brand, created_at, clients(name), profiles:uploaded_by(name)")
+    .eq("status", "uploaded")
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  if (clientName) {
+    const { data: c } = await supabase.from("clients").select("id").ilike("name", `%${clientName}%`).maybeSingle();
+    if (!c) return `Client "${clientName}" not found.`;
+    q = q.eq("client_id", c.id);
+  }
+
+  const { data, error } = await q;
+  if (error) return `Error reading the Content Hub: ${error.message}`;
+  if (!data || data.length === 0) {
+    return clientName ? `Nothing waiting in the Content Hub for ${clientName}.` : "Content Hub is empty — nothing waiting to be posted.";
+  }
+
+  const byClient: Record<string, Record<string, number>> = {};
+  const flagged: string[] = [];
+  for (const u of data) {
+    const name = (u.clients as { name?: string } | null)?.name || "Unknown client";
+    byClient[name] = byClient[name] || {};
+    byClient[name][u.content_type] = (byClient[name][u.content_type] || 0) + 1;
+    if (u.qc_status === "mismatch") {
+      flagged.push(`${name}: a ${u.content_type} looks like ${u.qc_detected_brand || "another brand"}`);
+    }
+  }
+
+  let out = `Waiting in Content Hub (${data.length} file(s)):\n`;
+  for (const [name, types] of Object.entries(byClient)) {
+    out += `- ${name}: ${Object.entries(types).map(([t, n]) => `${n} ${t}`).join(", ")}\n`;
+  }
+  if (flagged.length > 0) out += `\nBrand QC flagged ${flagged.length}:\n${flagged.slice(0, 5).map((f) => `- ${f}`).join("\n")}\n`;
+  return out;
+}
+
+/** What is scheduled, what went out, and — most importantly — what failed. */
+export async function get_social_queue(supabase: SupabaseClient) {
+  const { data, error } = await supabase
+    .from("social_posts")
+    .select("platform, content_type, status, scheduled_for, created_at, webhook_response, clients(name)")
+    .order("created_at", { ascending: false })
+    .limit(120);
+  if (error) return `Error reading the publishing queue: ${error.message}`;
+  if (!data || data.length === 0) return "Nothing in the publishing queue yet.";
+
+  const now = Date.now();
+  const failed = data.filter((p) => p.status === "failed");
+  const scheduled = data.filter((p) => p.status === "sent" && p.scheduled_for && new Date(p.scheduled_for).getTime() > now);
+  const posted = data.filter((p) => p.status === "sent" && !(p.scheduled_for && new Date(p.scheduled_for).getTime() > now));
+
+  let out = `Publishing queue: ${scheduled.length} scheduled, ${posted.length} already out, ${failed.length} failed.\n`;
+
+  if (scheduled.length > 0) {
+    out += `\nNext up:\n`;
+    scheduled
+      .sort((a, b) => String(a.scheduled_for).localeCompare(String(b.scheduled_for)))
+      .slice(0, 5)
+      .forEach((p) => {
+        out += `- ${(p.clients as { name?: string } | null)?.name || "?"} · ${p.content_type} on ${p.platform} · ${fmtIST(p.scheduled_for as string)}\n`;
+      });
+  }
+
+  if (failed.length > 0) {
+    out += `\nFailed — these need attention:\n`;
+    failed.slice(0, 6).forEach((p) => {
+      const why = String(p.webhook_response || "").replace(/^\[recurpost\]\s*/, "").slice(0, 110);
+      out += `- ${(p.clients as { name?: string } | null)?.name || "?"} · ${p.content_type} on ${p.platform}\n  ${why}\n`;
+    });
+  }
+  return out;
+}
+
+/** Tasks the WhatsApp bot drafted that are still waiting for a human. */
+export async function get_whatsapp_drafts(supabase: SupabaseClient) {
+  const { data, error } = await supabase
+    .from("wa_task_drafts")
+    .select("title, priority, client_uncertain, group_name, suggested_assignee, created_at, clients(name)")
+    .eq("status", "pending")
+    .order("created_at", { ascending: false })
+    .limit(25);
+  if (error) return `Error reading WhatsApp drafts: ${error.message}`;
+  if (!data || data.length === 0) return "No WhatsApp task drafts waiting for approval.";
+
+  let out = `${data.length} task(s) drafted from WhatsApp, waiting for approval:\n`;
+  data.forEach((d) => {
+    const client = (d.clients as { name?: string } | null)?.name || d.group_name || "unknown";
+    out += `- ${d.title}\n  ${client}${d.client_uncertain ? " (brand NOT confirmed)" : ""} | ${d.priority} | suggested: ${d.suggested_assignee || "nobody"}\n`;
+  });
+  return out;
 }

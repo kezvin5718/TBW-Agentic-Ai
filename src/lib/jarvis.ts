@@ -44,8 +44,13 @@ Your Pending Items Summary:
 - Pending approvals count: ${pendingApprovalsCount || 0}
 - Overdue tasks count: ${overdueTasksCount || 0}
 
+Tool notes:
+- get_content_hub_status: creative the designers have delivered that has NOT been posted yet. Use for "what is waiting to go out", "what has the team delivered", "anything pending for <client>".
+- get_social_queue: what is scheduled, what already went out, and what FAILED to publish. Use for "what is going out today", "did anything fail", "what is scheduled".
+- get_whatsapp_drafts: tasks the WhatsApp bot framed from client messages that still need someone to approve them.
+
 Guidelines:
-1. You have full access to search and modify system states (creatives, plans, tasks, campaigns, leads) via tools.
+1. You have full access to search and modify system states (creatives, plans, tasks, campaigns, leads, uploads, scheduled posts) via tools.
 2. Keep all your answers short, concise, and mobile-readable. Put numbers/status first, followed by at most one line of context.
 3. If the user asks for a write/action (e.g. approve a post, change budget, activate ad), select the corresponding action tool.
 4. NON-NEGOTIABLE safety rule: action tools can be requested by voice, but confirmation must be TYPED (e.g. typing YES as a text message or tapping confirmation card). You must never execute/confirm any action via voice input alone, and you must say so if asked.
@@ -53,7 +58,7 @@ Guidelines:
 You MUST respond in JSON format matching this schema:
 {
   "thought": "Explain your reasoning about the user command.",
-  "tool": "get_pending_approvals" | "get_client_status" | "get_campaign_metrics" | "get_overdue_tasks" | "get_lead_pipeline" | "search_brand_brain" | "draft_client_reply" | "generate_plan" | "draft_weekly_report" | "approve_creative" | "activate_campaign" | "update_budget" | "send_to_client" | "none",
+  "tool": "get_pending_approvals" | "get_client_status" | "get_campaign_metrics" | "get_overdue_tasks" | "get_lead_pipeline" | "search_brand_brain" | "get_content_hub_status" | "get_social_queue" | "get_whatsapp_drafts" | "draft_client_reply" | "generate_plan" | "draft_weekly_report" | "approve_creative" | "activate_campaign" | "update_budget" | "send_to_client" | "none",
   "args": { "client": "string", "query": "string", "id": "string", "campaign": "string", "amount": number, "content": "string", "range": number },
   "response": "Provide a direct direct response if no tool is required."
 }`;
@@ -98,6 +103,15 @@ You MUST respond in JSON format matching this schema:
         break;
       case "get_lead_pipeline":
         toolResult = await tools.get_lead_pipeline(supabase);
+        break;
+      case "get_content_hub_status":
+        toolResult = await tools.get_content_hub_status(supabase, (args.client as string) || undefined);
+        break;
+      case "get_social_queue":
+        toolResult = await tools.get_social_queue(supabase);
+        break;
+      case "get_whatsapp_drafts":
+        toolResult = await tools.get_whatsapp_drafts(supabase);
         break;
       case "search_brand_brain":
         toolResult = await tools.search_brand_brain(supabase, (args.client as string) || "", (args.query as string) || "");

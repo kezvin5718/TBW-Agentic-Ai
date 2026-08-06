@@ -44,10 +44,22 @@ export async function runJarvisBriefing() {
     campaignsSummary = "No active campaign delivery logged yesterday.\n";
   }
 
+  // The pipeline the briefing used to ignore entirely.
+  const [{ count: waitingUploads }, { count: failedPosts }, { count: waDrafts }, { count: scheduledPosts }] = await Promise.all([
+    supabase.from("creative_uploads").select("*", { count: "exact", head: true }).eq("status", "uploaded"),
+    supabase.from("social_posts").select("*", { count: "exact", head: true }).eq("status", "failed"),
+    supabase.from("wa_task_drafts").select("*", { count: "exact", head: true }).eq("status", "pending"),
+    supabase.from("social_posts").select("*", { count: "exact", head: true }).eq("status", "sent").gt("scheduled_for", new Date().toISOString()),
+  ]);
+
   const prompt = `Compose a daily morning briefing WhatsApp message to the founder based on these agency stats from yesterday:
 Date: ${dateIso}
 Pending Approvals: ${pendingCount || 0}
 Overdue Tasks: ${overdueCount || 0}
+Creative waiting in Content Hub (delivered, not yet posted): ${waitingUploads || 0}
+Posts scheduled to go out: ${scheduledPosts || 0}
+Posts that FAILED to publish (need attention): ${failedPosts || 0}
+WhatsApp task drafts waiting for approval: ${waDrafts || 0}
 Yesterday's Spend & Revenue per Client:
 ${campaignsSummary}
 
@@ -55,6 +67,8 @@ Write exactly ONE message. Guidelines:
 - Must be under 15 lines.
 - Summarize numbers first.
 - Keep context extremely short.
+- Lead with anything that is BLOCKED or FAILED — those need the founder today.
+- Skip any line whose count is zero rather than reporting "0".
 - Output raw briefing text directly (do NOT wrap in markdown fences or code blocks).
 `;
 
