@@ -8,6 +8,7 @@ interface ClientRow { id: string; name: string; logo?: string }
 interface HubUpload {
   id: string; client_id: string; file_url: string; file_name: string | null;
   media_type: string; content_type: "post" | "reel" | "story"; status: string;
+  thumbnail_url?: string | null;
   qc_status?: string; qc_detected_brand?: string | null; qc_note?: string | null;
   created_at: string; clients?: { name: string } | null; profiles?: { name: string } | null;
 }
@@ -213,8 +214,9 @@ export default function SocialPublisherPage() {
     setMediaName(u.file_name || "Content Hub file");
     setMediaIsVideo(u.media_type === "video");
     setContentTypes([u.content_type]);
+    if (u.thumbnail_url) setThumbUrl(u.thumbnail_url);
     setSelectedUpload({ id: u.id, name: u.file_name || "Content Hub file" });
-    setNotice({ ok: true, text: `Loaded "${u.file_name}" for ${u.clients?.name || "client"} — type auto-set to ${u.content_type}.` });
+    setNotice({ ok: true, text: `Loaded "${u.file_name}" for ${u.clients?.name || "client"} — type auto-set to ${u.content_type}${u.thumbnail_url ? ", thumbnail included" : ""}.` });
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 

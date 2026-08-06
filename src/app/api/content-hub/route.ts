@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
 
   const form = await request.formData();
   const file = form.get("file") as File | null;
+  const thumbFile = form.get("thumbnail") as File | null;
   const clientId = form.get("clientId") as string | null;
   const contentType = (form.get("contentType") as string | null) || "post";
   const caption = (form.get("caption") as string | null) || "";
@@ -69,6 +70,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Upload failed — check Google Drive / storage connection." }, { status: 500 });
   }
 
+  // Optional paired thumbnail (video editors upload numbered videos + thumbs).
+  let thumbnailUrl: string | null = null;
+  let thumbnailName: string | null = null;
+  if (thumbFile) {
+    const tBuf = Buffer.from(await thumbFile.arrayBuffer());
+    const tSafe = (thumbFile.name || "thumb").replace(/[^a-zA-Z0-9._-]/g, "_");
+    thumbnailUrl = await storeContentHubUpload(
+      tBuf,
+      `${Date.now()}-thumb-${tSafe}`,
+      thumbFile.type || "image/jpeg",
+      clientName,
+      monthLabel
+    );
+    thumbnailName = thumbFile.name || null;
+  }
+
   const { data: row, error } = await admin
     .from("creative_uploads")
     .insert({
@@ -80,6 +97,8 @@ export async function POST(request: NextRequest) {
       media_type: mediaType,
       content_type: contentType,
       caption,
+      thumbnail_url: thumbnailUrl,
+      thumbnail_name: thumbnailName,
       status: "uploaded",
     })
     .select("*, clients(name), profiles:uploaded_by(name)")

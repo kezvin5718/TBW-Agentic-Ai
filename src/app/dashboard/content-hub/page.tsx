@@ -56,9 +56,46 @@ export default function ContentHubPage() {
   const [deleting, setDeleting] = useState<string | null>(null);
   // Staged files per card — added first, uploaded only when "Upload" is clicked.
   const [staged, setStaged] = useState<Record<string, File[]>>({ post: [], reel: [], story: [] });
+  // Staged thumbnails per card — paired to media by the number in the filename.
+  const [stagedThumbs, setStagedThumbs] = useState<Record<string, File[]>>({ post: [], reel: [], story: [] });
   const inputRefs = { post: useRef<HTMLInputElement>(null), reel: useRef<HTMLInputElement>(null), story: useRef<HTMLInputElement>(null) };
+  const thumbRefs = { post: useRef<HTMLInputElement>(null), reel: useRef<HTMLInputElement>(null), story: useRef<HTMLInputElement>(null) };
 
   const naturalSort = (a: File, b: File) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+
+  // Last number in the filename ("Irin_Grid Reel_2.mp4" → 2) drives the pairing.
+  const numOf = (name: string): number | null => {
+    const m = name.replace(/\.[^.]+$/, "").match(/(\d+)(?!.*\d)/);
+    return m ? parseInt(m[1], 10) : null;
+  };
+  // Pair a media file with its thumbnail: match by number, else by position.
+  const thumbFor = (key: string, file: File, index: number): File | null => {
+    const thumbs = stagedThumbs[key] || [];
+    if (thumbs.length === 0) return null;
+    const n = numOf(file.name);
+    if (n !== null) {
+      const hit = thumbs.find((t) => numOf(t.name) === n);
+      if (hit) return hit;
+    }
+    const media = staged[key] || [];
+    return thumbs.length === media.length ? thumbs[index] || null : null;
+  };
+
+  const addThumbs = (key: string, list: FileList | File[]) => {
+    const incoming = Array.from(list);
+    if (incoming.length === 0) return;
+    setStagedThumbs((prev) => {
+      const existing = prev[key] || [];
+      const merged = [...existing];
+      for (const f of incoming) {
+        if (!merged.some((m) => m.name === f.name && m.size === f.size)) merged.push(f);
+      }
+      merged.sort(naturalSort);
+      return { ...prev, [key]: merged };
+    });
+  };
+  const removeThumb = (key: string, idx: number) =>
+    setStagedThumbs((prev) => ({ ...prev, [key]: (prev[key] || []).filter((_, i) => i !== idx) }));
   const addFiles = (key: string, list: FileList | File[]) => {
     const incoming = Array.from(list);
     if (incoming.length === 0) return;
@@ -160,6 +197,8 @@ export default function ContentHubPage() {
         fd.append("file", files[i]);
         fd.append("clientId", selectedClient);
         fd.append("contentType", contentType);
+        const pairedThumb = thumbFor(contentType, files[i], i);
+        if (pairedThumb) fd.append("thumbnail", pairedThumb);
         const res = await fetch("/api/content-hub", { method: "POST", body: fd });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Upload failed");
@@ -189,6 +228,7 @@ export default function ContentHubPage() {
     if (files.length === 0) return;
     const failedNames = await doUpload(key, files);
     setStaged((prev) => ({ ...prev, [key]: (prev[key] || []).filter((f) => (failedNames || []).includes(f.name)) }));
+    if ((failedNames || []).length === 0) setStagedThumbs((prev) => ({ ...prev, [key]: [] }));
   };
 
   return (
@@ -291,18 +331,54 @@ export default function ContentHubPage() {
                   />
                 </div>
 
+                {/* Thumbnails — paired to the media above by filename number */}
+                <div
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files?.length) addThumbs(key, e.dataTransfer.files); }}
+                  className="mt-2 border border-dashed border-slate-800/70 rounded-xl px-3 py-2 flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Thumbnails <span className="normal-case font-medium text-slate-600">(optional — matched by number)</span></p>
+                    <p className="text-[9px] text-slate-600">{(stagedThumbs[key]?.length || 0)} added</p>
+                  </div>
+                  <button type="button" disabled={busy} onClick={() => thumbRefs[key].current?.click()} className="px-3 py-1 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-[10px] font-bold text-slate-300 cursor-pointer shrink-0">
+                    + Add thumbs
+                  </button>
+                  <input ref={thumbRefs[key]} type="file" accept="image/*" multiple className="hidden"
+                    onChange={(e) => { if (e.target.files?.length) addThumbs(key, e.target.files); e.target.value = ""; }} />
+                </div>
+
+                {/* Unpaired thumbnails (added but no matching media number yet) */}
+                {(stagedThumbs[key]?.length || 0) > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {stagedThumbs[key].map((t, i) => {
+                      const used = (staged[key] || []).some((f, idx) => thumbFor(key, f, idx)?.name === t.name);
+                      return (
+                        <span key={`${t.name}-${t.size}`} className={`text-[9px] px-1.5 py-0.5 rounded border flex items-center gap-1 ${used ? "bg-emerald-950/30 border-emerald-900 text-emerald-400" : "bg-amber-950/20 border-amber-900/60 text-amber-400"}`}>
+                          {used ? "✓" : "⚠"} {t.name}
+                          <button type="button" onClick={() => removeThumb(key, i)} className="hover:text-rose-400 cursor-pointer">✕</button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+
                 {/* Staged files — review order, remove mistakes, then Upload */}
                 <div className="mt-3 space-y-2">
                   {(staged[key]?.length || 0) > 0 && (
                     <div className="max-h-32 overflow-y-auto space-y-1 pr-1">
-                      {staged[key].map((f, i) => (
-                        <div key={`${f.name}-${f.size}`} className="flex items-center justify-between gap-2 bg-slate-950/80 border border-slate-900 rounded-lg px-2 py-1">
-                          <span className="text-[10px] text-slate-300 truncate">
-                            <span className={`font-black mr-1.5 ${a.text}`}>{i + 1}.</span>{f.name}
-                          </span>
-                          <button type="button" disabled={busy} onClick={() => removeStaged(key, i)} className="text-slate-600 hover:text-rose-400 text-xs font-bold cursor-pointer shrink-0">✕</button>
-                        </div>
-                      ))}
+                      {staged[key].map((f, i) => {
+                        const pt = thumbFor(key, f, i);
+                        return (
+                          <div key={`${f.name}-${f.size}`} className="flex items-center justify-between gap-2 bg-slate-950/80 border border-slate-900 rounded-lg px-2 py-1">
+                            <span className="text-[10px] text-slate-300 truncate">
+                              <span className={`font-black mr-1.5 ${a.text}`}>{i + 1}.</span>{f.name}
+                              {pt ? <span className="text-emerald-400 ml-1.5">🖼 {pt.name}</span> : null}
+                            </span>
+                            <button type="button" disabled={busy} onClick={() => removeStaged(key, i)} className="text-slate-600 hover:text-rose-400 text-xs font-bold cursor-pointer shrink-0">✕</button>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                   <div className="flex gap-2">
