@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { isRecurPostConfigured, postContent } from "@/lib/recurpost";
 import { istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
+import { toPublishableVideoUrl } from "@/lib/publishable-media";
 
 export const dynamic = "force-dynamic";
 
@@ -62,8 +63,14 @@ export async function POST(request: NextRequest) {
       // not the UTC instant, which would retry the post 5:30 early.
       params.schedule_date_time = utcToIstWallClock(post.scheduled_for as string);
     }
-    if (isVideo) params.video_url = post.media_url;
-    else params.image_url = [post.media_url];
+    let retryUrl = post.media_url as string;
+    if (isVideo) {
+      const staged = await toPublishableVideoUrl(retryUrl);
+      if (!staged.url) return NextResponse.json({ error: staged.error || "Could not prepare the video for publishing." }, { status: 502 });
+      retryUrl = staged.url;
+    }
+    if (isVideo) params.video_url = retryUrl;
+    else params.image_url = [retryUrl];
     if (post.platform === "facebook" && post.content_type !== "post") params.fb_post_type = post.content_type;
     if (post.platform === "instagram") {
       if (post.content_type !== "post") params.in_post_type = post.content_type;
@@ -113,6 +120,15 @@ export async function POST(request: NextRequest) {
 
   const { data: client } = await admin.from("clients").select("name").eq("id", clientId).single();
 
+  // A Drive link serves a JPEG poster frame for video, never the video itself,
+  // so mirror it to Storage first (no-op for anything already publishable).
+  let publishUrl = mediaUrl;
+  if (mediaIsVideo) {
+    const staged = await toPublishableVideoUrl(mediaUrl);
+    if (!staged.url) return NextResponse.json({ error: staged.error || "Could not prepare the video for publishing." }, { status: 502 });
+    publishUrl = staged.url;
+  }
+
   const results: Array<{ platform: string; contentType: string; ok: boolean; detail: string }> = [];
 
   for (const platform of platforms) {
@@ -134,8 +150,8 @@ export async function POST(request: NextRequest) {
         // The composer's date/time pickers are already IST wall clock — which is
         // exactly what RecurPost expects, so pass it through.
         if (scheduledFor) params.schedule_date_time = utcToIstWallClock(istWallClockToUtc(scheduledFor));
-        if (mediaIsVideo) params.video_url = mediaUrl;
-        else params.image_url = [mediaUrl];
+        if (mediaIsVideo) params.video_url = publishUrl;
+        else params.image_url = [publishUrl];
         if (platform === "facebook" && contentType !== "post") params.fb_post_type = contentType;
         if (platform === "instagram") {
           if (contentType !== "post") params.in_post_type = contentType;
@@ -163,7 +179,9 @@ export async function POST(request: NextRequest) {
         content_type: contentType,
         title: title || null,
         caption: caption || null,
-        media_url: mediaUrl,
+        // Record what was actually sent, not the Drive original — so the
+        // Library preview and any retry use the same fetchable URL.
+        media_url: publishUrl,
         media_is_video: mediaIsVideo,
         thumbnail_url: thumbnailUrl || null,
         scheduled_for: scheduledFor ? istWallClockToUtc(scheduledFor).toISOString() : null,
