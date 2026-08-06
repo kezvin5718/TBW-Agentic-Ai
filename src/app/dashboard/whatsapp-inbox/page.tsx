@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { fmtIST } from "@/lib/time";
 import { createClient } from "@/lib/supabase/client";
 import { MessageSquare, RefreshCw, Loader2, UserPlus, Check, X, AlertTriangle, ListTodo } from "lucide-react";
 
@@ -103,7 +104,7 @@ export default function WhatsAppInboxPage() {
                 <div className="flex items-center gap-2 text-[11px] text-slate-500">
                   <span className="font-bold text-slate-300">{i.clients?.name || i.group_name || "Unknown group"}</span>
                   <span>· {i.sender_name || "—"}</span>
-                  <span>· {new Date(i.received_at).toLocaleString()}</span>
+                  <span>· {fmtIST(i.received_at)}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   {i.is_task && <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-indigo-950/40 border border-indigo-900 text-indigo-400">TASK</span>}

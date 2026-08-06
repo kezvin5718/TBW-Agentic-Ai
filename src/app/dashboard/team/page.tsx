@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { fmtIST } from "@/lib/time";
 import { Users, Loader2, Check, X, Shield, KeyRound } from "lucide-react";
 import { SECTIONS } from "@/lib/sections";
 
@@ -97,7 +98,7 @@ export default function TeamPage() {
                     <div key={u.id} className="bg-slate-950/60 border border-amber-900/40 rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap">
                       <div className="min-w-0">
                         <p className="text-sm font-bold text-white truncate">{u.name || "(no name)"}</p>
-                        <p className="text-[10px] text-slate-500">Signed up {new Date(u.created_at).toLocaleString()}</p>
+                        <p className="text-[10px] text-slate-500">Signed up {fmtIST(u.created_at)}</p>
                       </div>
                       <div className="flex items-center gap-2">
                         <select value={chosen} onChange={(e) => setRoleChoice((p) => ({ ...p, [u.id]: e.target.value }))} className="text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-white focus:outline-none cursor-pointer">

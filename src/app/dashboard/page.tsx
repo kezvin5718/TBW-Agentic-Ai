@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { fmtISTDate, istDateOffset } from "@/lib/time";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
@@ -143,13 +144,11 @@ export default async function DashboardPage() {
     // Calculate weekly metrics comparing this week vs last week
     const past7Days = new Date();
     past7Days.setDate(past7Days.getDate() - 7);
-    const past14Days = new Date();
-    past14Days.setDate(past14Days.getDate() - 14);
 
     const { data: recentMetrics } = await supabase
       .from("metrics_daily")
       .select("*, campaigns(id, client_id)")
-      .gte("date", past14Days.toISOString().split("T")[0]);
+      .gte("date", istDateOffset(-14));
 
     // Group by week
     let spendThisWeek = 0;
@@ -175,9 +174,7 @@ export default async function DashboardPage() {
     const alerts: string[] = [];
     (activeCampaigns || []).forEach((c) => {
       // Find campaign metrics from yesterday
-      const yesterdayStr = new Date();
-      yesterdayStr.setDate(yesterdayStr.getDate() - 1);
-      const yesterdayIso = yesterdayStr.toISOString().split("T")[0];
+      const yesterdayIso = istDateOffset(-1);
 
       const cMetrics = (recentMetrics || []).filter(
         (m) => m.campaign_id === c.id && m.date === yesterdayIso
@@ -527,7 +524,7 @@ export default async function DashboardPage() {
                         isOverdue ? "text-red-400 animate-pulse" : "text-slate-500"
                       }`}>
                         <Calendar className="w-3.5 h-3.5" />
-                        <span>Due: {new Date(t.deadline).toLocaleDateString()}</span>
+                        <span>Due: {fmtISTDate(t.deadline)}</span>
                       </span>
 
                       <Link href={t.plan_id ? "/dashboard/production" : "/dashboard/team-tasks"} className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 py-1.5 rounded-lg text-[9px] uppercase tracking-wider transition-all">
@@ -645,7 +642,7 @@ export default async function DashboardPage() {
                         {clientData.recentPublished.map((cr) => (
                           <div key={cr.id} className="bg-slate-950/40 border border-slate-900 p-3 rounded-xl space-y-1.5 text-xs">
                             <div className="flex justify-between items-center text-[9px] font-mono text-slate-500">
-                              <span>Published: {new Date(cr.published_at).toLocaleDateString()}</span>
+                              <span>Published: {fmtISTDate(cr.published_at)}</span>
                               <span className="uppercase text-slate-400">{cr.type}</span>
                             </div>
                             <p className="text-slate-200 font-bold line-clamp-1">{cr.caption}</p>

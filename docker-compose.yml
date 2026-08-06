@@ -11,6 +11,9 @@ services:
     environment:
       - PORT=3000
       - HOSTNAME=0.0.0.0
+      # The whole agency runs on Kolkata time — without this the container
+      # defaults to UTC and every server-side date reads 5:30 behind.
+      - TZ=Asia/Kolkata
     expose:
       - 3000
 

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { fmtIST, fmtISTDate, istToday, istWallClockToUtc, IST_TZ } from "@/lib/time";
 import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2 } from "lucide-react";
 
 interface ClientRow { id: string; name: string; logo?: string }
@@ -61,7 +62,7 @@ export default function SocialPublisherPage() {
   // time without date defaults to today.
   const composeSchedule = (): string => {
     if (!scheduledDate && !scheduledTime) return "";
-    const d = scheduledDate || new Date().toISOString().slice(0, 10);
+    const d = scheduledDate || istToday();
     const t = scheduledTime || "10:00";
     return `${d}T${t}`;
   };
@@ -404,7 +405,14 @@ export default function SocialPublisherPage() {
   const [libView, setLibView] = useState<"month" | "list">("month");
   const [libMonth, setLibMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
 
-  const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  // Bucket by the IST calendar day — the agency works in Kolkata time, so a
+  // 11pm-IST post must never land on the previous day's square.
+  // Which IST calendar day an instant falls on — the agency works in Kolkata
+  // time, so an 11pm-IST post must not land on the previous day's square.
+  const dayKey = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: IST_TZ });
+  // The grid's own squares are already plain calendar dates, not instants.
+  const cellKey = (y: number, m: number, day: number) =>
+    `${y}-${String(m + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   const postDate = (p: PostRow) => new Date(p.scheduled_for || p.created_at);
 
   const isFuture = (p: PostRow) => !!p.scheduled_for && new Date(p.scheduled_for).getTime() > Date.now();
@@ -785,7 +793,7 @@ export default function SocialPublisherPage() {
                   <div className="min-w-0">
                     <p className="text-[11px] font-bold text-white truncate">{u.file_name || "file"}</p>
                     <p className="text-[10px] text-slate-500 truncate"><span className="font-bold text-slate-300">{u.clients?.name || "—"}</span> · #{hubSeq[u.id]} of {hubClientTotals[u.clients?.name || "Unknown"] || 0} · <span className="capitalize text-[var(--yellow)]">{u.content_type}</span></p>
-                    <p className="text-[9px] text-slate-600">by {u.profiles?.name || "—"} · {new Date(u.created_at).toLocaleDateString()}</p>
+                    <p className="text-[9px] text-slate-600">by {u.profiles?.name || "—"} · {fmtISTDate(u.created_at)}</p>
                     {u.qc_status === "mismatch" && (
                       <p title={`${u.qc_detected_brand ? `Looks like: ${u.qc_detected_brand}. ` : ""}${u.qc_note || ""}`} className="text-[9px] font-bold text-rose-400 cursor-help">
                         ⚠ Brand mismatch{u.qc_detected_brand ? ` — looks like ${u.qc_detected_brand}` : ""}
@@ -1042,7 +1050,7 @@ export default function SocialPublisherPage() {
               <div>
                 <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">📅 Date (click for calendar)</label>
                 <input type="date" value={scheduledDate} onClick={openPicker} onChange={(e) => setScheduledDate(e.target.value)}
-                  min={new Date().toISOString().slice(0, 10)}
+                  min={istToday()}
                   className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 cursor-pointer [color-scheme:dark]" />
               </div>
               <div>
@@ -1052,7 +1060,7 @@ export default function SocialPublisherPage() {
               </div>
               <div className="self-end pb-1 text-[11px] text-slate-500">
                 {composeSchedule()
-                  ? <>Scheduled: <span className="signal">{new Date(composeSchedule()).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span></>
+                  ? <>Scheduled: <span className="signal">{fmtIST(istWallClockToUtc(composeSchedule()), { weekday: "short", year: undefined })} IST</span></>
                   : "Posts immediately"}
               </div>
             </div>
@@ -1142,7 +1150,7 @@ export default function SocialPublisherPage() {
                     ))}
                     {cells.map((day, i) => {
                       if (day === null) return <div key={`b${i}`} className="bg-slate-950/40 min-h-[110px]" />;
-                      const k = dayKey(new Date(y, m, day));
+                      const k = cellKey(y, m, day);
                       const dayPosts = (byDay[k] || []).sort((a, b) => postDate(a).getTime() - postDate(b).getTime());
                       return (
                         <div key={k} className={`bg-slate-950/70 min-h-[110px] p-1.5 space-y-1 ${k === todayKey ? "ring-1 ring-inset ring-[var(--yellow)]" : ""}`}>
@@ -1161,7 +1169,7 @@ export default function SocialPublisherPage() {
                                   <img src={p.thumbnail_url || p.media_url} alt="" className="w-full h-full object-cover" />
                                 </div>
                                 <span className="text-[8.5px] text-slate-300 truncate leading-tight">
-                                  {postDate(p).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} {p.clients?.name}
+                                  {postDate(p).toLocaleTimeString("en-IN", { timeZone: IST_TZ, hour: "numeric", minute: "2-digit" })} {p.clients?.name}
                                 </span>
                               </button>
                             );
@@ -1190,7 +1198,7 @@ export default function SocialPublisherPage() {
                       <div className="min-w-0 flex-1">
                         <p className="text-[11px] font-bold text-white truncate">{p.clients?.name || "—"} <span className="text-slate-500 font-normal capitalize">· {p.platform} · {p.content_type}</span></p>
                         <p className="text-[10px] text-slate-500 truncate">{p.title || p.caption?.slice(0, 70) || "(no caption)"}</p>
-                        <p className="text-[9px] text-slate-600">{p.scheduled_for ? `⏰ ${new Date(p.scheduled_for).toLocaleString()}` : new Date(p.created_at).toLocaleString()} · {p.profiles?.name || ""}</p>
+                        <p className="text-[9px] text-slate-600">{p.scheduled_for ? `⏰ ${fmtIST(p.scheduled_for)} IST` : `${fmtIST(p.created_at)} IST`} · {p.profiles?.name || ""}</p>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                         <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${p.status === "failed" ? "bg-rose-950/40 border-rose-900 text-rose-400" : scheduled ? "bg-amber-950/40 border-amber-900 text-amber-400" : "bg-emerald-950/40 border-emerald-900 text-emerald-400"}`}>
@@ -1240,7 +1248,7 @@ export default function SocialPublisherPage() {
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[10px] text-slate-500">
-                    {libSel.scheduled_for ? `⏰ ${new Date(libSel.scheduled_for).toLocaleString()}` : new Date(libSel.created_at).toLocaleString()}
+                    {libSel.scheduled_for ? `⏰ ${fmtIST(libSel.scheduled_for)} IST` : `${fmtIST(libSel.created_at)} IST`}
                   </span>
                   {libSel.status === "failed" && (
                     <button disabled={libBusy === libSel.id} onClick={() => retryPost(libSel)} className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1">

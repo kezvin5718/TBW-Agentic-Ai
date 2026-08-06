@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { fmtISTDate } from "@/lib/time";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -193,7 +194,7 @@ export default function CreativeTimelinePage() {
               <span className="text-slate-500 flex items-center space-x-1">
                 <Calendar className="w-3.5 h-3.5 text-slate-650" />
                 <span>Uploaded:</span>
-                <strong className="text-slate-300">{new Date(creative.created_at).toLocaleDateString()}</strong>
+                <strong className="text-slate-300">{fmtISTDate(creative.created_at)}</strong>
               </span>
 
               <a

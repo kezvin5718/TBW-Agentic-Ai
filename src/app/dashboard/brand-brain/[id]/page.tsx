@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, use } from "react";
+import { fmtIST } from "@/lib/time";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -1093,7 +1094,7 @@ export default function ClientBrandBrainPage({
                         {comment.sender === "client" ? "Client Feedback" : "Founder Note"}
                       </span>
                       <span className="text-slate-500 font-mono">
-                        {new Date(comment.date).toLocaleString()}
+                        {fmtIST(comment.date)}
                       </span>
                     </div>
 

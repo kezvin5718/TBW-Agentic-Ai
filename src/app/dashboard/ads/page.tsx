@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { fmtIST } from "@/lib/time";
 import {
   Megaphone,
   Sparkles,
@@ -850,7 +851,7 @@ export default function MetaAdsManagerPage() {
                         {auditLogs.map((log) => (
                           <tr key={log.id} className="hover:bg-slate-900/10 transition-colors">
                             <td className="p-3 text-slate-500 font-mono whitespace-nowrap">
-                              {new Date(log.created_at).toLocaleString()}
+                              {fmtIST(log.created_at)}
                             </td>
                             
                             <td className="p-3 font-semibold text-slate-300">

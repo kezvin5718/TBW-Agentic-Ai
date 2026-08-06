@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, Suspense } from "react";
+import { fmtISTDate } from "@/lib/time";
 import { createClient } from "@/lib/supabase/client";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -1170,7 +1171,7 @@ function ImageStudioWorkspace() {
             </div>
             {plannedDate && (
               <span className="text-[10px] text-slate-500 block">
-                Planned Deadline: {new Date(plannedDate).toLocaleDateString()}
+                Planned Deadline: {fmtISTDate(plannedDate)}
               </span>
             )}
           </div>
@@ -2322,7 +2323,7 @@ function ImageStudioWorkspace() {
                   <div className="space-y-3">
                     <div className="flex items-center justify-between text-[9px] font-semibold text-slate-500">
                       <span>Cost: {Number(record.cost).toFixed(1)} cr</span>
-                      <span>{new Date(record.created_at).toLocaleDateString()}</span>
+                      <span>{fmtISTDate(record.created_at)}</span>
                     </div>
 
                     <div className="grid grid-cols-3 gap-2 border-t border-slate-900 pt-3">

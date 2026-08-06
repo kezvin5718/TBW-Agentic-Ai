@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { AlertTriangle, X, Copy, Check, Trash2, Bug, ShieldCheck } from "lucide-react";
+import { istClock, fmtIST } from "@/lib/time";
 
 interface Issue {
   id: string;
@@ -12,6 +13,8 @@ interface Issue {
 }
 
 const STORAGE_KEY = "tbw_issue_log";
+/** New entries are already "HH:MM:SS" IST; older ones in localStorage are ISO/UTC. */
+const istLabel = (t: string) => (t.includes("T") ? istClock(new Date(t)) : t);
 const MAX_ISSUES = 40;
 
 /**
@@ -47,7 +50,8 @@ export default function GlobalErrorMonitor() {
 
     const issue: Issue = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      time: new Date().toISOString(),
+      // IST — the log gets pasted to support, so it must read as office time.
+      time: istClock(),
       kind,
       title,
       detail,
@@ -141,12 +145,12 @@ export default function GlobalErrorMonitor() {
   const buildReport = () => {
     if (issues.length === 0) return "No issues captured.";
     return (
-      `TBW OS ISSUE LOG — ${new Date().toISOString()}\n` +
+      `TBW OS ISSUE LOG — ${fmtIST(new Date())} IST\n` +
       `${issues.length} issue(s), newest first\n` +
       `URL: ${typeof window !== "undefined" ? window.location.pathname : ""}\n` +
       `${"=".repeat(60)}\n` +
       issues
-        .map((i) => `[${i.time.slice(11, 19)}] ${i.kind}: ${i.title}\n${i.detail.replace(/^/gm, "    ")}`)
+        .map((i) => `[${istLabel(i.time)} IST] ${i.kind}: ${i.title}\n${i.detail.replace(/^/gm, "    ")}`)
         .join(`\n${"-".repeat(60)}\n`)
     );
   };
@@ -213,7 +217,7 @@ export default function GlobalErrorMonitor() {
                 <summary className="px-3 py-2 cursor-pointer flex items-center space-x-2 list-none">
                   <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full border shrink-0 ${kindStyle(i.kind)}`}>{i.kind}</span>
                   <span className="text-[11px] text-slate-300 truncate flex-1">{i.title}</span>
-                  <span className="text-[9px] text-slate-600 shrink-0">{i.time.slice(11, 19)}</span>
+                  <span className="text-[9px] text-slate-600 shrink-0" title="India Standard Time">{istLabel(i.time)}</span>
                 </summary>
                 <pre className="text-[10px] text-slate-400 px-3 pb-3 whitespace-pre-wrap break-words font-mono border-t border-slate-900 pt-2">{i.detail}</pre>
               </details>

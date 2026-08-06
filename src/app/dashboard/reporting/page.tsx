@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { istToday } from "@/lib/time";
 import { createClient } from "@/lib/supabase/client";
 import {
   Sparkles,
@@ -78,7 +79,7 @@ export default function ReportingPage() {
 
   // Weekly Reports Tab States
   const [reports, setReports] = useState<WeeklyReport[]>([]);
-  const [weekStartDate, setWeekStartDate] = useState(new Date().toISOString().split("T")[0]);
+  const [weekStartDate, setWeekStartDate] = useState(istToday());
   const [selectedReport, setSelectedReport] = useState<WeeklyReport | null>(null);
 
   // CRM Tab States

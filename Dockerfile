@@ -21,7 +21,8 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 # Fonts + fontconfig so sharp/librsvg can render SVG <text> (the branding address
 # strip). ffmpeg extracts video frames for the Content Hub brand-QC.
-RUN apk add --no-cache fontconfig ttf-dejavu ffmpeg && fc-cache -f
+# tzdata so the container can actually resolve Asia/Kolkata (Alpine ships none).
+RUN apk add --no-cache fontconfig ttf-dejavu ffmpeg tzdata && fc-cache -f
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
@@ -35,5 +36,7 @@ USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
+# The agency works in Kolkata time; UTC was the default and read 5:30 behind.
+ENV TZ="Asia/Kolkata"
 
 CMD ["node", "server.js"]

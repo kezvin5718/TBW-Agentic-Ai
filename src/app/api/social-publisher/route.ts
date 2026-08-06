@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { isRecurPostConfigured, postContent } from "@/lib/recurpost";
+import { istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
@@ -51,7 +52,9 @@ export async function POST(request: NextRequest) {
     const isVideo = /\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(post.media_url as string);
     const params: Record<string, unknown> = { id: accountId, message: post.caption || post.title || "" };
     if (post.scheduled_for && new Date(post.scheduled_for as string).getTime() > Date.now()) {
-      params.schedule_date_time = new Date(post.scheduled_for as string).toISOString().slice(0, 19).replace("T", " ");
+      // RecurPost schedules in the account's own (IST) clock, so send IST —
+      // not the UTC instant, which would retry the post 5:30 early.
+      params.schedule_date_time = utcToIstWallClock(post.scheduled_for as string);
     }
     if (isVideo) params.video_url = post.media_url;
     else params.image_url = [post.media_url];
@@ -117,7 +120,9 @@ export async function POST(request: NextRequest) {
           id: accountId,
           message: caption || title || "",
         };
-        if (scheduledFor) params.schedule_date_time = String(scheduledFor).replace("T", " ") + ":00";
+        // The composer's date/time pickers are already IST wall clock — which is
+        // exactly what RecurPost expects, so pass it through.
+        if (scheduledFor) params.schedule_date_time = utcToIstWallClock(istWallClockToUtc(scheduledFor));
         if (mediaIsVideo) params.video_url = mediaUrl;
         else params.image_url = [mediaUrl];
         if (platform === "facebook" && contentType !== "post") params.fb_post_type = contentType;
@@ -149,7 +154,7 @@ export async function POST(request: NextRequest) {
         caption: caption || null,
         media_url: mediaUrl,
         thumbnail_url: thumbnailUrl || null,
-        scheduled_for: scheduledFor ? new Date(scheduledFor).toISOString() : null,
+        scheduled_for: scheduledFor ? istWallClockToUtc(scheduledFor).toISOString() : null,
         status: ok ? "sent" : "failed",
         webhook_response: `[recurpost] ${detail}`,
       });

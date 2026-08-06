@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { fmtIST } from "@/lib/time";
 import {
   UploadCloud,
   CheckCircle,
@@ -504,7 +505,7 @@ export default function AdPublishingPage() {
                         <div className="flex items-center space-x-4 text-[9.5px] text-slate-500 font-mono">
                           <span className="flex items-center space-x-1">
                             <Calendar className="w-3.5 h-3.5 text-slate-650" />
-                            <span>Target Date: {c.tasks?.deadline ? new Date(c.tasks.deadline).toLocaleString() : "N/A"}</span>
+                            <span>Target Date: {c.tasks?.deadline ? fmtIST(c.tasks.deadline) : "N/A"}</span>
                           </span>
                           
                           <a
@@ -882,7 +883,7 @@ export default function AdPublishingPage() {
                         <p className="text-slate-300 text-xs italic truncate font-sans">&ldquo;{c.caption}&rdquo;</p>
                         
                         <div className="text-[9px] text-slate-500 font-mono space-y-0.5">
-                          <div>Published: {c.published_at ? new Date(c.published_at).toLocaleString() : "N/A"}</div>
+                          <div>Published: {c.published_at ? fmtIST(c.published_at) : "N/A"}</div>
                           <div>Platform Post ID: {c.platform_post_id}</div>
                         </div>
                       </div>
