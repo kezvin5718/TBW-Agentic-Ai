@@ -26,9 +26,11 @@ async function syncMemberProfiles(admin: ReturnType<typeof createServiceRoleClie
   for (const member of unlinked) {
     const m = (member.name || "").trim().toLowerCase();
     if (!m) continue;
+    // Board names are first names ("Yashpal"); logins are full names, and the
+    // surname isn't always last ("Thakur Yashpal Singh"), so match any word.
     const match = profiles.find((p) => {
       const pn = (p.name || "").trim().toLowerCase();
-      return pn === m || pn.startsWith(m + " ") || pn.split(" ")[0] === m;
+      return pn === m || pn.split(/\s+/).includes(m);
     });
     if (match) {
       await admin.from("team_members").update({ profile_id: match.id }).eq("id", member.id);

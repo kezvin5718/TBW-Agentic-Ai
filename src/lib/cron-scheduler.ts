@@ -139,6 +139,21 @@ export function startCronScheduler() {
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;
 
+  // 6d. WhatsApp task bot (every 3 minutes) — clusters each group's messages
+  // into conversations and drafts tasks for a human to approve.
+  cron.schedule("*/3 * * * *", async () => {
+    try {
+      const { runWhatsAppTaskBot } = await import("@/lib/wa-task-bot");
+      const res = await runWhatsAppTaskBot();
+      cronSchedulerStatus.lastRun["wa_task_bot"] = new Date().toISOString();
+      if (res.drafted > 0) console.log(`✅ In-App Cron: WhatsApp bot drafted ${res.drafted} task(s) from ${res.clusters} conversation(s).`);
+      for (const e of res.errors) console.warn("   ↳ wa-bot:", e);
+    } catch (err: unknown) {
+      console.error("❌ In-App Cron: WhatsApp task bot failed:", err instanceof Error ? err.message : String(err));
+    }
+  }, { timezone: "Asia/Kolkata" });
+  cronSchedulerStatus.jobsScheduledCount++;
+
   // 7. Storage sweep (3:30 AM IST) — move spent files to Drive, free Supabase.
   cron.schedule("30 3 * * *", async () => {
     console.log("⏰ In-App Cron: Starting Storage Sweep...");

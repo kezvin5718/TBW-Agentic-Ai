@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { fmtIST } from "@/lib/time";
 import { createClient } from "@/lib/supabase/client";
 import { MessageSquare, RefreshCw, Loader2, UserPlus, Check, X, AlertTriangle, ListTodo } from "lucide-react";
+import TaskDrafts from "./TaskDrafts";
 
 interface Item {
   id: string;
@@ -36,6 +37,7 @@ export default function WhatsAppInboxPage() {
   const [extracting, setExtracting] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [me, setMe] = useState<string | null>(null);
+  const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
 
   const fetchItems = useCallback(async (status: string) => {
     setLoading(true);
@@ -52,6 +54,8 @@ export default function WhatsAppInboxPage() {
       setMe(user?.id || null);
       const { data } = await supabase.from("profiles").select("id, name").in("role", ["founder", "employee"]);
       setStaff(data || []);
+      const { data: cl } = await supabase.from("clients").select("id, name").order("name");
+      setClients(cl || []);
     })();
   }, []);
   useEffect(() => { fetchItems(tab); }, [tab, fetchItems]);
@@ -77,12 +81,15 @@ export default function WhatsAppInboxPage() {
           <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
             <MessageSquare className="w-6 h-6 text-emerald-400" /><span>WhatsApp Task Bar</span>
           </h1>
-          <p className="text-sm text-slate-500 mt-1">Client group messages, read-only. AI flags the tasks; you assign &amp; act. The system never replies on WhatsApp.</p>
+          <p className="text-sm text-slate-500 mt-1">Client group messages, read-only. The bot reads each conversation and drafts the task; you approve it. The system never replies on WhatsApp.</p>
         </div>
         <button onClick={runExtract} disabled={extracting} className="px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider bg-slate-900 border border-slate-800 hover:border-indigo-600 text-white flex items-center space-x-2 cursor-pointer disabled:opacity-60">
           {extracting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}<span>Scan new</span>
         </button>
       </div>
+
+      {/* Bot drafts — framed from whole conversations, waiting for approval */}
+      <TaskDrafts clients={clients} staff={staff} onApproved={() => fetchItems(tab)} />
 
       <div className="flex bg-slate-950 border border-slate-900 rounded-xl p-1 text-[10px] font-bold uppercase tracking-wider w-fit">
         {(["new", "assigned", "done"] as const).map((t) => (
