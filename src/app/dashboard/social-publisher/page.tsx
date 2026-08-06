@@ -253,6 +253,19 @@ export default function SocialPublisherPage() {
   const togglePlatform = (p: string) =>
     setPlatforms((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
 
+  // Which platforms this client actually has connected in RecurPost.
+  const mappedPlatforms = clientId
+    ? Array.from(new Set(Object.values(rpMapping).filter((m) => m?.client_id === clientId).map((m) => m.platform).filter(Boolean)))
+    : [];
+
+  // When the client changes, select exactly the platforms they're set up for —
+  // avoids composing a post that can only fail.
+  useEffect(() => {
+    if (!clientId || rpAccounts.length === 0) return;
+    setPlatforms(mappedPlatforms.length > 0 ? mappedPlatforms : []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientId, rpAccounts.length, rpMapping]);
+
   const upload = async (kind: "media" | "thumb", file: File) => {
     setUploading(kind);
     setNotice(null);
@@ -685,14 +698,39 @@ export default function SocialPublisherPage() {
         </div>
 
         <div>
-          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Platforms <span className="text-slate-600 normal-case font-medium">— all pre-selected, click to unselect the ones you don&apos;t want</span></label>
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+            Platforms <span className="text-slate-600 normal-case font-medium">— this client&apos;s connected platforms are pre-selected; click to unselect</span>
+          </label>
           <div className="flex flex-wrap gap-2">
-            {PLATFORMS.map((p) => (
-              <button key={p.key} onClick={() => togglePlatform(p.key)} className={`px-4 py-2 rounded-full text-xs font-bold border cursor-pointer transition-all ${platforms.includes(p.key) ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
-                {p.label}
-              </button>
-            ))}
+            {PLATFORMS.map((p) => {
+              const available = !clientId || mappedPlatforms.length === 0 || mappedPlatforms.includes(p.key);
+              return (
+                <button
+                  key={p.key}
+                  onClick={() => togglePlatform(p.key)}
+                  title={available ? "" : `${clients.find((c) => c.id === clientId)?.name || "This client"} has no ${p.label} account connected in RecurPost — posting here will fail.`}
+                  className={`px-4 py-2 rounded-full text-xs font-bold border cursor-pointer transition-all ${
+                    platforms.includes(p.key)
+                      ? "bg-indigo-500 border-indigo-500 text-black"
+                      : available
+                      ? "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"
+                      : "bg-slate-950 border-slate-900 text-slate-700 opacity-50"
+                  }`}
+                >
+                  {p.label}{!available && " ⚠"}
+                </button>
+              );
+            })}
           </div>
+          {clientId && rpAccounts.length > 0 && mappedPlatforms.length === 0 && (
+            <div className="mt-2 bg-amber-950/20 border border-amber-900/50 rounded-xl p-2.5 text-[11px] text-amber-300 flex items-start gap-2">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span>
+                <b>{clients.find((c) => c.id === clientId)?.name}</b> has no social accounts mapped in RecurPost — any post will fail.
+                {myRole === "founder" ? " Map them in the RecurPost Accounts panel above." : " Ask a founder to map them in RecurPost Accounts."}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* 2. Media + thumbnail */}
