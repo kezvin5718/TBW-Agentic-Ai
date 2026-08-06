@@ -30,6 +30,9 @@ export default function BrandLogo({
         src="/tbw-logo.png"
         alt="TBW — The Brand Wagon"
         onError={() => setImgOk(false)}
+        // If the image already failed before React hydrated, onError never fires
+        // and a broken-image icon sticks — catch that case on mount.
+        ref={(el) => { if (el?.complete && el.naturalWidth === 0) setImgOk(false); }}
         className={`brand-logo-img w-auto object-contain ${className}`}
         style={{ height, filter: invert ? "invert(1)" : undefined }}
       />
