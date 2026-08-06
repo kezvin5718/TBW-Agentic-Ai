@@ -114,6 +114,38 @@ export default function ContentHubPage() {
     setStaged((prev) => ({ ...prev, [key]: (prev[key] || []).filter((_, i) => i !== idx) }));
   const clearStaged = (key: string) => setStaged((prev) => ({ ...prev, [key]: [] }));
 
+  // Multi-select delete for the Recent Uploads table
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const canDelete = (u: UploadRow) => u.status === "uploaded" && (me?.role === "founder" || u.uploaded_by === me?.id);
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const deletableRows = uploads.filter(canDelete);
+  const allSelected = deletableRows.length > 0 && deletableRows.every((u) => selectedIds.includes(u.id));
+  const toggleSelectAll = () =>
+    setSelectedIds(allSelected ? [] : deletableRows.map((u) => u.id));
+
+  const deleteSelected = async () => {
+    if (selectedIds.length === 0) return;
+    if (!window.confirm(`Delete ${selectedIds.length} upload(s)? This removes them for the social team too.`)) return;
+    setDeleting("bulk");
+    try {
+      const res = await fetch("/api/content-hub", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: selectedIds }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Delete failed");
+      setSelectedIds([]);
+      await fetchUploads();
+      setSuccess(`Deleted ${data.deleted} upload(s)${data.skipped ? `, ${data.skipped} skipped (already scheduled or not yours)` : ""}.`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeleting(null);
+    }
+  };
+
   const deleteUpload = async (id: string) => {
     if (!window.confirm("Delete this upload? This removes it for the social team too.")) return;
     setDeleting(id);
@@ -413,7 +445,23 @@ export default function ContentHubPage() {
 
       {/* Recent uploads */}
       <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5">
-        <h3 className="text-sm font-bold text-white mb-3">Recent Uploads</h3>
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <h3 className="text-sm font-bold text-white">Recent Uploads</h3>
+          {selectedIds.length > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-slate-400 font-bold">{selectedIds.length} selected</span>
+              <button
+                onClick={deleteSelected}
+                disabled={deleting === "bulk"}
+                className="px-3 py-1.5 rounded-lg bg-rose-950/40 border border-rose-900 text-rose-300 hover:bg-rose-900/40 text-[11px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {deleting === "bulk" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                <span>Delete selected</span>
+              </button>
+              <button onClick={() => setSelectedIds([])} className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-[11px] font-bold cursor-pointer">Clear</button>
+            </div>
+          )}
+        </div>
         {uploads.length === 0 ? (
           <p className="text-xs text-slate-600 py-6 text-center">No uploads yet. Select a client and upload a creative above.</p>
         ) : (
@@ -421,6 +469,16 @@ export default function ContentHubPage() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-slate-500 text-left border-b border-slate-900">
+                  <th className="py-2 pr-2 font-bold w-6">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={toggleSelectAll}
+                      disabled={deletableRows.length === 0}
+                      title="Select all deletable"
+                      className="accent-[#FFD400] cursor-pointer"
+                    />
+                  </th>
                   <th className="py-2 pr-3 font-bold">Preview</th>
                   <th className="py-2 pr-3 font-bold">File</th>
                   <th className="py-2 pr-3 font-bold">Client</th>
@@ -434,7 +492,17 @@ export default function ContentHubPage() {
               </thead>
               <tbody>
                 {uploads.map((u) => (
-                  <tr key={u.id} className="border-b border-slate-900/60 text-slate-300">
+                  <tr key={u.id} className={`border-b border-slate-900/60 text-slate-300 ${selectedIds.includes(u.id) ? "bg-rose-950/10" : ""}`}>
+                    <td className="py-2 pr-2">
+                      {canDelete(u) && (
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(u.id)}
+                          onChange={() => toggleSelect(u.id)}
+                          className="accent-[#FFD400] cursor-pointer"
+                        />
+                      )}
+                    </td>
                     <td className="py-2 pr-3">
                       <div className="w-10 h-10 rounded-lg overflow-hidden bg-slate-900 border border-slate-800">
                         {u.media_type === "video" ? (

@@ -118,30 +118,43 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { id } = await request.json();
-  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+  const body = await request.json();
+  const targetIds: string[] = Array.isArray(body.ids) && body.ids.length ? body.ids : body.id ? [body.id] : [];
+  if (targetIds.length === 0) return NextResponse.json({ error: "id or ids required" }, { status: 400 });
 
   const admin = createServiceRoleClient();
-  const { data: row } = await admin.from("creative_uploads").select("id, uploaded_by, status, file_url").eq("id", id).single();
-  if (!row) return NextResponse.json({ error: "Upload not found" }, { status: 404 });
-  if (role !== "founder" && row.uploaded_by !== user.id) {
-    return NextResponse.json({ error: "You can only delete your own uploads." }, { status: 403 });
-  }
-  if (row.status !== "uploaded") {
-    return NextResponse.json({ error: "Already scheduled/processed — remove it from Publishing instead." }, { status: 400 });
+  const { data: rows } = await admin
+    .from("creative_uploads")
+    .select("id, uploaded_by, status, file_url, thumbnail_url")
+    .in("id", targetIds);
+  if (!rows || rows.length === 0) return NextResponse.json({ error: "Upload(s) not found" }, { status: 404 });
+
+  const deletable = rows.filter(
+    (r) => r.status === "uploaded" && (role === "founder" || r.uploaded_by === user.id)
+  );
+  const skipped = rows.length - deletable.length;
+  if (deletable.length === 0) {
+    return NextResponse.json(
+      { error: "Nothing could be deleted — items are already scheduled, or belong to someone else." },
+      { status: 403 }
+    );
   }
 
-  const { error } = await admin.from("creative_uploads").delete().eq("id", id);
+  const { error } = await admin.from("creative_uploads").delete().in("id", deletable.map((r) => r.id));
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Best-effort file cleanup (record is already gone either way).
-  const url = row.file_url as string;
-  if (url.includes("googleusercontent.com") || url.includes("drive.google.com")) {
-    await deleteDriveFileByUrl(url);
-  } else if (url.includes("/studio-outputs/")) {
-    const path = url.split("/studio-outputs/")[1]?.split("?")[0];
-    if (path) await admin.storage.from("studio-outputs").remove([path]).catch(() => {});
+  // Best-effort file cleanup (records are already gone either way).
+  for (const r of deletable) {
+    for (const url of [r.file_url as string, r.thumbnail_url as string | null]) {
+      if (!url) continue;
+      if (url.includes("googleusercontent.com") || url.includes("drive.google.com")) {
+        await deleteDriveFileByUrl(url);
+      } else if (url.includes("/studio-outputs/")) {
+        const path = url.split("/studio-outputs/")[1]?.split("?")[0];
+        if (path) await admin.storage.from("studio-outputs").remove([path]).catch(() => {});
+      }
+    }
   }
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ success: true, deleted: deletable.length, skipped });
 }
