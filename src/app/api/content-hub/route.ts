@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
   const clientId = new URL(request.url).searchParams.get("clientId");
   let query = supabase
     .from("creative_uploads")
-    .select("*, clients(name), profiles:uploaded_by(name)")
+    .select("*, clients(name), profiles:uploaded_by(name, avatar_url, designation)")
     .order("created_at", { ascending: false })
     .limit(50);
   if (clientId) query = query.eq("client_id", clientId);
@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
       thumbnail_name: thumbnailName,
       status: "uploaded",
     })
-    .select("*, clients(name), profiles:uploaded_by(name)")
+    .select("*, clients(name), profiles:uploaded_by(name, avatar_url, designation)")
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

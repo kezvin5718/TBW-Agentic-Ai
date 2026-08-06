@@ -72,7 +72,16 @@ export async function GET(request: NextRequest) {
   ]);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true, tasks: tasks || [], team: team || [], clients: clients || [] });
+
+  // Attach each member's profile photo/designation so the board can show faces.
+  const { data: profs } = await admin.from("profiles").select("id, avatar_url, designation");
+  const byProfile = new Map((profs || []).map((p) => [p.id, p]));
+  const teamWithPhotos = (team || []).map((m) => {
+    const prof = m.profile_id ? byProfile.get(m.profile_id) : null;
+    return { ...m, avatar_url: prof?.avatar_url || null, role_title: m.role_title || prof?.designation || null };
+  });
+
+  return NextResponse.json({ success: true, tasks: tasks || [], team: teamWithPhotos, clients: clients || [] });
 }
 
 // POST — create a task. Body: { title, description?, clientId?, type?, assigneeName?, priority?, deadline? }

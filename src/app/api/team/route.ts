@@ -13,12 +13,16 @@ export async function GET() {
   const admin = createServiceRoleClient();
   const { data, error } = await admin
     .from("profiles")
-    .select("id, name, role, brand_name, approved, permissions, created_at")
+    .select("id, name, role, brand_name, approved, permissions, created_at, avatar_url, designation, phone, about")
     .order("created_at", { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // attach email from auth (best-effort)
-  return NextResponse.json({ success: true, users: data || [] });
+  // Attach the login email so the founder has everyone's contact in one place.
+  const { data: authList } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+  const emailById = new Map((authList?.users || []).map((u) => [u.id, u.email]));
+  const users = (data || []).map((u) => ({ ...u, email: emailById.get(u.id) || null }));
+
+  return NextResponse.json({ success: true, users });
 }
 
 // PATCH — approve / reject / set role. Body: { userId, action, role? }

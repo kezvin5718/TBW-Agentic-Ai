@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
+import Avatar from "../Avatar";
 import { UploadCloud, Image as ImageIcon, Film, Smartphone, Loader2, CheckCircle2, AlertTriangle, Trash2 } from "lucide-react";
 
 interface ClientRow { id: string; name: string }
@@ -19,7 +20,7 @@ interface UploadRow {
   uploaded_by?: string | null;
   created_at: string;
   clients?: { name: string } | null;
-  profiles?: { name: string } | null;
+  profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
 }
 
 const TYPES = [
@@ -460,7 +461,13 @@ export default function ContentHubPage() {
                       <span className="px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-[10px] font-bold capitalize">{u.content_type}</span>
                     </td>
                     <td className="py-2 pr-3">{fmtSize(u.file_size)}</td>
-                    <td className="py-2 pr-3">{u.profiles?.name || "—"}</td>
+                    <td className="py-2 pr-3">
+                      <span className="flex items-center gap-2">
+                        <Avatar name={u.profiles?.name} url={u.profiles?.avatar_url} size={24} rounded="rounded-full"
+                          title={u.profiles?.designation ? `${u.profiles.name} · ${u.profiles.designation}` : u.profiles?.name || ""} />
+                        <span className="truncate">{u.profiles?.name || "—"}</span>
+                      </span>
+                    </td>
                     <td className="py-2 pr-3">
                       {u.qc_status === "match" && <span className="px-2 py-0.5 rounded-full bg-emerald-950/40 border border-emerald-900 text-emerald-400 text-[10px] font-bold">✓ Match</span>}
                       {u.qc_status === "mismatch" && (

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import Avatar from "../Avatar";
 import {
   ListTodo, Loader2, Plus, X, Check, Users, LayoutGrid, Rows3,
   Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2,
@@ -22,7 +23,7 @@ interface Task {
   completed_at: string | null;
   clients?: { name: string } | null;
 }
-interface Member { id: string; name: string; role_title: string | null; profile_id: string | null }
+interface Member { id: string; name: string; role_title: string | null; profile_id: string | null; avatar_url: string | null }
 interface ClientRow { id: string; name: string }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -282,9 +283,13 @@ export default function TeamTasksPage() {
           {columns.map((col) => (
             <div key={col.name} className="w-72 shrink-0 space-y-2">
               <div className="flex items-center justify-between bg-slate-950/40 border border-slate-900 rounded-xl px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <Users className="w-3.5 h-3.5 text-indigo-400" />
-                  <span className="text-xs font-bold text-white">{col.name}</span>
+                <div className="flex items-center gap-2 min-w-0">
+                  {col.member ? (
+                    <Avatar name={col.name} url={col.member.avatar_url} size={22} rounded="rounded-full" />
+                  ) : (
+                    <Users className="w-3.5 h-3.5 text-indigo-400" />
+                  )}
+                  <span className="text-xs font-bold text-white truncate">{col.name}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   {col.member?.role_title && <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500">{col.member.role_title}</span>}

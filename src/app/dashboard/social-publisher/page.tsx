@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
+import Avatar from "../Avatar";
 import { fmtIST, fmtISTDate, istToday, istWallClockToUtc, IST_TZ } from "@/lib/time";
 import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2 } from "lucide-react";
 
@@ -11,13 +12,15 @@ interface HubUpload {
   media_type: string; content_type: "post" | "reel" | "story" | "thumbnail"; status: string;
   thumbnail_url?: string | null;
   qc_status?: string; qc_detected_brand?: string | null; qc_note?: string | null;
-  created_at: string; clients?: { name: string } | null; profiles?: { name: string } | null;
+  created_at: string; clients?: { name: string } | null;
+  profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
 }
 interface PostRow {
   id: string; platform: string; content_type: string; title: string | null; caption: string | null;
   media_url: string; thumbnail_url: string | null; scheduled_for: string | null; status: string;
   webhook_response?: string | null;
-  created_at: string; clients?: { name: string } | null; profiles?: { name: string } | null;
+  created_at: string; clients?: { name: string } | null;
+  profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
 }
 
 const PLATFORMS = [
@@ -793,7 +796,11 @@ export default function SocialPublisherPage() {
                   <div className="min-w-0">
                     <p className="text-[11px] font-bold text-white truncate">{u.file_name || "file"}</p>
                     <p className="text-[10px] text-slate-500 truncate"><span className="font-bold text-slate-300">{u.clients?.name || "—"}</span> · #{hubSeq[u.id]} of {hubClientTotals[u.clients?.name || "Unknown"] || 0} · <span className="capitalize text-[var(--yellow)]">{u.content_type}</span></p>
-                    <p className="text-[9px] text-slate-600">by {u.profiles?.name || "—"} · {fmtISTDate(u.created_at)}</p>
+                    <p className="text-[9px] text-slate-600 flex items-center gap-1.5">
+                      <Avatar name={u.profiles?.name} url={u.profiles?.avatar_url} size={14} rounded="rounded-full"
+                        title={u.profiles?.designation ? `${u.profiles.name} · ${u.profiles.designation}` : u.profiles?.name || ""} />
+                      <span className="truncate">by {u.profiles?.name || "—"} · {fmtISTDate(u.created_at)}</span>
+                    </p>
                     {u.qc_status === "mismatch" && (
                       <p title={`${u.qc_detected_brand ? `Looks like: ${u.qc_detected_brand}. ` : ""}${u.qc_note || ""}`} className="text-[9px] font-bold text-rose-400 cursor-help">
                         ⚠ Brand mismatch{u.qc_detected_brand ? ` — looks like ${u.qc_detected_brand}` : ""}

@@ -13,7 +13,7 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from("social_posts")
-    .select("*, clients(name), profiles:created_by(name)")
+    .select("*, clients(name), profiles:created_by(name, avatar_url, designation)")
     .order("created_at", { ascending: false })
     .limit(60);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

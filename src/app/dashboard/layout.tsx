@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import GlobalErrorMonitor from "./GlobalErrorMonitor";
 import BrandLogo from "./BrandLogo";
+import Avatar from "./Avatar";
 import PendingSignupsBadge from "./PendingSignupsBadge";
 import ThemeToggle from "./ThemeToggle";
 import { sectionKeyForPath } from "@/lib/sections";
@@ -55,11 +56,12 @@ export default async function DashboardLayout({
   const name = user.user_metadata?.name || user.email?.split("@")[0] || "User";
 
   // Per-user section permissions (employees): NULL = default set; array = only those.
-  let perms: string[] | null = null;
-  if (role === "employee") {
-    const { data: prof } = await supabase.from("profiles").select("permissions").eq("id", user.id).maybeSingle();
-    perms = (prof?.permissions as string[] | null) ?? null;
-  }
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("permissions, avatar_url, designation")
+    .eq("id", user.id)
+    .maybeSingle();
+  const perms: string[] | null = role === "employee" ? ((prof?.permissions as string[] | null) ?? null) : null;
 
   // Full map of modular nav items
   const allNavItems = [
@@ -81,6 +83,7 @@ export default async function DashboardLayout({
     { name: "12 · Reporting & Analytics", href: "/dashboard/reporting", icon: LineChart, roles: ["founder", "employee", "client"], section: "Client Workflow" },
     { name: "13 · Agency Brain", href: "/dashboard/agency-brain", icon: Layers, roles: ["founder"], section: "Client Workflow" },
 
+    { name: "My Profile", href: "/dashboard/profile", icon: UserIcon, roles: ["founder", "employee", "client"], section: "Assistant & System" },
     { name: "Team & Access", href: "/dashboard/team", icon: Users, roles: ["founder"], section: "Assistant & System" },
     { name: "Bron Assistant", href: "/dashboard/jarvis", icon: Bot, roles: ["founder"], section: "Assistant & System" },
     { name: "WhatsApp Reader", href: "/dashboard/whatsapp-reader", icon: Link2, roles: ["founder"], section: "Assistant & System" },
@@ -129,15 +132,13 @@ export default async function DashboardLayout({
         {/* User Card */}
         <div className="p-4 border-b border-slate-900">
           <div className="bg-slate-900/40 border border-slate-900/80 rounded-xl p-3 flex flex-col space-y-2">
-            <div className="flex items-center space-x-3">
-              <div className="w-9 h-9 rounded-lg bg-indigo-900/40 border border-indigo-800/50 flex items-center justify-center font-bold text-indigo-300 text-sm">
-                {name.charAt(0).toUpperCase()}
-              </div>
+            <Link href="/dashboard/profile" className="flex items-center space-x-3 group" title="Edit your profile">
+              <Avatar name={name} url={prof?.avatar_url as string | null} size={36} />
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-bold text-slate-200 truncate">{name}</p>
-                <p className="text-[10px] text-slate-500 truncate">{user.email}</p>
+                <p className="text-xs font-bold text-slate-200 truncate group-hover:text-[var(--yellow)] transition-colors">{name}</p>
+                <p className="text-[10px] text-slate-500 truncate">{(prof?.designation as string | null) || user.email}</p>
               </div>
-            </div>
+            </Link>
             <div className={`flex items-center space-x-1.5 px-2 py-1 rounded-lg border text-[10px] font-bold w-fit ${currentRoleStyle.bg}`}>
               <RoleBadgeIcon className="w-3 h-3" />
               <span>{currentRoleStyle.label}</span>

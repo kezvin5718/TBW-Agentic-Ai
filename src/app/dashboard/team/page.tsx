@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { fmtIST } from "@/lib/time";
-import { Users, Loader2, Check, X, Shield, KeyRound } from "lucide-react";
+import { Users, Loader2, Check, X, KeyRound, Mail, Phone } from "lucide-react";
+import Avatar from "../Avatar";
 import { SECTIONS } from "@/lib/sections";
 
 interface UserRow {
@@ -13,6 +14,11 @@ interface UserRow {
   approved: boolean;
   permissions: string[] | null;
   created_at: string;
+  avatar_url: string | null;
+  designation: string | null;
+  phone: string | null;
+  about: string | null;
+  email: string | null;
 }
 
 const ROLES = ["employee", "founder", "client"];
@@ -96,9 +102,13 @@ export default function TeamPage() {
                   const chosen = roleChoice[u.id] || "employee";
                   return (
                     <div key={u.id} className="bg-slate-950/60 border border-amber-900/40 rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap">
-                      <div className="min-w-0">
-                        <p className="text-sm font-bold text-white truncate">{u.name || "(no name)"}</p>
-                        <p className="text-[10px] text-slate-500">Signed up {fmtIST(u.created_at)}</p>
+                      <div className="min-w-0 flex items-center gap-3">
+                        <Avatar name={u.name} url={u.avatar_url} size={40} />
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-white truncate">{u.name || "(no name)"}</p>
+                          <p className="text-[10px] text-slate-500 truncate">{u.email || "no email"}</p>
+                          <p className="text-[10px] text-slate-600">Signed up {fmtIST(u.created_at)}</p>
+                        </div>
                       </div>
                       <div className="flex items-center gap-2">
                         <select value={chosen} onChange={(e) => setRoleChoice((p) => ({ ...p, [u.id]: e.target.value }))} className="text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-white focus:outline-none cursor-pointer">
@@ -133,9 +143,20 @@ export default function TeamPage() {
                 return (
                   <div key={u.id} className="bg-slate-950/60 border border-slate-900 rounded-2xl p-4 space-y-3">
                     <div className="flex items-center justify-between gap-3 flex-wrap">
-                      <div className="min-w-0 flex items-center space-x-2">
-                        <Shield className="w-4 h-4 text-slate-600 shrink-0" />
-                        <p className="text-sm font-bold text-white truncate">{u.name || "(no name)"}{u.brand_name ? <span className="text-slate-500 font-normal"> · {u.brand_name}</span> : ""}</p>
+                      <div className="min-w-0 flex items-center gap-3">
+                        <Avatar name={u.name} url={u.avatar_url} size={40} />
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-white truncate">
+                            {u.name || "(no name)"}
+                            {u.designation ? <span className="text-[var(--yellow)] font-normal"> · {u.designation}</span> : ""}
+                            {u.brand_name ? <span className="text-slate-500 font-normal"> · {u.brand_name}</span> : ""}
+                          </p>
+                          <div className="flex items-center gap-3 flex-wrap text-[10px] text-slate-500">
+                            {u.email && <span className="flex items-center gap-1 truncate"><Mail className="w-3 h-3" />{u.email}</span>}
+                            {u.phone && <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{u.phone}</span>}
+                          </div>
+                          {u.about && <p className="text-[10px] text-slate-600 truncate max-w-md">{u.about}</p>}
+                        </div>
                       </div>
                       <div className="flex items-center gap-2">
                         <select value={u.role} onChange={(e) => act(u.id, "set_role", e.target.value)} disabled={!!busy} className={`text-[10px] font-bold rounded-lg px-2 py-1 border cursor-pointer focus:outline-none ${roleBadge(u.role)}`}>
