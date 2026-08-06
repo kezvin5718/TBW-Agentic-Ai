@@ -415,17 +415,21 @@ export default function SocialPublisherPage() {
       </div>
     );
 
-  const PvMedia = ({ className = "" }: { className?: string }) =>
-    mediaUrl ? (
-      mediaIsVideo ? (
-        <video src={mediaUrl} poster={thumbUrl || undefined} muted playsInline controls className={`w-full h-full object-cover ${className}`} />
-      ) : (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={mediaUrl} alt="" className={`w-full h-full object-cover ${className}`} />
-      )
-    ) : (
-      <div className={`w-full h-full flex items-center justify-center bg-slate-200 text-slate-500 text-xs ${className}`}>Upload media to preview</div>
-    );
+  const PvMedia = ({ className = "" }: { className?: string }) => {
+    if (!mediaUrl) {
+      return <div className={`w-full h-full flex items-center justify-center bg-slate-200 text-slate-500 text-xs ${className}`}>Upload media to preview</div>;
+    }
+    if (!mediaIsVideo) {
+      // eslint-disable-next-line @next/next/no-img-element
+      return <img src={mediaUrl} alt="" className={`w-full h-full object-cover ${className}`} />;
+    }
+    // Drive won't stream raw bytes to <video> — use its own player for those.
+    const driveId = mediaUrl.match(/googleusercontent\.com\/d\/([^=/?&]+)/)?.[1] || mediaUrl.match(/drive\.google\.com\/file\/d\/([^/?&]+)/)?.[1];
+    if (driveId) {
+      return <iframe src={`https://drive.google.com/file/d/${driveId}/preview`} allow="autoplay" className={`w-full h-full border-0 bg-black ${className}`} />;
+    }
+    return <video src={mediaUrl} poster={thumbUrl || undefined} playsInline controls className={`w-full h-full object-cover bg-black ${className}`} />;
+  };
 
   const renderPreview = () => {
     const vertical = ["reel", "story"].includes(previewType) && ["instagram", "facebook"].includes(previewPlat);
@@ -826,48 +830,18 @@ export default function SocialPublisherPage() {
           </div>
         </div>
 
-        {/* Review the video + pick its thumbnail, side by side */}
+        {/* Thumbnail picker — the video itself plays in the Social preview panel */}
         {mediaIsVideo && mediaUrl && (
-          <div className="border border-slate-900 rounded-xl p-4 bg-slate-950/40 grid grid-cols-1 lg:grid-cols-2 gap-5">
-            {/* Left — watch the video to verify it's the right one */}
-            <div className="space-y-2">
+          <div className="border border-slate-900 rounded-xl p-4 bg-slate-950/40">
+            <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                <span>Review video</span>
+                <span>Thumbnail <span className="text-slate-600 normal-case font-medium">— click a frame, or upload your own above</span></span>
                 {videoDims && (
                   <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400 normal-case">
                     {videoDims.h > videoDims.w ? `Story/Reel ${videoDims.w}×${videoDims.h}` : `Landscape ${videoDims.w}×${videoDims.h}`}
                   </span>
                 )}
-              </label>
-              {(() => {
-                const driveId = mediaUrl.match(/googleusercontent\.com\/d\/([^=/?&]+)/)?.[1] || mediaUrl.match(/drive\.google\.com\/file\/d\/([^/?&]+)/)?.[1];
-                const aspect = videoDims ? `${videoDims.w} / ${videoDims.h}` : "9 / 16";
-                return driveId ? (
-                  // Drive doesn't serve raw video bytes to <video>; use its player.
-                  <iframe
-                    src={`https://drive.google.com/file/d/${driveId}/preview`}
-                    allow="autoplay"
-                    className="w-full rounded-xl border border-slate-800 bg-black mx-auto"
-                    style={{ aspectRatio: aspect, maxHeight: 340 }}
-                  />
-                ) : (
-                  <video
-                    src={mediaUrl}
-                    controls
-                    playsInline
-                    className="w-full rounded-xl border border-slate-800 bg-black mx-auto object-contain"
-                    style={{ aspectRatio: aspect, maxHeight: 340 }}
-                  />
-                );
-              })()}
-              <p className="text-[10px] text-slate-500 truncate">{mediaName}</p>
-            </div>
-
-            {/* Right — thumbnail: pick a frame or use the uploaded one */}
-            <div className="space-y-3">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                Thumbnail <span className="text-slate-600 normal-case font-medium">— click a frame, or upload your own above</span>
               </label>
               {framesBusy && (
                 <span className="text-[10px] text-slate-500 flex items-center space-x-1.5">
@@ -885,7 +859,7 @@ export default function SocialPublisherPage() {
             {frames.length === 0 && !framesBusy ? (
               <p className="text-[11px] text-slate-600">No frames could be read from this video — upload a thumbnail file manually instead.</p>
             ) : (
-              <div className={`grid gap-2 ${videoDims && videoDims.h > videoDims.w ? "grid-cols-4 sm:grid-cols-5" : "grid-cols-2 sm:grid-cols-4"}`}>
+              <div className={`grid gap-2 ${videoDims && videoDims.h > videoDims.w ? "grid-cols-4 sm:grid-cols-6 lg:grid-cols-8" : "grid-cols-3 sm:grid-cols-4 lg:grid-cols-6"}`}>
                 {frames.map((f) => (
                   <button
                     key={f.t}
