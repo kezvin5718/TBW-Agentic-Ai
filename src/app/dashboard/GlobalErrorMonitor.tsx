@@ -68,6 +68,20 @@ export default function GlobalErrorMonitor() {
     setOpen(true);
   }, []);
 
+  // The browser cancels in-flight requests when the page is navigated away or
+  // reloaded. Those surface as a thrown fetch identical to a real outage, so
+  // track when we're leaving and don't cry wolf about it.
+  const leavingRef = useRef(false);
+  useEffect(() => {
+    const leaving = () => { leavingRef.current = true; };
+    window.addEventListener("pagehide", leaving);
+    window.addEventListener("beforeunload", leaving);
+    return () => {
+      window.removeEventListener("pagehide", leaving);
+      window.removeEventListener("beforeunload", leaving);
+    };
+  }, []);
+
   // ---- Patch fetch to watch every API call --------------------------------
   useEffect(() => {
     const origFetch = window.fetch.bind(window);
@@ -113,7 +127,14 @@ export default function GlobalErrorMonitor() {
         }
         return res;
       } catch (err: unknown) {
-        if (isApi) {
+        // A cancelled request is not an outage: the page is unloading, or the
+        // caller aborted it (React cleanup, a superseded search, a timeout).
+        const aborted =
+          leavingRef.current ||
+          (err instanceof Error && err.name === "AbortError") ||
+          init?.signal?.aborted === true ||
+          (input instanceof Request && input.signal?.aborted === true);
+        if (isApi && !aborted) {
           addIssue("NETWORK", `Network fail: ${method} ${shortUrl(url)}`, `${method} ${url}\n\n${err instanceof Error ? err.message : String(err)}`);
         }
         throw err;
