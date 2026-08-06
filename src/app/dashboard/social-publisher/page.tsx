@@ -137,52 +137,23 @@ export default function SocialPublisherPage() {
   const [framesBusy, setFramesBusy] = useState(false);
   const [selFrame, setSelFrame] = useState<number | null>(null);
   const [videoDims, setVideoDims] = useState<{ w: number; h: number } | null>(null);
-  const frameVideoRef = useRef<HTMLVideoElement | null>(null);
 
-  const loadVideoEl = (src: string) =>
-    new Promise<HTMLVideoElement>((resolve, reject) => {
-      const v = document.createElement("video");
-      v.crossOrigin = "anonymous";
-      v.muted = true;
-      v.playsInline = true;
-      v.preload = "auto";
-      v.onloadedmetadata = () => resolve(v);
-      v.onerror = () => reject(new Error("Could not load the video for frame extraction."));
-      v.src = src;
-    });
-
-  const seekTo = (v: HTMLVideoElement, t: number) =>
-    new Promise<void>((resolve, reject) => {
-      v.onseeked = () => resolve();
-      v.onerror = () => reject(new Error("Seek failed"));
-      v.currentTime = t;
-    });
-
-  // Build a strip of 8 evenly-spaced frames whenever a video is uploaded.
+  // Frames are extracted SERVER-side with ffmpeg — the browser can't read many
+  // videos (Drive-hosted, HEVC/.mov, or hosts without CORS headers).
   const extractFrames = useCallback(async (src: string) => {
     setFramesBusy(true);
     setFrames([]);
     setSelFrame(null);
     try {
-      const v = await loadVideoEl(src);
-      frameVideoRef.current = v;
-      setVideoDims({ w: v.videoWidth, h: v.videoHeight });
-      const dur = v.duration || 1;
-      const N = 8;
-      const canvas = document.createElement("canvas");
-      // Preview thumbs keep the video's true aspect — portrait stays portrait.
-      const w = 200;
-      canvas.width = w;
-      canvas.height = Math.max(1, Math.round((v.videoHeight / v.videoWidth) * w) || 112);
-      const ctx = canvas.getContext("2d")!;
-      const out: Array<{ t: number; url: string }> = [];
-      for (let i = 0; i < N; i++) {
-        const t = Math.min(Math.max(0, dur - 0.1), (dur * (i + 0.5)) / N);
-        await seekTo(v, t);
-        ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-        out.push({ t, url: canvas.toDataURL("image/jpeg", 0.7) });
-        setFrames([...out]); // progressive render
-      }
+      const res = await fetch("/api/social-publisher/frames", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mediaUrl: src }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Frame extraction failed");
+      if (data.width && data.height) setVideoDims({ w: data.width, h: data.height });
+      setFrames((data.frames || []).map((f: { t: number; preview: string }) => ({ t: f.t, url: f.preview })));
     } catch (err: unknown) {
       setNotice({ ok: false, text: `${err instanceof Error ? err.message : "Frame extraction failed"} — you can still upload a thumbnail file manually.` });
     } finally {
@@ -192,26 +163,27 @@ export default function SocialPublisherPage() {
 
   useEffect(() => {
     if (mediaIsVideo && mediaUrl) extractFrames(mediaUrl);
-    else { setFrames([]); setSelFrame(null); setVideoDims(null); frameVideoRef.current = null; }
+    else { setFrames([]); setSelFrame(null); setVideoDims(null); }
   }, [mediaIsVideo, mediaUrl, extractFrames]);
 
-  // Click a frame → capture it at full resolution → set as thumbnail.
+  // Click a frame → fetch it full-resolution from the server → set as thumbnail.
   const chooseFrame = async (t: number) => {
     setSelFrame(t);
+    setUploading("thumb");
     try {
-      let v = frameVideoRef.current;
-      if (!v) { v = await loadVideoEl(mediaUrl); frameVideoRef.current = v; }
-      await seekTo(v, t);
-      const canvas = document.createElement("canvas");
-      canvas.width = v.videoWidth;
-      canvas.height = v.videoHeight;
-      canvas.getContext("2d")!.drawImage(v, 0, 0);
-      const blob = await new Promise<Blob>((resolve, reject) =>
-        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not capture the frame."))), "image/jpeg", 0.92)
-      );
+      const res = await fetch("/api/social-publisher/frames", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mediaUrl, t, full: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not capture the frame.");
+      const blob = await (await fetch(data.dataUrl)).blob();
+      setUploading(null);
       await upload("thumb", new File([blob], `frame-thumb-${Date.now()}.jpg`, { type: "image/jpeg" }));
       setNotice({ ok: true, text: "Frame set as thumbnail ✅" });
     } catch (err: unknown) {
+      setUploading(null);
       setSelFrame(null);
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Frame capture failed" });
     }
