@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
 
   if (!file) return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
   if (!clientId) return NextResponse.json({ error: "Please select a client" }, { status: 400 });
-  if (!["post", "reel", "story"].includes(contentType)) {
+  if (!["post", "reel", "story", "thumbnail"].includes(contentType)) {
     return NextResponse.json({ error: "Invalid content type" }, { status: 400 });
   }
 

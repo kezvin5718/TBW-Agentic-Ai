@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: ok, detail }, { status: ok ? 200 : 500 });
   }
 
-  const { clientId, platforms, title, caption, mediaUrl, thumbnailUrl, scheduledFor, uploadId } = body;
+  const { clientId, platforms, title, caption, mediaUrl, thumbnailUrl, scheduledFor, uploadId, thumbUploadId } = body;
   const contentTypes: string[] = Array.isArray(body.contentTypes) ? body.contentTypes : body.contentType ? [body.contentType] : [];
   if (!clientId) return NextResponse.json({ error: "Select a client" }, { status: 400 });
   if (!Array.isArray(platforms) || platforms.length === 0) return NextResponse.json({ error: "Select at least one platform" }, { status: 400 });
@@ -161,8 +161,13 @@ export async function POST(request: NextRequest) {
 
   // If this came from a Content Hub upload and everything sent, mark it handled
   // so it leaves the "received" tray.
-  if (uploadId && failed.length === 0) {
-    await admin.from("creative_uploads").update({ status: "scheduled" }).eq("id", uploadId);
+  // The thumbnail comes from its own Content Hub section (designers upload covers
+  // separately from the editors' reels) — retire it with the reel it was used on.
+  if (failed.length === 0) {
+    const usedIds = [uploadId, thumbUploadId].filter(Boolean) as string[];
+    if (usedIds.length > 0) {
+      await admin.from("creative_uploads").update({ status: "scheduled" }).in("id", usedIds);
+    }
   }
 
   return NextResponse.json({ success: failed.length === 0, results });

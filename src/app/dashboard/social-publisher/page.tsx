@@ -7,7 +7,7 @@ import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2,
 interface ClientRow { id: string; name: string; logo?: string }
 interface HubUpload {
   id: string; client_id: string; file_url: string; file_name: string | null;
-  media_type: string; content_type: "post" | "reel" | "story"; status: string;
+  media_type: string; content_type: "post" | "reel" | "story" | "thumbnail"; status: string;
   thumbnail_url?: string | null;
   qc_status?: string; qc_detected_brand?: string | null; qc_note?: string | null;
   created_at: string; clients?: { name: string } | null; profiles?: { name: string } | null;
@@ -44,6 +44,8 @@ export default function SocialPublisherPage() {
   const [hubUploads, setHubUploads] = useState<HubUpload[]>([]);
   const [hubFilter, setHubFilter] = useState<string>("all");
   const [selectedUpload, setSelectedUpload] = useState<{ id: string; name: string } | null>(null);
+  // Thumbnail chosen from the Content Hub's Thumbnail section (its own upload row).
+  const [selectedThumb, setSelectedThumb] = useState<{ id: string; name: string } | null>(null);
   const [title, setTitle] = useState("");
   const [caption, setCaption] = useState("");
   const [captionBrief, setCaptionBrief] = useState("");
@@ -208,6 +210,18 @@ export default function SocialPublisherPage() {
     } catch { /* ignore */ }
   }, []);
 
+  // Last number in a filename ("Irin_Reel_2.mp4" → 2). Designers and video editors
+  // work separately, so the number is what ties a reel to its cover.
+  const numOf = (name?: string | null): number | null => {
+    if (!name) return null;
+    const m = name.replace(/\.[^.]+$/, "").match(/(\d+)(?!.*\d)/);
+    return m ? parseInt(m[1], 10) : null;
+  };
+
+  // Thumbnails uploaded in the Content Hub's own Thumbnail section.
+  const hubThumbs = hubUploads.filter((u) => u.content_type === "thumbnail");
+  const hubMedia = hubUploads.filter((u) => u.content_type !== "thumbnail");
+
   // Fill the composer from a Content Hub item: client, media and content type auto-select.
   const applyHubUpload = (u: HubUpload) => {
     setClientId(u.client_id);
@@ -215,10 +229,35 @@ export default function SocialPublisherPage() {
     setMediaName(u.file_name || "Content Hub file");
     setMediaIsVideo(u.media_type === "video");
     setContentTypes([u.content_type]);
-    if (u.thumbnail_url) setThumbUrl(u.thumbnail_url);
     setSelectedUpload({ id: u.id, name: u.file_name || "Content Hub file" });
-    setNotice({ ok: true, text: `Loaded "${u.file_name}" for ${u.clients?.name || "client"} — type auto-set to ${u.content_type}${u.thumbnail_url ? ", thumbnail included" : ""}.` });
+
+    // Auto-suggest the designer's cover whose number matches this reel.
+    const n = numOf(u.file_name);
+    const match = n === null ? undefined : hubThumbs.find((t) => t.client_id === u.client_id && numOf(t.file_name) === n);
+    let thumbNote = "";
+    if (match) {
+      setThumbUrl(match.file_url);
+      setSelectedThumb({ id: match.id, name: match.file_name || "thumbnail" });
+      thumbNote = `, thumbnail #${n} "${match.file_name}" matched`;
+    } else if (u.thumbnail_url) {
+      setThumbUrl(u.thumbnail_url);
+      setSelectedThumb(null);
+      thumbNote = ", thumbnail included";
+    } else {
+      setThumbUrl("");
+      setSelectedThumb(null);
+    }
+
+    setNotice({ ok: true, text: `Loaded "${u.file_name}" for ${u.clients?.name || "client"} — type auto-set to ${u.content_type}${thumbNote}.` });
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  // Pick a cover from the Thumbnail section.
+  const applyHubThumb = (t: HubUpload) => {
+    setThumbUrl(t.file_url);
+    setSelFrame(null);
+    setSelectedThumb({ id: t.id, name: t.file_name || "thumbnail" });
+    setNotice({ ok: true, text: `Thumbnail set from Content Hub: "${t.file_name}".` });
   };
 
   // Content type: select 1 or 2 (e.g. Reel + Story).
@@ -277,7 +316,7 @@ export default function SocialPublisherPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Upload failed");
       if (kind === "media") { setMediaUrl(data.url); setMediaName(data.fileName); setMediaIsVideo(data.mediaType === "video"); }
-      else setThumbUrl(data.url);
+      else { setThumbUrl(data.url); setSelectedThumb(null); }
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Upload failed" });
     } finally { setUploading(null); }
@@ -306,14 +345,14 @@ export default function SocialPublisherPage() {
     try {
       const res = await fetch("/api/social-publisher", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, platforms, contentTypes, title, caption, mediaUrl, mediaIsVideo, thumbnailUrl: thumbUrl || undefined, scheduledFor: composeSchedule(), uploadId: selectedUpload?.id }),
+        body: JSON.stringify({ clientId, platforms, contentTypes, title, caption, mediaUrl, mediaIsVideo, thumbnailUrl: thumbUrl || undefined, scheduledFor: composeSchedule(), uploadId: selectedUpload?.id, thumbUploadId: selectedThumb?.id }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Send failed");
       const okCount = (data.results || []).filter((r: { ok: boolean }) => r.ok).length;
       const failCount = (data.results || []).length - okCount;
       setNotice({ ok: failCount === 0, text: failCount === 0 ? `Sent via RecurPost for ${okCount} post(s) ✅` : `${okCount} sent, ${failCount} failed — see history below.` });
-      if (failCount === 0) { setTitle(""); setCaption(""); setCaptionBrief(""); setMediaUrl(""); setMediaName(""); setThumbUrl(""); setScheduledDate(""); setScheduledTime(""); setSelectedUpload(null); }
+      if (failCount === 0) { setTitle(""); setCaption(""); setCaptionBrief(""); setMediaUrl(""); setMediaName(""); setThumbUrl(""); setScheduledDate(""); setScheduledTime(""); setSelectedUpload(null); setSelectedThumb(null); }
       await loadHistory();
       await loadHubUploads();
     } catch (err: unknown) {
@@ -323,20 +362,35 @@ export default function SocialPublisherPage() {
 
   const canSend = !!clientId && platforms.length > 0 && contentTypes.length > 0 && !!mediaUrl && !sending;
 
-  // Per-client sequence numbers for the Content Hub tray (upload order = 1,2,3…)
+  // Per-client sequence numbers. The number in the filename wins (that's what the
+  // designer and the video editor agreed on); upload order is the fallback.
   const hubSeq: Record<string, number> = {};
   const hubClientTotals: Record<string, number> = {};
   {
     const byClient: Record<string, HubUpload[]> = {};
-    hubUploads.forEach((u) => { (byClient[u.client_id] ||= []).push(u); });
+    hubMedia.forEach((u) => { (byClient[u.client_id] ||= []).push(u); });
     Object.values(byClient).forEach((list) => {
       list.sort((a, b) => a.created_at.localeCompare(b.created_at));
-      list.forEach((u, i) => { hubSeq[u.id] = i + 1; });
+      list.forEach((u, i) => { hubSeq[u.id] = numOf(u.file_name) ?? i + 1; });
       const cname = list[0]?.clients?.name || "Unknown";
       hubClientTotals[cname] = list.length;
     });
   }
-  const hubSorted = [...hubUploads].sort((a, b) => {
+  const thumbSeq: Record<string, number> = {};
+  {
+    const byClient: Record<string, HubUpload[]> = {};
+    hubThumbs.forEach((u) => { (byClient[u.client_id] ||= []).push(u); });
+    Object.values(byClient).forEach((list) => {
+      list.sort((a, b) => a.created_at.localeCompare(b.created_at));
+      list.forEach((u, i) => { thumbSeq[u.id] = numOf(u.file_name) ?? i + 1; });
+    });
+  }
+  // Covers for the client being composed for, in number order.
+  const thumbsForClient = hubThumbs
+    .filter((t) => !clientId || t.client_id === clientId)
+    .sort((a, b) => (thumbSeq[a.id] || 0) - (thumbSeq[b.id] || 0));
+
+  const hubSorted = [...hubMedia].sort((a, b) => {
     const ca = a.clients?.name || "", cb = b.clients?.name || "";
     return ca === cb ? (hubSeq[a.id] || 0) - (hubSeq[b.id] || 0) : ca.localeCompare(cb);
   });
@@ -701,12 +755,13 @@ export default function SocialPublisherPage() {
           <h3 className="text-sm font-bold text-white flex items-center space-x-2">
             <UploadCloud className="w-4 h-4 text-[var(--yellow)]" />
             <span>Received from Content Hub</span>
-            {hubUploads.length > 0 && <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-950/40 border border-indigo-900 text-indigo-400">{hubUploads.length} waiting</span>}
+            {hubMedia.length > 0 && <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-950/40 border border-indigo-900 text-indigo-400">{hubMedia.length} waiting</span>}
+            {hubThumbs.length > 0 && <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-950/40 border border-emerald-900 text-emerald-400">{hubThumbs.length} thumbnails</span>}
           </h3>
-          {hubUploads.length > 0 && (
+          {hubMedia.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               <button onClick={() => setHubFilter("all")} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border cursor-pointer ${hubFilter === "all" ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>All</button>
-              {Array.from(new Set(hubUploads.map((u) => u.clients?.name || "Unknown"))).sort().map((n) => (
+              {Array.from(new Set(hubMedia.map((u) => u.clients?.name || "Unknown"))).sort().map((n) => (
                 <button key={n} onClick={() => setHubFilter(n)} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border cursor-pointer ${hubFilter === n ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>
                   {n} <span className="font-black">({hubClientTotals[n] || 0})</span>
                 </button>
@@ -714,7 +769,7 @@ export default function SocialPublisherPage() {
             </div>
           )}
         </div>
-        {hubUploads.length === 0 ? (
+        {hubMedia.length === 0 ? (
           <p className="text-xs text-slate-600 py-3 text-center">Nothing waiting — new designer uploads will appear here, grouped by client.</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -834,6 +889,44 @@ export default function SocialPublisherPage() {
             {thumbUrl && <img src={thumbUrl} alt="thumb" className="mt-2 h-24 rounded-lg object-cover border border-slate-800" />}
           </div>
         </div>
+
+        {/* Thumbnails from Content Hub — the designer uploads covers in their own
+            section, numbered to match the video editor's reels. */}
+        {thumbsForClient.length > 0 && (
+          <div className="border border-emerald-900/50 rounded-xl p-4 bg-emerald-950/10 space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <label className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-2">
+                <ImageIcon className="w-3.5 h-3.5" />
+                <span>Thumbnails from Content Hub <span className="text-slate-500 normal-case font-medium">— click the number that matches this reel</span></span>
+              </label>
+              {selectedThumb && <span className="text-[10px] font-bold text-emerald-400 truncate max-w-[220px]">Using #{thumbSeq[selectedThumb.id]} · {selectedThumb.name}</span>}
+            </div>
+            <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 gap-2">
+              {thumbsForClient.map((t) => {
+                const isMatch = selectedUpload && numOf(t.file_name) !== null && numOf(t.file_name) === numOf(selectedUpload.name);
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => applyHubThumb(t)}
+                    title={`${t.file_name || "thumbnail"}${isMatch ? " — number matches the loaded media" : ""}`}
+                    className={`relative rounded-lg overflow-hidden border-2 transition-all cursor-pointer ${
+                      selectedThumb?.id === t.id ? "border-[var(--yellow)] shadow-lg" : isMatch ? "border-emerald-500" : "border-slate-800 hover:border-emerald-500"
+                    }`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={t.file_url} alt={t.file_name || "thumbnail"} className="w-full object-cover" style={{ aspectRatio: "9 / 16" }} />
+                    <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-emerald-500 text-black text-[9px] font-black flex items-center justify-center">{thumbSeq[t.id]}</span>
+                    {selectedThumb?.id === t.id && (
+                      <span className="absolute bottom-0 right-0 text-[9px] font-black bg-[var(--yellow)] text-black px-1 rounded-tl">✓</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {!clientId && <p className="text-[10px] text-slate-600">Select a client to narrow these down.</p>}
+          </div>
+        )}
 
         {/* Thumbnail picker — the video itself plays in the Social preview panel */}
         {mediaIsVideo && mediaUrl && (
