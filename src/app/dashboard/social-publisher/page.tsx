@@ -763,28 +763,66 @@ export default function SocialPublisherPage() {
           </div>
         </div>
 
-        {/* Pick a thumbnail frame from the video — click a frame in the strip */}
+        {/* Review the video + pick its thumbnail, side by side */}
         {mediaIsVideo && mediaUrl && (
-          <div className="border border-slate-900 rounded-xl p-4 space-y-3 bg-slate-950/40">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="border border-slate-900 rounded-xl p-4 bg-slate-950/40 grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Left — watch the video to verify it's the right one */}
+            <div className="space-y-2">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                <span>Pick thumbnail from video <span className="text-slate-600 normal-case font-medium">— click the frame you want</span></span>
+                <span>Review video</span>
                 {videoDims && (
                   <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400 normal-case">
                     {videoDims.h > videoDims.w ? `Story/Reel ${videoDims.w}×${videoDims.h}` : `Landscape ${videoDims.w}×${videoDims.h}`}
                   </span>
                 )}
               </label>
+              {(() => {
+                const driveId = mediaUrl.match(/googleusercontent\.com\/d\/([^=/?&]+)/)?.[1] || mediaUrl.match(/drive\.google\.com\/file\/d\/([^/?&]+)/)?.[1];
+                const aspect = videoDims ? `${videoDims.w} / ${videoDims.h}` : "9 / 16";
+                return driveId ? (
+                  // Drive doesn't serve raw video bytes to <video>; use its player.
+                  <iframe
+                    src={`https://drive.google.com/file/d/${driveId}/preview`}
+                    allow="autoplay"
+                    className="w-full rounded-xl border border-slate-800 bg-black mx-auto"
+                    style={{ aspectRatio: aspect, maxHeight: 340 }}
+                  />
+                ) : (
+                  <video
+                    src={mediaUrl}
+                    controls
+                    playsInline
+                    className="w-full rounded-xl border border-slate-800 bg-black mx-auto object-contain"
+                    style={{ aspectRatio: aspect, maxHeight: 340 }}
+                  />
+                );
+              })()}
+              <p className="text-[10px] text-slate-500 truncate">{mediaName}</p>
+            </div>
+
+            {/* Right — thumbnail: pick a frame or use the uploaded one */}
+            <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                Thumbnail <span className="text-slate-600 normal-case font-medium">— click a frame, or upload your own above</span>
+              </label>
               {framesBusy && (
                 <span className="text-[10px] text-slate-500 flex items-center space-x-1.5">
-                  <Loader2 className="w-3 h-3 animate-spin" /><span>Reading frames… {frames.length}/8</span>
+                  <Loader2 className="w-3 h-3 animate-spin" /><span>Reading frames…</span>
                 </span>
               )}
             </div>
+            {thumbUrl && (
+              <div className="flex items-center gap-2">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={thumbUrl} alt="chosen thumbnail" className="h-16 rounded-lg border border-[var(--yellow)] object-cover" />
+                <span className="text-[10px] text-emerald-400 font-bold">Current thumbnail ✓</span>
+              </div>
+            )}
             {frames.length === 0 && !framesBusy ? (
               <p className="text-[11px] text-slate-600">No frames could be read from this video — upload a thumbnail file manually instead.</p>
             ) : (
-              <div className={`grid gap-2 ${videoDims && videoDims.h > videoDims.w ? "grid-cols-4 sm:grid-cols-6 lg:grid-cols-8" : "grid-cols-2 sm:grid-cols-4 lg:grid-cols-8"}`}>
+              <div className={`grid gap-2 ${videoDims && videoDims.h > videoDims.w ? "grid-cols-4 sm:grid-cols-5" : "grid-cols-2 sm:grid-cols-4"}`}>
                 {frames.map((f) => (
                   <button
                     key={f.t}
@@ -814,7 +852,7 @@ export default function SocialPublisherPage() {
                 ))}
               </div>
             )}
-            {thumbUrl && <p className="text-[11px] text-emerald-400 font-bold">Thumbnail set ✓ — click another frame or upload a file to replace it.</p>}
+            </div>
           </div>
         )}
 
