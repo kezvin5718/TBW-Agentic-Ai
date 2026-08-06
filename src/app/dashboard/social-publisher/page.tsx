@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye } from "lucide-react";
+import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2 } from "lucide-react";
 
 interface ClientRow { id: string; name: string; logo?: string }
 interface HubUpload {
@@ -15,6 +15,7 @@ interface HubUpload {
 interface PostRow {
   id: string; platform: string; content_type: string; title: string | null; caption: string | null;
   media_url: string; thumbnail_url: string | null; scheduled_for: string | null; status: string;
+  webhook_response?: string | null;
   created_at: string; clients?: { name: string } | null; profiles?: { name: string } | null;
 }
 
@@ -340,6 +341,59 @@ export default function SocialPublisherPage() {
     return ca === cb ? (hubSeq[a.id] || 0) - (hubSeq[b.id] || 0) : ca.localeCompare(cb);
   });
 
+  // --- Library (queue / history) ---------------------------------------------
+  const [view, setView] = useState<"compose" | "library">("compose");
+  const [libFilter, setLibFilter] = useState<"all" | "scheduled" | "posted" | "failed">("all");
+  const [libClient, setLibClient] = useState("all");
+  const [libSel, setLibSel] = useState<PostRow | null>(null);
+  const [libBusy, setLibBusy] = useState<string | null>(null);
+
+  const isFuture = (p: PostRow) => !!p.scheduled_for && new Date(p.scheduled_for).getTime() > Date.now();
+  const libRows = posts.filter((p) => {
+    if (libClient !== "all" && (p.clients?.name || "") !== libClient) return false;
+    if (libFilter === "failed") return p.status === "failed";
+    if (libFilter === "scheduled") return p.status === "sent" && isFuture(p);
+    if (libFilter === "posted") return p.status === "sent" && !isFuture(p);
+    return true;
+  });
+
+  const retryPost = async (p: PostRow) => {
+    setLibBusy(p.id);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/social-publisher", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "retry", id: p.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || data.error || "Retry failed");
+      setNotice({ ok: true, text: "Re-sent to RecurPost ✅" });
+      await loadHistory();
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Retry failed" });
+    } finally { setLibBusy(null); }
+  };
+
+  const deletePost = async (p: PostRow) => {
+    const warn = isFuture(p)
+      ? "Remove this from your library?\n\nNOTE: RecurPost has no cancel API — if it's still scheduled there, you must also delete it inside RecurPost or it will still go out."
+      : "Remove this post from your library?";
+    if (!window.confirm(warn)) return;
+    setLibBusy(p.id);
+    try {
+      const res = await fetch("/api/social-publisher", {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: p.id }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Delete failed");
+      if (libSel?.id === p.id) setLibSel(null);
+      await loadHistory();
+      setNotice({ ok: true, text: "Removed from library." });
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Delete failed" });
+    } finally { setLibBusy(null); }
+  };
+
   // --- Live social preview ---------------------------------------------------
   const [previewPlat, setPreviewPlat] = useState("instagram");
   const [previewType, setPreviewType] = useState("post");
@@ -496,11 +550,19 @@ export default function SocialPublisherPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
-          <Send className="w-6 h-6 text-[var(--yellow)]" /><span>Social Publisher</span>
-        </h1>
-        <p className="text-sm text-slate-500 mt-1">Pick the client, upload the creative, generate an on-brand caption, set the time — it posts through RecurPost to your connected accounts.</p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
+            <Send className="w-6 h-6 text-[var(--yellow)]" /><span>Social Publisher</span>
+          </h1>
+          <p className="text-sm text-slate-500 mt-1">Pick the client, upload the creative, generate an on-brand caption, set the time — it posts through RecurPost to your connected accounts.</p>
+        </div>
+        <div className="flex bg-slate-950 border border-slate-900 rounded-xl p-1 text-[10px] font-bold uppercase tracking-wider">
+          <button onClick={() => setView("compose")} className={`px-4 py-2 rounded-lg cursor-pointer transition-all ${view === "compose" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>Compose</button>
+          <button onClick={() => setView("library")} className={`px-4 py-2 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "library" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
+            <Eye className="w-3.5 h-3.5" /><span>Library ({posts.length})</span>
+          </button>
+        </div>
       </div>
 
       {notice && (
@@ -623,6 +685,7 @@ export default function SocialPublisherPage() {
         </div>
       )}
 
+      {view === "compose" && (<>
       {/* Received from Content Hub — what designers have delivered, per client */}
       <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5">
         <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
@@ -951,30 +1014,104 @@ export default function SocialPublisherPage() {
       </div>
       </div>
 
-      {/* History */}
-      <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5">
-        <h3 className="text-sm font-bold text-white mb-3">Recent Posts</h3>
-        {posts.length === 0 ? (
-          <p className="text-xs text-slate-600 py-6 text-center">Nothing sent yet.</p>
-        ) : (
-          <div className="space-y-2">
-            {posts.map((p) => (
-              <div key={p.id} className="flex items-center justify-between gap-3 border-b border-slate-900/60 py-2 text-xs flex-wrap">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${p.status === "sent" ? "bg-emerald-400" : "bg-rose-500"}`} />
-                  <span className="font-bold text-white truncate">{p.clients?.name || "—"}</span>
-                  <span className="text-slate-500 capitalize">{p.platform} · {p.content_type}</span>
-                  <span className="text-slate-600 truncate max-w-[220px]">{p.title || p.caption?.slice(0, 40) || ""}</span>
-                </div>
-                <div className="text-slate-600 shrink-0">
-                  {p.scheduled_for ? `⏰ ${new Date(p.scheduled_for).toLocaleString()}` : new Date(p.created_at).toLocaleString()}
-                  <span className="ml-2">{p.profiles?.name || ""}</span>
-                </div>
+      </>)}
+
+      {/* ------------------------------- LIBRARY ------------------------------- */}
+      {view === "library" && (
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5 items-start">
+          <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-3">
+            {/* Filters */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {([
+                { k: "all", label: `All (${posts.length})` },
+                { k: "scheduled", label: `⏰ Scheduled (${posts.filter((p) => p.status === "sent" && isFuture(p)).length})` },
+                { k: "posted", label: `✓ Posted (${posts.filter((p) => p.status === "sent" && !isFuture(p)).length})` },
+                { k: "failed", label: `⚠ Failed (${posts.filter((p) => p.status === "failed").length})` },
+              ] as const).map((f) => (
+                <button key={f.k} onClick={() => setLibFilter(f.k)} className={`px-3 py-1.5 rounded-full text-[11px] font-bold border cursor-pointer ${libFilter === f.k ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>{f.label}</button>
+              ))}
+              <select value={libClient} onChange={(e) => setLibClient(e.target.value)} className="ml-auto text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-white cursor-pointer focus:outline-none">
+                <option value="all">All clients</option>
+                {Array.from(new Set(posts.map((p) => p.clients?.name).filter(Boolean))).sort().map((n) => <option key={n} value={n as string}>{n}</option>)}
+              </select>
+            </div>
+
+            {libRows.length === 0 ? (
+              <p className="text-xs text-slate-600 py-10 text-center">Nothing here yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {libRows.map((p) => {
+                  const scheduled = p.status === "sent" && isFuture(p);
+                  return (
+                    <div key={p.id} onClick={() => setLibSel(p)} className={`flex items-center gap-3 rounded-xl border p-2.5 cursor-pointer transition-all ${libSel?.id === p.id ? "border-indigo-500 bg-indigo-950/20" : "border-slate-900 bg-slate-950/60 hover:border-slate-700"}`}>
+                      <div className="w-12 h-12 rounded-lg overflow-hidden bg-slate-900 border border-slate-800 shrink-0 flex items-center justify-center">
+                        {p.thumbnail_url || !/\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(p.media_url) ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={p.thumbnail_url || p.media_url} alt="" className="w-full h-full object-cover" />
+                        ) : <span className="text-slate-500 text-lg">▶</span>}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-bold text-white truncate">{p.clients?.name || "—"} <span className="text-slate-500 font-normal capitalize">· {p.platform} · {p.content_type}</span></p>
+                        <p className="text-[10px] text-slate-500 truncate">{p.title || p.caption?.slice(0, 70) || "(no caption)"}</p>
+                        <p className="text-[9px] text-slate-600">{p.scheduled_for ? `⏰ ${new Date(p.scheduled_for).toLocaleString()}` : new Date(p.created_at).toLocaleString()} · {p.profiles?.name || ""}</p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${p.status === "failed" ? "bg-rose-950/40 border-rose-900 text-rose-400" : scheduled ? "bg-amber-950/40 border-amber-900 text-amber-400" : "bg-emerald-950/40 border-emerald-900 text-emerald-400"}`}>
+                          {p.status === "failed" ? "FAILED" : scheduled ? "SCHEDULED" : "POSTED"}
+                        </span>
+                        {p.status === "failed" && (
+                          <button disabled={libBusy === p.id} onClick={() => retryPost(p)} title="Retry" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer disabled:opacity-50">
+                            {libBusy === p.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                          </button>
+                        )}
+                        <button disabled={libBusy === p.id} onClick={() => deletePost(p)} title="Remove from library" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-700 text-slate-500 hover:text-rose-400 cursor-pointer disabled:opacity-50">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
+            )}
           </div>
-        )}
-      </div>
+
+          {/* Selected post preview */}
+          <div className="pv lg:sticky lg:top-4 space-y-3">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2"><Eye className="w-4 h-4 text-[var(--yellow)]" /><span>Preview</span></h3>
+            {!libSel ? (
+              <p className="text-[11px] text-slate-600 bg-slate-950/40 border border-slate-900 rounded-2xl p-6 text-center">Click a post to preview how it looks.</p>
+            ) : (
+              <>
+                <div className="bg-white rounded-2xl overflow-hidden shadow-xl text-slate-900">
+                  <div className="flex items-center gap-2 px-3 py-2.5">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-amber-400 to-pink-500 flex items-center justify-center text-white font-black text-xs">{(libSel.clients?.name || "B")[0].toUpperCase()}</div>
+                    <span className="text-xs font-bold">{libSel.clients?.name}</span>
+                    <span className="ml-auto text-[10px] text-slate-500 capitalize">{libSel.platform}</span>
+                  </div>
+                  <div className={["reel", "story"].includes(libSel.content_type) ? "aspect-[9/16] bg-black" : "aspect-square bg-slate-100"}>
+                    {/\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(libSel.media_url) ? (
+                      <video src={libSel.media_url} poster={libSel.thumbnail_url || undefined} controls className="w-full h-full object-contain" />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={libSel.media_url} alt="" className="w-full h-full object-cover" />
+                    )}
+                  </div>
+                  <div className="px-3 py-2 text-xs">
+                    {libSel.title && <p className="font-bold mb-1">{libSel.title}</p>}
+                    <p className="text-slate-700 whitespace-pre-wrap break-words">{libSel.caption || "(no caption)"}</p>
+                  </div>
+                </div>
+                {libSel.status === "failed" && (
+                  <div className="bg-rose-950/30 border border-rose-900/60 rounded-xl p-2.5 text-[10px] text-rose-300">
+                    <b>Failure detail:</b>
+                    <p className="mt-1 break-words font-mono">{libSel.webhook_response || "—"}</p>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

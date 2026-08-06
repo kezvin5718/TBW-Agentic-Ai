@@ -31,6 +31,55 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json();
+
+  // --- Retry a failed post from the Library -------------------------------
+  if (body.action === "retry" && body.id) {
+    if (!isRecurPostConfigured()) {
+      return NextResponse.json({ error: "RecurPost is not configured." }, { status: 400 });
+    }
+    const admin = createServiceRoleClient();
+    const { data: post } = await admin.from("social_posts").select("*").eq("id", body.id).single();
+    if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
+
+    const { data: mapRow } = await admin.from("agency_settings").select("value").eq("key", "recurpost_account_map").maybeSingle();
+    const map = (mapRow?.value as Record<string, { client_id: string; platform: string }>) || {};
+    const accountId = Object.keys(map).find((k) => map[k]?.client_id === post.client_id && map[k]?.platform === post.platform);
+    if (!accountId) {
+      return NextResponse.json({ error: `No RecurPost account mapped for this client on ${post.platform}.` }, { status: 400 });
+    }
+
+    const isVideo = /\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(post.media_url as string);
+    const params: Record<string, unknown> = { id: accountId, message: post.caption || post.title || "" };
+    if (post.scheduled_for && new Date(post.scheduled_for as string).getTime() > Date.now()) {
+      params.schedule_date_time = new Date(post.scheduled_for as string).toISOString().slice(0, 19).replace("T", " ");
+    }
+    if (isVideo) params.video_url = post.media_url;
+    else params.image_url = [post.media_url];
+    if (post.platform === "facebook" && post.content_type !== "post") params.fb_post_type = post.content_type;
+    if (post.platform === "instagram") {
+      if (post.content_type !== "post") params.in_post_type = post.content_type;
+      if (post.content_type === "reel") params.in_reel_share_in_feed = "yes";
+    }
+    if (post.platform === "youtube") {
+      if (post.title) params.yt_title = post.title;
+      if (post.thumbnail_url) params.yt_thumbnail = post.thumbnail_url;
+    }
+    if (post.platform === "pinterest" && post.title) params.pi_title = post.title;
+
+    let ok = false;
+    let detail = "";
+    try {
+      const res = await postContent(params);
+      detail = JSON.stringify(res).slice(0, 300);
+      const lower = detail.toLowerCase();
+      ok = !(lower.includes('"error"') || lower.includes('"status":"failed"') || lower.includes("invalid"));
+    } catch (err: unknown) {
+      detail = err instanceof Error ? err.message : String(err);
+    }
+    await admin.from("social_posts").update({ status: ok ? "sent" : "failed", webhook_response: `[retry] ${detail}` }).eq("id", body.id);
+    return NextResponse.json({ success: ok, detail }, { status: ok ? 200 : 500 });
+  }
+
   const { clientId, platforms, title, caption, mediaUrl, thumbnailUrl, scheduledFor, uploadId } = body;
   const contentTypes: string[] = Array.isArray(body.contentTypes) ? body.contentTypes : body.contentType ? [body.contentType] : [];
   if (!clientId) return NextResponse.json({ error: "Select a client" }, { status: 400 });
@@ -117,4 +166,24 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ success: failed.length === 0, results });
+}
+
+// DELETE — remove a post from the Library. Note: RecurPost's API has no cancel
+// endpoint, so this only clears our record; a future-scheduled post must also be
+// cancelled inside RecurPost itself.
+export async function DELETE(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = (user?.user_metadata?.role as string) || "client";
+  if (!user || !["founder", "employee"].includes(role)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  const body = await request.json();
+  const ids: string[] = Array.isArray(body.ids) && body.ids.length ? body.ids : body.id ? [body.id] : [];
+  if (ids.length === 0) return NextResponse.json({ error: "id or ids required" }, { status: 400 });
+
+  const admin = createServiceRoleClient();
+  const { error } = await admin.from("social_posts").delete().in("id", ids);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ success: true, deleted: ids.length });
 }
