@@ -4,7 +4,8 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "TBW — The Brand Wagon",
   description: "Agentic AI Operations System for TBW Advertising",
-  icons: { icon: "/tbw-logo.png", apple: "/tbw-logo.png" },
+  // The tab icon comes from src/app/icon.png (and apple-icon.png) — Next picks
+  // them up by filename. Declaring icons here would override that.
 };
 
 export default function RootLayout({
