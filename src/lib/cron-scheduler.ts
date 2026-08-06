@@ -139,6 +139,23 @@ export function startCronScheduler() {
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;
 
+  // 7. Storage sweep (3:30 AM IST) — move spent files to Drive, free Supabase.
+  cron.schedule("30 3 * * *", async () => {
+    console.log("⏰ In-App Cron: Starting Storage Sweep...");
+    try {
+      const { sweepAll } = await import("@/lib/storage-archiver");
+      const res = await sweepAll();
+      cronSchedulerStatus.lastRun["storage_sweep"] = new Date().toISOString();
+      const mb = (res.freedBytes / 1024 / 1024).toFixed(1);
+      console.log(`✅ In-App Cron: Storage sweep freed ${mb} MB (${res.references.archived} refs, ${res.social.archived} post files).`);
+      for (const e of [...res.references.errors, ...res.social.errors]) console.warn("   ↳ sweep:", e);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: Storage sweep failed:", msg);
+    }
+  }, { timezone: "Asia/Kolkata" });
+  cronSchedulerStatus.jobsScheduledCount++;
+
   console.log(`⏱️ In-App Cron: Scheduler active. Total jobs scheduled: ${cronSchedulerStatus.jobsScheduledCount}`);
 }
 export default startCronScheduler;

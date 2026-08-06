@@ -109,6 +109,12 @@ export async function POST(request: Request) {
 
     console.log(`✅ Higgsfield MCP: Confirmed Media ID: ${confirmedMediaId}`);
 
+    // NOTE: the staged copy is spent the moment Higgsfield returns a media id,
+    // but the studio_generations row that records this reference is written
+    // later, once generation finishes. Deleting here would strand that row, so
+    // cleanup is left to the nightly sweep in storage-archiver.ts, which only
+    // touches files older than a day and re-points anything still referenced.
+
     return NextResponse.json({
       success: true,
       mediaUrl: fullPublicUrl,

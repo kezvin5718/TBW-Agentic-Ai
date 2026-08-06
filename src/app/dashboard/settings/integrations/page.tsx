@@ -48,6 +48,33 @@ export default function IntegrationsPage() {
 
   // Google Drive states
   const [driveStatus, setDriveStatus] = useState<{ connected: boolean; email?: string; configured: boolean } | null>(null);
+
+  // Storage cleanup: check first (dry run), then apply.
+  const [sweeping, setSweeping] = useState(false);
+  const [sweepResult, setSweepResult] = useState<null | {
+    dryRun: boolean; summary: string;
+    references?: { skipped: string[]; errors: string[] };
+    social?: { skipped: string[]; errors: string[] };
+  }>(null);
+
+  const runSweep = async (apply: boolean) => {
+    setSweeping(true);
+    setSweepResult(null);
+    try {
+      const res = await fetch("/api/storage/sweep", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apply }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Cleanup failed");
+      setSweepResult(data);
+    } catch (err: unknown) {
+      setSweepResult({ dryRun: true, summary: err instanceof Error ? err.message : "Cleanup failed" });
+    } finally {
+      setSweeping(false);
+    }
+  };
   const [driveDisconnecting, setDriveDisconnecting] = useState(false);
 
   const fetchDriveStatus = async () => {
@@ -504,6 +531,53 @@ export default function IntegrationsPage() {
           <span className="text-[8px] font-extrabold uppercase text-indigo-400 block mb-0.5">Redirect URL (add this in Google Cloud → Clients):</span>
           <span className="block truncate">https://bron.digital/api/integrations/google-drive/callback</span>
         </div>
+      </div>
+
+      {/* Storage sweep — move spent files off Supabase, onto Drive */}
+      <div className="bg-slate-900/20 border border-slate-800/60 rounded-2xl p-5 space-y-3">
+        <div>
+          <h3 className="text-sm font-bold text-white">Storage cleanup</h3>
+          <p className="text-[11px] text-slate-500 mt-0.5 max-w-2xl">
+            Supabase only holds files while an outside service still needs to fetch them — Higgsfield collecting a
+            reference image, RecurPost collecting a video. Once a post has gone out, the file is moved to your Drive
+            and the Supabase copy is freed. This runs by itself every night at 3:30 AM; use these to run it now.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => runSweep(false)}
+            disabled={sweeping}
+            className="flex items-center space-x-1.5 bg-slate-900 border border-slate-800 hover:border-indigo-600 text-white text-xs font-bold py-2.5 px-4 rounded-xl cursor-pointer disabled:opacity-40"
+          >
+            {sweeping ? <Loader2 className="w-4 h-4 animate-spin" /> : <HardDrive className="w-4 h-4" />}
+            <span>Check what can be cleared</span>
+          </button>
+          <button
+            onClick={() => {
+              if (window.confirm("Move all spent files to Google Drive and free them from Supabase?\n\nNothing is deleted without being archived to Drive first, and files still needed by a post that hasn\u2019t gone out are left alone.")) {
+                runSweep(true);
+              }
+            }}
+            disabled={sweeping || !sweepResult || sweepResult.dryRun === false}
+            title={!sweepResult ? "Run the check first" : ""}
+            className="flex items-center space-x-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-bold py-2.5 px-4 rounded-xl cursor-pointer disabled:opacity-40"
+          >
+            <span>Move to Drive &amp; free space</span>
+          </button>
+        </div>
+
+        {sweepResult && (
+          <div className="p-3 bg-slate-950/40 border border-slate-900 rounded-xl text-[11px] space-y-1.5">
+            <p className={sweepResult.dryRun ? "text-amber-300 font-bold" : "text-emerald-300 font-bold"}>{sweepResult.summary}</p>
+            {[...(sweepResult.references?.skipped || []), ...(sweepResult.social?.skipped || [])].slice(0, 6).map((sk: string, i: number) => (
+              <p key={i} className="text-slate-500">· kept: {sk}</p>
+            ))}
+            {[...(sweepResult.references?.errors || []), ...(sweepResult.social?.errors || [])].map((e: string, i: number) => (
+              <p key={i} className="text-rose-400">· {e}</p>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
