@@ -347,6 +347,11 @@ export default function SocialPublisherPage() {
   const [libClient, setLibClient] = useState("all");
   const [libSel, setLibSel] = useState<PostRow | null>(null);
   const [libBusy, setLibBusy] = useState<string | null>(null);
+  const [libView, setLibView] = useState<"month" | "list">("month");
+  const [libMonth, setLibMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+
+  const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const postDate = (p: PostRow) => new Date(p.scheduled_for || p.created_at);
 
   const isFuture = (p: PostRow) => !!p.scheduled_for && new Date(p.scheduled_for).getTime() > Date.now();
   const libRows = posts.filter((p) => {
@@ -553,7 +558,7 @@ export default function SocialPublisherPage() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className={`${view === "library" ? "max-w-7xl" : "max-w-4xl"} mx-auto space-y-6`}>
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
@@ -1010,7 +1015,72 @@ export default function SocialPublisherPage() {
               </select>
             </div>
 
-            {libRows.length === 0 ? (
+            {/* View toggle + month navigation */}
+            <div className="flex items-center gap-3 flex-wrap border-t border-slate-900 pt-3">
+              <div className="flex bg-slate-950 border border-slate-900 rounded-lg p-0.5 text-[10px] font-bold uppercase">
+                {(["month", "list"] as const).map((v) => (
+                  <button key={v} onClick={() => setLibView(v)} className={`px-3 py-1.5 rounded-md cursor-pointer ${libView === v ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>{v}</button>
+                ))}
+              </div>
+              {libView === "month" && (
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setLibMonth(new Date(libMonth.getFullYear(), libMonth.getMonth() - 1, 1))} className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white cursor-pointer">‹</button>
+                  <span className="text-sm font-bold text-white min-w-[130px] text-center">{libMonth.toLocaleString(undefined, { month: "long", year: "numeric" })}</span>
+                  <button onClick={() => setLibMonth(new Date(libMonth.getFullYear(), libMonth.getMonth() + 1, 1))} className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white cursor-pointer">›</button>
+                  <button onClick={() => { const d = new Date(); setLibMonth(new Date(d.getFullYear(), d.getMonth(), 1)); }} className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">Today</button>
+                </div>
+              )}
+            </div>
+
+            {/* ---- MONTH CALENDAR ---- */}
+            {libView === "month" ? (() => {
+              const y = libMonth.getFullYear(), m = libMonth.getMonth();
+              const lead = new Date(y, m, 1).getDay();
+              const days = new Date(y, m + 1, 0).getDate();
+              const byDay: Record<string, PostRow[]> = {};
+              libRows.forEach((p) => { (byDay[dayKey(postDate(p))] ||= []).push(p); });
+              const todayKey = dayKey(new Date());
+              const cells: Array<number | null> = [...Array(lead).fill(null), ...Array.from({ length: days }, (_, i) => i + 1)];
+              return (
+                <div className="overflow-x-auto">
+                  <div className="grid grid-cols-7 gap-px bg-slate-900 border border-slate-900 rounded-xl overflow-hidden min-w-[720px]">
+                    {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+                      <div key={d} className="bg-slate-950 py-2 text-center text-[10px] font-black text-slate-500 uppercase tracking-wider">{d}</div>
+                    ))}
+                    {cells.map((day, i) => {
+                      if (day === null) return <div key={`b${i}`} className="bg-slate-950/40 min-h-[110px]" />;
+                      const k = dayKey(new Date(y, m, day));
+                      const dayPosts = (byDay[k] || []).sort((a, b) => postDate(a).getTime() - postDate(b).getTime());
+                      return (
+                        <div key={k} className={`bg-slate-950/70 min-h-[110px] p-1.5 space-y-1 ${k === todayKey ? "ring-1 ring-inset ring-[var(--yellow)]" : ""}`}>
+                          <div className="flex items-center justify-between">
+                            <span className={`text-[11px] font-bold ${k === todayKey ? "text-[var(--yellow)]" : "text-slate-400"}`}>{day}</span>
+                            {dayPosts.length > 0 && <span className="text-[8px] font-black px-1 rounded bg-slate-900 text-slate-500">{dayPosts.length}</span>}
+                          </div>
+                          {dayPosts.slice(0, 3).map((p) => {
+                            const sch = p.status === "sent" && isFuture(p);
+                            return (
+                              <button key={p.id} onClick={() => setLibSel(p)} title={`${p.clients?.name} · ${p.platform} · ${p.caption?.slice(0, 60) || ""}`}
+                                className={`w-full text-left rounded-md border p-1 flex items-center gap-1 cursor-pointer transition-all ${libSel?.id === p.id ? "border-indigo-500 bg-indigo-950/30" : "border-slate-800 bg-slate-950 hover:border-slate-600"}`}>
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${p.status === "failed" ? "bg-rose-500" : sch ? "bg-amber-400" : "bg-emerald-400"}`} />
+                                <div className="w-5 h-5 rounded overflow-hidden bg-slate-900 shrink-0">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img src={p.thumbnail_url || p.media_url} alt="" className="w-full h-full object-cover" />
+                                </div>
+                                <span className="text-[8.5px] text-slate-300 truncate leading-tight">
+                                  {postDate(p).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} {p.clients?.name}
+                                </span>
+                              </button>
+                            );
+                          })}
+                          {dayPosts.length > 3 && <p className="text-[8px] text-indigo-400 font-bold pl-1">+{dayPosts.length - 3} more</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })() : libRows.length === 0 ? (
               <p className="text-xs text-slate-600 py-10 text-center">Nothing here yet.</p>
             ) : (
               <div className="space-y-2">
@@ -1074,6 +1144,19 @@ export default function SocialPublisherPage() {
                     {libSel.title && <p className="font-bold mb-1">{libSel.title}</p>}
                     <p className="text-slate-700 whitespace-pre-wrap break-words">{libSel.caption || "(no caption)"}</p>
                   </div>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] text-slate-500">
+                    {libSel.scheduled_for ? `⏰ ${new Date(libSel.scheduled_for).toLocaleString()}` : new Date(libSel.created_at).toLocaleString()}
+                  </span>
+                  {libSel.status === "failed" && (
+                    <button disabled={libBusy === libSel.id} onClick={() => retryPost(libSel)} className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1">
+                      {libBusy === libSel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}<span>Retry</span>
+                    </button>
+                  )}
+                  <button disabled={libBusy === libSel.id} onClick={() => deletePost(libSel)} className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1">
+                    <Trash2 className="w-3 h-3" /><span>Remove</span>
+                  </button>
                 </div>
                 {libSel.status === "failed" && (
                   <div className="bg-rose-950/30 border border-rose-900/60 rounded-xl p-2.5 text-[10px] text-rose-300">
