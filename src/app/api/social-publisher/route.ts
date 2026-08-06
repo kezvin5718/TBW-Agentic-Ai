@@ -49,7 +49,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `No RecurPost account mapped for this client on ${post.platform}.` }, { status: 400 });
     }
 
-    const isVideo = /\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(post.media_url as string);
+    // media_is_video is what the composer actually knew at send time — trust it
+    // when present. Older rows (before this column existed) fall back to the
+    // URL's extension, which is wrong for extension-less Drive links.
+    const isVideo = post.media_is_video ?? /\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(post.media_url as string);
+    if (post.content_type === "reel" && !isVideo) {
+      return NextResponse.json({ error: "This was sent as an image tagged Reel — Meta rejects that. Fix it in Content Hub or Social Publisher and send it as a new post rather than retrying." }, { status: 400 });
+    }
     const params: Record<string, unknown> = { id: accountId, message: post.caption || post.title || "" };
     if (post.scheduled_for && new Date(post.scheduled_for as string).getTime() > Date.now()) {
       // RecurPost schedules in the account's own (IST) clock, so send IST —
@@ -91,6 +97,12 @@ export async function POST(request: NextRequest) {
   if (contentTypes.length === 0 || contentTypes.some((t) => !["post", "reel", "story"].includes(t))) {
     return NextResponse.json({ error: "Select 1–2 valid content types" }, { status: 400 });
   }
+  const mediaIsVideo = !!body.mediaIsVideo || /\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(mediaUrl);
+  // Meta rejects a Reel that isn't an actual video — catch it here instead of
+  // letting RecurPost bounce it back as an opaque "URL is not a video" 415.
+  if (contentTypes.includes("reel") && !mediaIsVideo) {
+    return NextResponse.json({ error: "Reel needs an actual video — the media given is an image. Upload a video, or drop Reel from the content types." }, { status: 400 });
+  }
   if (!isRecurPostConfigured()) {
     return NextResponse.json({ error: "RecurPost is not configured — add RECURPOST_EMAIL and RECURPOST_API_KEY to the server .env and redeploy." }, { status: 400 });
   }
@@ -99,7 +111,6 @@ export async function POST(request: NextRequest) {
   const { data: mapRow } = await admin.from("agency_settings").select("value").eq("key", "recurpost_account_map").maybeSingle();
   const rpMapping = (mapRow?.value as Record<string, { client_id: string; platform: string }>) || {};
 
-  const mediaIsVideo = !!body.mediaIsVideo || /\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(mediaUrl);
   const { data: client } = await admin.from("clients").select("name").eq("id", clientId).single();
 
   const results: Array<{ platform: string; contentType: string; ok: boolean; detail: string }> = [];
@@ -153,6 +164,7 @@ export async function POST(request: NextRequest) {
         title: title || null,
         caption: caption || null,
         media_url: mediaUrl,
+        media_is_video: mediaIsVideo,
         thumbnail_url: thumbnailUrl || null,
         scheduled_for: scheduledFor ? istWallClockToUtc(scheduledFor).toISOString() : null,
         status: ok ? "sent" : "failed",

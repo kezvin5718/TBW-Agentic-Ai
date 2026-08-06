@@ -364,7 +364,10 @@ export default function SocialPublisherPage() {
     } finally { setSending(false); }
   };
 
-  const canSend = !!clientId && platforms.length > 0 && contentTypes.length > 0 && !!mediaUrl && !sending;
+  // Reels are a hard requirement on Meta — a still image tagged "Reel" always
+  // fails there, and used to surface as a cryptic RecurPost 415. Catch it here.
+  const reelNeedsVideo = contentTypes.includes("reel") && !!mediaUrl && !mediaIsVideo;
+  const canSend = !!clientId && platforms.length > 0 && contentTypes.length > 0 && !!mediaUrl && !reelNeedsVideo && !sending;
 
   // Per-client sequence numbers. The number in the filename wins (that's what the
   // designer and the video editor agreed on); upload order is the fallback.
@@ -836,6 +839,11 @@ export default function SocialPublisherPage() {
                 <button key={t} onClick={() => toggleType(t)} className={`px-4 py-2 rounded-full text-xs font-bold border capitalize cursor-pointer transition-all ${contentTypes.includes(t) ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>{t}</button>
               ))}
             </div>
+            {reelNeedsVideo && (
+              <p className="text-[10px] text-rose-400 font-bold mt-1.5 flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3 shrink-0" /> Reel needs an actual video — the media loaded is an image. Upload a video, or switch to Post/Story.
+              </p>
+            )}
           </div>
         </div>
 
