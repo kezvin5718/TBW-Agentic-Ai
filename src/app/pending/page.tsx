@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { Clock } from "lucide-react";
+import BrandLogo from "@/app/dashboard/BrandLogo";
 
 export default async function PendingPage() {
   const supabase = await createClient();
@@ -13,6 +14,7 @@ export default async function PendingPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-950 p-6">
       <div className="max-w-md w-full bg-slate-900/40 border border-slate-800 rounded-3xl p-8 text-center space-y-4">
+        <div className="flex justify-center pb-2"><BrandLogo height={44} /></div>
         <div className="w-14 h-14 rounded-2xl bg-amber-950/40 border border-amber-900 flex items-center justify-center mx-auto">
           <Clock className="w-7 h-7 text-amber-400" />
         </div>

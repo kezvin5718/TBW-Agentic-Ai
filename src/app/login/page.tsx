@@ -4,6 +4,7 @@ import { useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Sparkles, Mail, Lock, User, Shield, Briefcase, ChevronRight, AlertCircle, CheckCircle2 } from "lucide-react";
+import BrandLogo from "@/app/dashboard/BrandLogo";
 
 function LoginForm() {
   const router = useRouter();
@@ -99,9 +100,7 @@ function LoginForm() {
           <span className="text-xs font-semibold tracking-wider uppercase text-indigo-300">Agentic AI Agency Platform</span>
         </div>
 
-        <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-200 to-indigo-400 bg-clip-text text-transparent leading-tight">
-          tbw-os
-        </h1>
+        <BrandLogo height={84} />
         <p className="text-lg text-slate-400 leading-relaxed max-w-md">
           The intelligent operations engine for <span className="text-indigo-300 font-semibold">TBW Advertising</span>. Automating AI ad generation, campaign planning, publishing, and analytics for brands across India.
         </p>

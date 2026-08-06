@@ -3,11 +3,24 @@
 import { useState } from "react";
 
 /**
- * Shows public/tbw-logo.png if present (inverted to white for the dark sidebar),
- * otherwise falls back to the TBW / The Brand Wagon wordmark. Drop the logo file
- * in and it appears automatically — no code change needed.
+ * Shows public/tbw-logo.png if present, otherwise falls back to the
+ * TBW / THE BRAND WAGON wordmark. Drop the logo file in and it appears
+ * everywhere it's used — sidebar, login, pending — with no code change.
+ *
+ * `invert` white-ises the dark logo for dark surfaces (disabled in day view
+ * via the .brand-logo-img rule in globals.css).
  */
-export default function BrandLogo() {
+export default function BrandLogo({
+  height = 36,
+  className = "",
+  invert = true,
+  stacked = true,
+}: {
+  height?: number;
+  className?: string;
+  invert?: boolean;
+  stacked?: boolean;
+}) {
   const [imgOk, setImgOk] = useState(true);
 
   if (imgOk) {
@@ -17,16 +30,29 @@ export default function BrandLogo() {
         src="/tbw-logo.png"
         alt="TBW — The Brand Wagon"
         onError={() => setImgOk(false)}
-        className="brand-logo-img h-9 w-auto max-w-[150px] object-contain"
-        style={{ filter: "invert(1)" }}
+        className={`brand-logo-img w-auto object-contain ${className}`}
+        style={{ height, filter: invert ? "invert(1)" : undefined }}
       />
     );
   }
 
+  const size = Math.round(height * 0.72);
   return (
-    <div className="leading-none">
-      <span className="font-extrabold text-2xl text-white tracking-[-0.07em] group-hover:text-[var(--yellow)] transition-colors">TBW</span>
-      <span className="block text-[7.5px] font-bold text-slate-500 tracking-[0.3em] uppercase mt-1">The Brand Wagon</span>
+    <div className={`leading-none ${className}`}>
+      <span
+        className="font-extrabold text-white tracking-[-0.07em] group-hover:text-[var(--yellow)] transition-colors"
+        style={{ fontSize: size }}
+      >
+        TBW
+      </span>
+      {stacked && (
+        <span
+          className="block font-bold text-slate-500 tracking-[0.3em] uppercase mt-1"
+          style={{ fontSize: Math.max(6.5, size * 0.22) }}
+        >
+          The Brand Wagon
+        </span>
+      )}
     </div>
   );
 }

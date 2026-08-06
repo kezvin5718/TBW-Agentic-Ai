@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "tbw-os — TBW Advertising",
+  title: "TBW — The Brand Wagon",
   description: "Agentic AI Operations System for TBW Advertising",
+  icons: { icon: "/tbw-logo.png", apple: "/tbw-logo.png" },
 };
 
 export default function RootLayout({
