@@ -23,11 +23,20 @@ interface UploadRow {
   profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
 }
 
+/**
+ * Editors export from Premiere, CapCut, phones and WhatsApp, so the same reel
+ * arrives as .mp4, .mov, .m4v or occasionally .mkv — and the MIME the browser
+ * reports for it is not dependable. Accept both spellings of every format.
+ */
+const VIDEO_MIME = "video/mp4,video/quicktime,video/x-m4v,video/webm";
+const VIDEO_EXT = ".mp4,.mov,.m4v,.webm,.mkv,.avi";
+const IMAGE_EXT = ".jpg,.jpeg,.png,.webp,.heic,.heif,.gif";
+
 const TYPES = [
-  { key: "post", label: "Post", Icon: ImageIcon, desc: "Square or landscape posts for the social media feed.", size: "1080 × 1080 or 1200 × 628 px", formats: "JPG, PNG, MP4, MOV", accent: "indigo" },
-  { key: "reel", label: "Reel", Icon: Film, desc: "Vertical videos for short-form content.", size: "1080 × 1920 px (9:16)", formats: "MP4, MOV", accent: "pink" },
-  { key: "story", label: "Story", Icon: Smartphone, desc: "Vertical stories for Instagram and Facebook.", size: "1080 × 1920 px (9:16)", formats: "JPG, PNG, MP4, MOV", accent: "amber" },
-  { key: "thumbnail", label: "Thumbnail", Icon: ImageIcon, desc: "Reel/video covers made by the designer — numbered to match the reels.", size: "1080 × 1920 px (9:16)", formats: "JPG, PNG", accent: "emerald" },
+  { key: "post", label: "Post", Icon: ImageIcon, desc: "Square or landscape posts for the social media feed.", size: "1080 × 1080 or 1200 × 628 px", formats: "JPG, PNG, MP4, MOV, WEBM", accent: "indigo" },
+  { key: "reel", label: "Reel", Icon: Film, desc: "Vertical videos for short-form content.", size: "1080 × 1920 px (9:16)", formats: "MP4, MOV, M4V, WEBM", accent: "pink" },
+  { key: "story", label: "Story", Icon: Smartphone, desc: "Vertical stories for Instagram and Facebook.", size: "1080 × 1920 px (9:16)", formats: "JPG, PNG, MP4, MOV, WEBM", accent: "amber" },
+  { key: "thumbnail", label: "Thumbnail", Icon: ImageIcon, desc: "Reel/video covers made by the designer — numbered to match the reels.", size: "1080 × 1920 px (9:16)", formats: "JPG, PNG, WEBP, HEIC", accent: "emerald" },
 ] as const;
 
 const ACCENT: Record<string, { text: string; ring: string; btn: string }> = {
@@ -281,10 +290,15 @@ export default function ContentHubPage() {
           {TYPES.map(({ key, label, Icon, desc, size, formats, accent }) => {
             const a = ACCENT[accent];
             const busy = uploadingType === key;
+            // Match on extension as well as MIME. Listing MIME types alone
+            // greys the file out in the picker whenever the OS reports
+            // something unexpected — an .mp4 as application/octet-stream, a
+            // .mov as video/x-quicktime — which reads as "I can't select my
+            // video at all", and nothing ever reaches the staging list.
             const accept =
-              key === "reel" ? "video/mp4,video/quicktime"
-              : key === "thumbnail" ? "image/*"
-              : "image/*,video/mp4,video/quicktime";
+              key === "reel" ? `${VIDEO_MIME},${VIDEO_EXT}`
+              : key === "thumbnail" ? `image/*,${IMAGE_EXT}`
+              : `image/*,${VIDEO_MIME},${IMAGE_EXT},${VIDEO_EXT}`;
             return (
               <div key={key} className={`rounded-2xl border ${a.ring} bg-slate-950/60 p-4 flex flex-col`}>
                 <div className="flex items-center space-x-2 mb-3">
@@ -358,8 +372,13 @@ export default function ContentHubPage() {
                       title={!selectedClient ? "Select a client first" : (staged[key]?.length || 0) === 0 ? "Add files first" : ""}
                       className={`flex-1 py-2 rounded-lg text-white text-xs font-bold ${a.btn} disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer`}
                     >
+                      {/* Name the actual blocker — saying "add files first"
+                          when a client was never picked sends people hunting
+                          for a problem with their files. */}
                       {busy
                         ? `Uploading ${uploadCount ? `${uploadCount.done + 1}/${uploadCount.total}` : ""}…`
+                        : !selectedClient
+                        ? "⬆ Upload (pick a client above first)"
                         : (staged[key]?.length || 0) === 0
                         ? "⬆ Upload (add files first)"
                         : `⬆ Upload ${staged[key].length} file${staged[key].length > 1 ? "s" : ""} & run QC`}
