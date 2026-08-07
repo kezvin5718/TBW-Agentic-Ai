@@ -29,50 +29,64 @@ export async function POST(
     }
 
     const formData = await request.formData();
-    const file = formData.get("file") as File;
+    // A ChatGPT or Claude memory export is dozens of small .md files, so accept
+    // the whole selection at once. "file" (singular) still works for old callers.
+    const files = formData.getAll("file").filter((f): f is File => f instanceof File);
 
-    if (!file) {
+    if (files.length === 0) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     }
 
-    const fileName = file.name.toLowerCase();
+    const isReadable = (n: string) => /\.(txt|md|markdown|json|csv)$/i.test(n);
     let textContent = "";
+    const skipped: string[] = [];
+    const readFiles: string[] = [];
 
-    // Parse ZIP file
-    if (fileName.endsWith(".zip")) {
-      try {
-        const buffer = Buffer.from(await file.arrayBuffer());
-        const zip = new AdmZip(buffer);
-        const zipEntries = zip.getEntries();
+    for (const file of files) {
+      const fileName = file.name.toLowerCase();
 
-        for (const entry of zipEntries) {
-          if (entry.isDirectory) continue;
-          const entryName = entry.entryName.toLowerCase();
-          if (
-            entryName.endsWith(".txt") ||
-            entryName.endsWith(".md") ||
-            entryName.endsWith(".json")
-          ) {
+      if (fileName.endsWith(".zip")) {
+        try {
+          const buffer = Buffer.from(await file.arrayBuffer());
+          const zip = new AdmZip(buffer);
+          let tookAny = false;
+          for (const entry of zip.getEntries()) {
+            if (entry.isDirectory) continue;
+            if (!isReadable(entry.entryName)) continue;
             textContent += `\n--- File: ${entry.entryName} ---\n` + entry.getData().toString("utf8");
+            tookAny = true;
           }
+          if (tookAny) readFiles.push(file.name);
+          else skipped.push(`${file.name} (no readable files inside)`);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return NextResponse.json({ error: `Failed to extract ${file.name}: ${msg}` }, { status: 400 });
         }
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return NextResponse.json({ error: `Failed to extract zip archive: ${msg}` }, { status: 400 });
+      } else if (isReadable(fileName)) {
+        textContent += `\n--- File: ${file.name} ---\n` + (await file.text());
+        readFiles.push(file.name);
+      } else {
+        skipped.push(file.name);
       }
-    } else if (
-      fileName.endsWith(".txt") ||
-      fileName.endsWith(".md") ||
-      fileName.endsWith(".json")
-    ) {
-      textContent = await file.text();
-    } else {
-      return NextResponse.json({ error: "Unsupported file type. Only .txt, .md, .json, and .zip are supported." }, { status: 400 });
     }
 
     if (!textContent.trim()) {
-      return NextResponse.json({ error: "No text content found in the uploaded file(s)" }, { status: 400 });
+      return NextResponse.json(
+        {
+          error:
+            skipped.length > 0
+              ? `Nothing readable in what was uploaded. Skipped: ${skipped.slice(0, 8).join(", ")}. Only .txt, .md, .json, .csv and .zip can be read.`
+              : "No text content found in the uploaded file(s)",
+        },
+        { status: 400 }
+      );
     }
+
+    // One import may span many files — name it for the batch, and size it by
+    // the text actually read rather than any single upload.
+    const importLabel =
+      readFiles.length === 1 ? readFiles[0] : `${readFiles.length} files (${readFiles.slice(0, 3).join(", ")}${readFiles.length > 3 ? ", …" : ""})`;
+    const importBytes = Buffer.byteLength(textContent, "utf8");
 
     // Fetch all onboarding clients to match client UUIDs and details
     const { data: dbClients, error: clientsErr } = await supabase
@@ -93,8 +107,8 @@ export async function POST(
       const demoClientUuid = dbClients?.[0]?.id || "unassigned";
       return NextResponse.json({
         success: true,
-        fileName: file.name,
-        fileSize: file.size,
+        fileName: importLabel,
+        fileSize: importBytes,
         entries: [
           {
             content: "Premium organic packaging guidelines: use earthy colors.",
@@ -132,7 +146,38 @@ Rules for classification:
 - If it doesn't clearly match any client and is not agency-wide, classify as "unassigned".
 - Return the output strictly in JSON format matching the schema.`;
 
-    const userPrompt = `Extract durable brand knowledge from the following text document and classify each item.
+    interface ExtractedEntry {
+      content: string;
+      category: "facts" | "preferences" | "learnings" | "feedback";
+      classification: string;
+    }
+    interface ExtractedJSON {
+      entries: ExtractedEntry[];
+    }
+
+    // A memory export runs to hundreds of thousands of characters. This used to
+    // read only the first 15,000 and drop the rest without saying so, which
+    // looks exactly like "my import didn't work". Read it in passes instead,
+    // splitting on file boundaries so no entry is cut down the middle.
+    const CHUNK_CHARS = 30_000;
+    const MAX_CHUNKS = 20;
+    const chunks: string[] = [];
+    for (const section of textContent.split(/(?=\n--- File: )/)) {
+      if (chunks.length > 0 && chunks[chunks.length - 1].length + section.length <= CHUNK_CHARS) {
+        chunks[chunks.length - 1] += section;
+      } else if (section.length <= CHUNK_CHARS) {
+        chunks.push(section);
+      } else {
+        // A single file larger than one pass — break it on paragraph edges.
+        for (let i = 0; i < section.length; i += CHUNK_CHARS) {
+          chunks.push(section.slice(i, i + CHUNK_CHARS));
+        }
+      }
+    }
+    const usedChunks = chunks.slice(0, MAX_CHUNKS);
+    const droppedChars = chunks.slice(MAX_CHUNKS).reduce((n, c) => n + c.length, 0);
+
+    const promptFor = (body: string) => `Extract durable brand knowledge from the following text document and classify each item.
 Output STRICTLY a JSON object with this schema:
 {
   "entries": [
@@ -145,40 +190,45 @@ Output STRICTLY a JSON object with this schema:
 }
 
 Document Content:
-${textContent.substring(0, 15000)}`;
+${body}`;
 
     try {
-      const responseText = await complete({
-        model: MODEL_SMART,
-        system: systemPrompt,
-        messages: [{ role: "user", content: userPrompt }],
-        jsonSchema: true,
-        maxTokens: 1200
+      const perChunk = await Promise.all(
+        usedChunks.map(async (chunk) => {
+          const responseText = await complete({
+            model: MODEL_SMART,
+            system: systemPrompt,
+            messages: [{ role: "user", content: promptFor(chunk) }],
+            jsonSchema: true,
+            maxTokens: 2000,
+          });
+          let cleanText = responseText.trim();
+          if (cleanText.startsWith("```")) {
+            cleanText = cleanText.replace(/^```[a-zA-Z]*\s*/, "").replace(/\s*```$/, "");
+          }
+          return safeJsonParse<ExtractedJSON>(cleanText, { entries: [] }).entries || [];
+        })
+      );
+
+      // The same fact often appears in several exported files.
+      const seen = new Set<string>();
+      const entries = perChunk.flat().filter((e) => {
+        const key = (e?.content || "").trim().toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
       });
-
-      let cleanText = responseText.trim();
-      if (cleanText.startsWith("```")) {
-        cleanText = cleanText.replace(/^```[a-zA-Z]*\s*/, "");
-        cleanText = cleanText.replace(/\s*```$/, "");
-      }
-
-      interface ExtractedEntry {
-        content: string;
-        category: "facts" | "preferences" | "learnings" | "feedback";
-        classification: string;
-      }
-
-      interface ExtractedJSON {
-        entries: ExtractedEntry[];
-      }
-
-      const result: ExtractedJSON = safeJsonParse(cleanText, { entries: [] });
 
       return NextResponse.json({
         success: true,
-        fileName: file.name,
-        fileSize: file.size,
-        entries: result.entries || []
+        fileName: importLabel,
+        fileSize: importBytes,
+        filesRead: readFiles.length,
+        skippedFiles: skipped,
+        // Say plainly when something was left unread rather than implying a
+        // complete import.
+        truncatedChars: droppedChars,
+        entries,
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

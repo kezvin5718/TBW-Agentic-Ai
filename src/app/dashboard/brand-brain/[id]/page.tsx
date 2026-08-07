@@ -122,6 +122,7 @@ export default function ClientBrandBrainPage({
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importingFile, setImportingFile] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [importWarning, setImportWarning] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState("");
   const [uploadedFileSize, setUploadedFileSize] = useState(0);
 
@@ -268,15 +269,16 @@ export default function ClientBrandBrainPage({
 
   // Knowledge Import Handlers
   const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const chosen = Array.from(e.target.files || []);
+    if (chosen.length === 0) return;
 
     setImportingFile(true);
     setImportError(null);
     setImportedEntries([]);
 
+    // A memory export is many small files — send the whole selection in one go.
     const formData = new FormData();
-    formData.append("file", file);
+    for (const f of chosen) formData.append("file", f);
 
     try {
       // Sessions expire while a long page sits open; retry once after refresh.
@@ -292,6 +294,21 @@ export default function ClientBrandBrainPage({
 
       setUploadedFileName(data.fileName);
       setUploadedFileSize(data.fileSize);
+
+      // An import that quietly ignored half the upload would look identical to
+      // one that worked, so say what was left out.
+      const warnings: string[] = [];
+      if (data.skippedFiles?.length) {
+        warnings.push(
+          `Skipped ${data.skippedFiles.length} file(s) we can't read: ${data.skippedFiles.slice(0, 5).join(", ")}${data.skippedFiles.length > 5 ? "…" : ""}.`
+        );
+      }
+      if (data.truncatedChars > 0) {
+        warnings.push(
+          `That was more than one pass could cover — about ${Math.round(data.truncatedChars / 1000)}k characters were not read. Import the rest in a second batch.`
+        );
+      }
+      setImportWarning(warnings.length ? warnings.join(" ") : null);
 
       interface RawEntry {
         content: string;
@@ -1141,6 +1158,13 @@ export default function ClientBrandBrainPage({
               </div>
             )}
 
+            {importWarning && (
+              <div className="p-3 bg-amber-950/20 border border-amber-900/40 rounded-xl text-amber-200 text-xs flex items-start space-x-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                <span>{importWarning}</span>
+              </div>
+            )}
+
             {/* STEP 1: Upload slot */}
             {importedEntries.length === 0 && !importingFile && (
               <div className="space-y-4 py-4">
@@ -1154,14 +1178,17 @@ export default function ClientBrandBrainPage({
                 >
                   <input
                     type="file"
-                    accept=".txt,.md,.json,.zip"
+                    accept=".txt,.md,.markdown,.json,.csv,.zip"
+                    multiple
                     className="hidden"
                     onChange={handleImportFileChange}
                   />
                   <Upload className="w-8 h-8 text-slate-500 group-hover:text-indigo-400 transition-colors" />
                   <div>
-                    <p className="text-xs text-slate-300 font-semibold">Choose file or drag here</p>
-                    <p className="text-[10px] text-slate-500 mt-1">Accepts TXT, MD, JSON, or ZIP (mixed brand archives supported)</p>
+                    <p className="text-xs text-slate-300 font-semibold">Choose files or drag here</p>
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Accepts TXT, MD, JSON, CSV or ZIP — select as many as you like (a whole ChatGPT/Claude memory export at once)
+                    </p>
                   </div>
                 </label>
               </div>
