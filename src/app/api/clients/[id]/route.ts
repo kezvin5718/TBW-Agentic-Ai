@@ -34,13 +34,19 @@ const ORPHANS: Array<{ table: string; label: string }> = [
   { table: "wa_task_drafts", label: "WhatsApp task drafts" },
 ];
 
+/**
+ * Counts what hangs off a client. A count that fails must never read as zero —
+ * "nothing attached" is what allows a one-click delete, so an unreadable table
+ * has to be an error, not an empty result.
+ */
 async function tally(clientId: string) {
   const admin = createServiceRoleClient();
   const count = async (table: string) => {
-    const { count: n } = await admin
+    const { count: n, error } = await admin
       .from(table)
       .select("id", { count: "exact", head: true })
       .eq("client_id", clientId);
+    if (error) throw new Error(`Could not read ${table}: ${error.message}`);
     return n || 0;
   };
   const destroyed: Record<string, number> = {};
@@ -75,8 +81,15 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     .maybeSingle();
   if (!client) return NextResponse.json({ error: "Client not found" }, { status: 404 });
 
-  const { destroyed, detached } = await tally(id);
-  return NextResponse.json({ success: true, client, destroyed, detached });
+  try {
+    const { destroyed, detached } = await tally(id);
+    return NextResponse.json({ success: true, client, destroyed, detached });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Could not read what is attached to this client." },
+      { status: 500 }
+    );
+  }
 }
 
 /** PATCH { action: "archive" | "restore" } — the reversible pair. */
@@ -137,24 +150,39 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
     .maybeSingle();
   if (!client) return NextResponse.json({ error: "Client not found" }, { status: 404 });
 
-  if (!client.archived_at) {
+  // Record what is about to be destroyed before it stops being countable. If we
+  // can't establish that, refuse — never fall through to "looks empty".
+  let destroyed: Record<string, number>;
+  let detached: Record<string, number>;
+  try {
+    ({ destroyed, detached } = await tally(id));
+  } catch (err: unknown) {
     return NextResponse.json(
-      { error: `${client.name} is still active. Archive it first — if it turns out to be a mistake, that is recoverable and this is not.` },
-      { status: 409 }
+      { error: `Could not check what is attached to ${client.name}, so nothing was deleted. ${err instanceof Error ? err.message : ""}`.trim() },
+      { status: 500 }
     );
   }
+  const isEmpty = Object.keys(destroyed).length === 0 && Object.keys(detached).length === 0;
 
-  const body = await request.json().catch(() => ({}));
-  const typed = String(body.confirmName || "").trim();
-  if (typed.toLowerCase() !== client.name.trim().toLowerCase()) {
-    return NextResponse.json(
-      { error: `Type the client's name exactly — "${client.name}" — to confirm permanent deletion.` },
-      { status: 400 }
-    );
+  // An empty client is a typo or a double entry — there is no history to lose,
+  // so it goes in one click. The archive-first and type-the-name ceremony is
+  // there to protect real work, and applies only when there is some.
+  if (!isEmpty) {
+    if (!client.archived_at) {
+      return NextResponse.json(
+        { error: `${client.name} has work attached to it. Archive it first — if that turns out to be a mistake it is recoverable, and this is not.` },
+        { status: 409 }
+      );
+    }
+    const body = await request.json().catch(() => ({}));
+    const typed = String(body.confirmName || "").trim();
+    if (typed.toLowerCase() !== client.name.trim().toLowerCase()) {
+      return NextResponse.json(
+        { error: `Type the client's name exactly — "${client.name}" — to confirm permanent deletion.` },
+        { status: 400 }
+      );
+    }
   }
-
-  // Record what is about to be destroyed before it stops being countable.
-  const { destroyed, detached } = await tally(id);
 
   const { error } = await admin.from("clients").delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

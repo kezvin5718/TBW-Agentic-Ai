@@ -20,6 +20,42 @@ export default async function BrandBrainIndexPage() {
     .select("id, name, logo_url, deliverables_per_month, ad_budget, archived_at")
     .order("name", { ascending: true });
 
+  // How much work hangs off each client. A client with none is a typo or a
+  // double entry and can be deleted outright; one with history cannot.
+  const attached: Record<string, number> = {};
+  const bump = (rows: { client_id: string | null }[] | null) => {
+    for (const r of rows || []) if (r.client_id) attached[r.client_id] = (attached[r.client_id] || 0) + 1;
+  };
+  const [posts, uploads, brains, plans, tasks, campaigns] = await Promise.all([
+    supabase.from("social_posts").select("client_id"),
+    supabase.from("creative_uploads").select("client_id"),
+    supabase.from("brand_brain").select("client_id"),
+    supabase.from("monthly_plans").select("client_id"),
+    supabase.from("tasks").select("client_id"),
+    supabase.from("campaigns").select("client_id"),
+  ]);
+  [posts, uploads, brains, plans, tasks, campaigns].forEach((r) => bump(r.data));
+
+  // Names that look like the same brand entered twice. Flagged, never acted on
+  // — "Swarnakanchi Silver" and "Swarnakanchi Wedding" really are two accounts.
+  const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const live = (clients || []).filter((c) => !c.archived_at);
+  const lookAlikes: string[][] = [];
+  const claimed = new Set<string>();
+  for (const a of live) {
+    if (claimed.has(a.id)) continue;
+    const ka = squash(a.name);
+    const group = live.filter((b) => {
+      if (b.id === a.id) return false;
+      const kb = squash(b.name);
+      return ka === kb || (ka.length >= 5 && kb.length >= 5 && (ka.startsWith(kb) || kb.startsWith(ka)));
+    });
+    if (group.length > 0) {
+      [a, ...group].forEach((c) => claimed.add(c.id));
+      lookAlikes.push([a.id, ...group.map((c) => c.id)]);
+    }
+  }
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Page Header */}
@@ -65,7 +101,12 @@ export default async function BrandBrainIndexPage() {
           </Link>
         </div>
       ) : (
-        <ClientGrid clients={clients as ClientRow[]} isFounder={isFounder} />
+        <ClientGrid
+          clients={clients as ClientRow[]}
+          isFounder={isFounder}
+          attached={attached}
+          lookAlikes={lookAlikes}
+        />
       )}
     </div>
   );

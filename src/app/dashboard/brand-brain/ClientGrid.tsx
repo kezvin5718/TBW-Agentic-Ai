@@ -19,15 +19,30 @@ export type ClientRow = {
 
 type Impact = { destroyed: Record<string, number>; detached: Record<string, number> };
 
-export default function ClientGrid({ clients, isFounder }: { clients: ClientRow[]; isFounder: boolean }) {
+export default function ClientGrid({
+  clients,
+  isFounder,
+  attached,
+  lookAlikes,
+}: {
+  clients: ClientRow[];
+  isFounder: boolean;
+  attached: Record<string, number>;
+  lookAlikes: string[][];
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [showDupes, setShowDupes] = useState(false);
+
+  const byId = new Map(clients.map((c) => [c.id, c]));
+  const isEmpty = (id: string) => (attached[id] || 0) === 0;
 
   // Permanent-delete dialog state.
   const [victim, setVictim] = useState<ClientRow | null>(null);
   const [impact, setImpact] = useState<Impact | null>(null);
+  const [impactError, setImpactError] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
 
   const active = clients.filter((c) => !c.archived_at);
@@ -54,16 +69,36 @@ export default function ClientGrid({ clients, isFounder }: { clients: ClientRow[
     }
   };
 
+  /** Nothing is attached, so there is nothing to preview or type back. */
+  const deleteEmpty = async (client: ClientRow) => {
+    if (!confirm(`Delete "${client.name}"? Nothing is attached to it, so nothing else is lost.`)) return;
+    setBusy(client.id);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/clients/${client.id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed");
+      setNotice({ ok: true, text: data.message });
+      router.refresh();
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Failed" });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const openDelete = async (client: ClientRow) => {
     setVictim(client);
     setTyped("");
     setImpact(null);
+    setImpactError(null);
     try {
       const res = await fetch(`/api/clients/${client.id}`);
       const data = await res.json();
-      if (res.ok) setImpact({ destroyed: data.destroyed || {}, detached: data.detached || {} });
-    } catch {
-      /* the dialog still works without the tally — it just can't preview */
+      if (!res.ok) throw new Error(data.error || "Could not read what is attached.");
+      setImpact({ destroyed: data.destroyed || {}, detached: data.detached || {} });
+    } catch (err: unknown) {
+      setImpactError(err instanceof Error ? err.message : "Could not read what is attached.");
     }
   };
 
@@ -107,6 +142,63 @@ export default function ClientGrid({ clients, isFounder }: { clients: ClientRow[
         </div>
       )}
 
+      {lookAlikes.length > 0 && (
+        <div className="border border-amber-900/40 bg-amber-950/10 rounded-2xl overflow-hidden">
+          <button
+            onClick={() => setShowDupes((v) => !v)}
+            className="w-full flex items-center justify-between px-5 py-3 hover:bg-amber-950/20 transition-colors cursor-pointer"
+          >
+            <span className="flex items-center gap-2 text-xs font-semibold text-amber-300">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              {lookAlikes.length} set{lookAlikes.length === 1 ? "" : "s"} of similar names — possible duplicates
+            </span>
+            <ChevronRight className={`w-4 h-4 text-amber-700 transition-transform ${showDupes ? "rotate-90" : ""}`} />
+          </button>
+
+          {showDupes && (
+            <div className="px-5 pb-4 space-y-3">
+              <p className="text-[11px] text-slate-500">
+                These names resemble each other. Some are genuinely separate accounts — check before removing anything.
+              </p>
+              {lookAlikes.map((group, i) => (
+                <div key={i} className="rounded-xl border border-slate-900 bg-slate-950/60 divide-y divide-slate-900">
+                  {group.map((id) => {
+                    const c = byId.get(id);
+                    if (!c) return null;
+                    const n = attached[id] || 0;
+                    return (
+                      <div key={id} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                        <div className="min-w-0">
+                          <Link
+                            href={`/dashboard/brand-brain/${id}`}
+                            className="text-xs font-semibold text-slate-300 hover:text-indigo-400 transition-colors"
+                          >
+                            {c.name}
+                          </Link>
+                          <p className="text-[10px] text-slate-600 mt-0.5">
+                            {n === 0 ? "nothing attached" : `${n} linked record${n === 1 ? "" : "s"}`}
+                          </p>
+                        </div>
+                        {isFounder && n === 0 && (
+                          <button
+                            onClick={() => deleteEmpty(c)}
+                            disabled={busy === id}
+                            className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 hover:text-red-300 border border-slate-800 hover:border-red-900 rounded-lg px-2.5 py-1.5 transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+                          >
+                            {busy === id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {active.map((client) => (
           <div
@@ -139,7 +231,7 @@ export default function ClientGrid({ clients, isFounder }: { clients: ClientRow[
                 </div>
               </div>
             </Link>
-            <div className="px-5 pb-4 -mt-1">
+            <div className="px-5 pb-4 -mt-1 flex items-center gap-4">
               <button
                 onClick={() => setArchived(client, "archive")}
                 disabled={busy === client.id}
@@ -149,6 +241,20 @@ export default function ClientGrid({ clients, isFounder }: { clients: ClientRow[
                 {busy === client.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Archive className="w-3 h-3" />}
                 <span>Archive</span>
               </button>
+              {isFounder && isEmpty(client.id) && (
+                <button
+                  onClick={() => deleteEmpty(client)}
+                  disabled={busy === client.id}
+                  title="Nothing is attached to this client — safe to delete outright."
+                  className="inline-flex items-center gap-1.5 text-[10px] text-slate-600 hover:text-red-300 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Delete</span>
+                </button>
+              )}
+              {!isEmpty(client.id) && (
+                <span className="text-[10px] text-slate-700">{attached[client.id]} linked records</span>
+              )}
             </div>
           </div>
         ))}
@@ -221,7 +327,11 @@ export default function ClientGrid({ clients, isFounder }: { clients: ClientRow[
               </div>
             </div>
 
-            {impact === null ? (
+            {impactError ? (
+              <p className="text-xs text-red-300 rounded-xl border border-red-900/40 bg-red-950/10 p-3">
+                Couldn&apos;t check what this would remove — {impactError} Deleting blind is not worth the risk; close this and try again.
+              </p>
+            ) : impact === null ? (
               <p className="text-xs text-slate-500 flex items-center gap-2">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking what this would remove…
               </p>
@@ -290,7 +400,7 @@ export default function ClientGrid({ clients, isFounder }: { clients: ClientRow[
               </button>
               <button
                 onClick={confirmDelete}
-                disabled={!nameMatches || busy === victim.id}
+                disabled={!nameMatches || busy === victim.id || !!impactError}
                 className="inline-flex items-center gap-2 text-xs font-semibold text-white bg-red-700 hover:bg-red-600 disabled:bg-slate-900 disabled:text-slate-600 disabled:cursor-not-allowed px-4 py-2.5 rounded-xl transition-colors cursor-pointer"
               >
                 {busy === victim.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
