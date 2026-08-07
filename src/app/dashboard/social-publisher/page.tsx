@@ -310,6 +310,8 @@ export default function SocialPublisherPage() {
   // avoids composing a post that can only fail.
   useEffect(() => {
     if (!clientId || rpAccounts.length === 0) return;
+    // Everything the client is set up for is pre-ticked; the team unticks what
+    // they don't want. Nothing is auto-removed on their behalf.
     setPlatforms(mappedPlatforms.length > 0 ? mappedPlatforms : []);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientId, rpAccounts.length, rpMapping]);
@@ -383,10 +385,7 @@ export default function SocialPublisherPage() {
   const ytNeedsVideo = !!mediaUrl && !mediaIsVideo;
   const canSend = !!clientId && platforms.length > 0 && contentTypes.length > 0 && !!mediaUrl && !reelNeedsVideo && !sending;
 
-  // Untick YouTube as soon as the loaded media turns out to be an image.
-  useEffect(() => {
-    if (ytNeedsVideo) setPlatforms((prev) => (prev.includes("youtube") ? prev.filter((p) => p !== "youtube") : prev));
-  }, [ytNeedsVideo]);
+
 
   // Per-client sequence numbers. The number in the filename wins (that's what the
   // designer and the video editor agreed on); upload order is the fallback.
@@ -878,16 +877,17 @@ export default function SocialPublisherPage() {
           <div className="flex flex-wrap gap-2">
             {PLATFORMS.map((p) => {
               const mapped = !clientId || mappedPlatforms.length === 0 || mappedPlatforms.includes(p.key);
-              const blockedByMedia = p.key === "youtube" && ytNeedsVideo;
-              const available = mapped && !blockedByMedia;
+              // YouTube can't take an image, but that's a warning, not a lock —
+              // the team decides what to send.
+              const needsVideo = p.key === "youtube" && ytNeedsVideo;
+              const available = mapped && !needsVideo;
               return (
                 <button
                   key={p.key}
-                  onClick={() => { if (!blockedByMedia) togglePlatform(p.key); }}
-                  disabled={blockedByMedia}
+                  onClick={() => togglePlatform(p.key)}
                   title={
-                    blockedByMedia
-                      ? "YouTube only accepts video — this post is an image."
+                    needsVideo
+                      ? "YouTube only accepts video — an image post will be rejected. You can still select it."
                       : mapped ? "" : `${clients.find((c) => c.id === clientId)?.name || "This client"} has no ${p.label} account connected in RecurPost — posting here will fail.`
                   }
                   className={`px-4 py-2 rounded-full text-xs font-bold border cursor-pointer transition-all ${
@@ -898,11 +898,17 @@ export default function SocialPublisherPage() {
                       : "bg-slate-950 border-slate-900 text-slate-700 opacity-50"
                   }`}
                 >
-                  {p.label}{blockedByMedia ? " — needs video" : !available ? " ⚠" : ""}
+                  {p.label}{needsVideo ? " ⚠ needs video" : !available ? " ⚠" : ""}
                 </button>
               );
             })}
           </div>
+          {ytNeedsVideo && platforms.includes("youtube") && (
+            <p className="mt-2 text-[10px] text-amber-400 font-bold flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3 shrink-0" />
+              YouTube is selected but this post is an image — YouTube will reject it. Sending anyway is fine; it will show as failed in the Library.
+            </p>
+          )}
           {clientId && rpAccounts.length > 0 && mappedPlatforms.length === 0 && (
             <div className="mt-2 bg-amber-950/20 border border-amber-900/50 rounded-xl p-2.5 text-[11px] text-amber-300 flex items-start gap-2">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />

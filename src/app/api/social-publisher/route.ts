@@ -148,21 +148,12 @@ export async function POST(request: NextRequest) {
 
   const results: Array<{ platform: string; contentType: string; ok: boolean; detail: string }> = [];
 
-  // YouTube is video-only — an image post there always comes back 3003. The
-  // client's platforms are pre-selected from their RecurPost mapping, so
-  // YouTube arrives ticked by default on photo posts. Drop it and say so,
-  // rather than letting it fail and sit in the Library as an error.
+  // Whatever the team selected is what gets sent. YouTube rejecting an image
+  // is warned about in the composer; if they choose it anyway that's their
+  // call, and the failure shows in the Library with the reason.
   const skipped: string[] = [];
-  let targetPlatforms: string[] = platforms;
-  if (!mediaIsVideo && platforms.includes("youtube")) {
-    targetPlatforms = platforms.filter((p) => p !== "youtube");
-    skipped.push("YouTube — it only accepts video, and this post is an image.");
-  }
-  if (targetPlatforms.length === 0) {
-    return NextResponse.json({ error: "YouTube only accepts video. Upload a video, or pick another platform." }, { status: 400 });
-  }
 
-  for (const platform of targetPlatforms) {
+  for (const platform of platforms) {
     // feed/story/reel only differ on FB & IG — other platforms get one post.
     const typesForPlatform = ["facebook", "instagram"].includes(platform) ? contentTypes : [contentTypes[0]];
     for (const contentType of typesForPlatform) {
