@@ -6,6 +6,7 @@ import Avatar from "../Avatar";
 import { fmtIST, fmtISTDate, istToday, istWallClockToUtc, IST_TZ } from "@/lib/time";
 import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2 } from "lucide-react";
 import PlatformIcon, { postLabel, PLATFORM_LABEL } from "./PlatformIcon";
+import { uploadDirect } from "@/lib/direct-upload";
 
 interface ClientRow { id: string; name: string; logo?: string }
 interface HubUpload {
@@ -94,6 +95,7 @@ export default function SocialPublisherPage() {
 
   // ui state
   const [uploading, setUploading] = useState<"media" | "thumb" | null>(null);
+  const [uploadPct, setUploadPct] = useState(0);
   const [generating, setGenerating] = useState(false);
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
@@ -323,18 +325,17 @@ export default function SocialPublisherPage() {
       return;
     }
     setUploading(kind);
+    setUploadPct(0);
     setNotice(null);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/social-publisher/upload", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Upload failed");
+      // Straight to Supabase Storage — a reel routed through our own server
+      // held the whole file in memory and killed the container mid-upload.
+      const data = await uploadDirect(file, "social", setUploadPct);
       if (kind === "media") { setMediaUrl(data.url); setMediaName(data.fileName); setMediaIsVideo(data.mediaType === "video"); }
       else { setThumbUrl(data.url); setSelectedThumb(null); }
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Upload failed" });
-    } finally { setUploading(null); }
+    } finally { setUploading(null); setUploadPct(0); }
   };
 
   const generateCaption = async () => {
@@ -930,7 +931,15 @@ export default function SocialPublisherPage() {
           <div>
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Media (image / video) *</label>
             <div onClick={() => mediaRef.current?.click()} className="border border-dashed border-slate-800 hover:border-indigo-500 rounded-xl p-4 text-center cursor-pointer transition-colors">
-              {uploading === "media" ? <Loader2 className="w-5 h-5 animate-spin mx-auto text-[var(--yellow)]" /> :
+              {uploading === "media" ? (
+                <div className="space-y-2">
+                  <Loader2 className="w-5 h-5 animate-spin mx-auto text-[var(--yellow)]" />
+                  <div className="h-1 bg-slate-900 rounded-full overflow-hidden max-w-[180px] mx-auto">
+                    <div className="h-full bg-[var(--yellow)] transition-all duration-200" style={{ width: `${uploadPct}%` }} />
+                  </div>
+                  <p className="text-[10px] text-slate-500">{uploadPct}% uploaded</p>
+                </div>
+              ) :
                 mediaUrl ? (
                   <div className="flex items-center justify-center space-x-2 text-emerald-400 text-xs font-bold"><CheckCircle2 className="w-4 h-4" /><span className="truncate max-w-[200px]">{mediaName || "Uploaded"}</span></div>
                 ) : (
