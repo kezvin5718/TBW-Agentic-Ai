@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fmtISTDate, istDateOffset } from "@/lib/time";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import MyTaskCard from "./MyTaskCard";
 import {
   Sparkles,
   ChevronRight,
@@ -339,7 +340,7 @@ export default async function DashboardPage() {
               <p className="text-[9px] text-slate-550 font-medium">Missed deadlines alert</p>
             </div>
 
-            <Link href="/dashboard/team-tasks" className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-2 hover:border-indigo-800 transition-colors block">
+            <Link href="/dashboard/task-manager" className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-2 hover:border-indigo-800 transition-colors block">
               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center space-x-1"><ListTodo className="w-3 h-3 text-indigo-400" /><span>Team Tasks Open</span></p>
               <h3 className="text-2xl font-extrabold text-white">{founderMetrics.teamOpenTasks}</h3>
               <p className="text-[9px] text-amber-400 font-bold">{founderMetrics.teamDueToday} due by end of today</p>
@@ -484,14 +485,14 @@ export default async function DashboardPage() {
           <div>
             <h2 className="text-lg font-bold text-white flex items-center space-x-1.5">
               <Clock className="w-4 h-4 text-indigo-400" />
-              <span>My Active Task Assignments ({employeeTasks.length})</span>
+              <span>My Tasks ({employeeTasks.length})</span>
             </h2>
-            <p className="text-xs text-slate-500 mt-1">Review deadlines, concept creation, and client review feedbacks</p>
+            <p className="text-xs text-slate-500 mt-1">Everything assigned to you, soonest deadline first. Change the status here as you work.</p>
           </div>
 
           {employeeTasks.length === 0 ? (
             <div className="bg-slate-950/40 border border-slate-900 p-12 text-center rounded-3xl text-xs text-slate-500">
-              No tasks assigned to your profile. View tasks board to allocate slots.
+              Nothing assigned to you right now. New work will appear here the moment someone puts your name on it.
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -519,7 +520,7 @@ export default async function DashboardPage() {
                       </div>
                     </div>
 
-                    <div className="pt-3 border-t border-slate-900/60 flex items-center justify-between">
+                    <div className="pt-3 border-t border-slate-900/60 flex items-center justify-between gap-2">
                       <span className={`flex items-center space-x-1 font-mono text-[10px] font-bold ${
                         isOverdue ? "text-red-400 animate-pulse" : "text-slate-500"
                       }`}>
@@ -527,9 +528,13 @@ export default async function DashboardPage() {
                         <span>Due: {fmtISTDate(t.deadline)}</span>
                       </span>
 
-                      <Link href={t.plan_id ? "/dashboard/production" : "/dashboard/team-tasks"} className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 py-1.5 rounded-lg text-[9px] uppercase tracking-wider transition-all">
-                        {t.plan_id ? "Edit Card" : "Open Board"}
-                      </Link>
+                      {t.plan_id ? (
+                        <Link href="/dashboard/production" className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 py-1.5 rounded-lg text-[9px] uppercase tracking-wider transition-all">
+                          Edit Card
+                        </Link>
+                      ) : (
+                        <MyTaskCard id={t.id} status={t.status} />
+                      )}
                     </div>
                   </div>
                 );

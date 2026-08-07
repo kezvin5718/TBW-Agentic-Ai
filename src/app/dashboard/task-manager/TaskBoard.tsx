@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Avatar from "../Avatar";
 import {
-  ListTodo, Loader2, Plus, X, Check, Users, LayoutGrid, Rows3,
+  Loader2, Plus, X, Check, Users, LayoutGrid, Rows3,
   Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2,
 } from "lucide-react";
 
@@ -41,7 +41,7 @@ const STATUS_STYLE: Record<string, string> = {
   done: "bg-emerald-950/40 border-emerald-900 text-emerald-400",
 };
 
-export default function TeamTasksPage() {
+export default function TaskBoard() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [team, setTeam] = useState<Member[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
@@ -191,15 +191,10 @@ export default function TeamTasksPage() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-5">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
-            <ListTodo className="w-6 h-6 text-indigo-400" /><span>Team Tasks</span>
-          </h1>
-          <p className="text-sm text-slate-500 mt-1">One master board for the whole team — daily work, WhatsApp tasks and client grids in one place.</p>
-        </div>
+    <div className="space-y-5">
+      {/* Board actions */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <p className="text-xs text-slate-500">Everyone&apos;s work in one place — daily jobs, WhatsApp tasks and client grids.</p>
         <button onClick={() => setShowAdd((s) => !s)} className="px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider bg-indigo-600 hover:bg-indigo-500 text-white flex items-center space-x-2 cursor-pointer">
           {showAdd ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}<span>{showAdd ? "Close" : "Add Task"}</span>
         </button>

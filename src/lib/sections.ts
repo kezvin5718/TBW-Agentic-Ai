@@ -17,15 +17,16 @@ export const SECTIONS = [
   { key: "ads", num: 11, name: "Meta Ads Manager", path: "/dashboard/ads" },
   { key: "reporting", num: 12, name: "Reporting & Analytics", path: "/dashboard/reporting" },
   { key: "agency-brain", num: 13, name: "Agency Brain", path: "/dashboard/agency-brain" },
-  { key: "team-tasks", num: 14, name: "Team Tasks", path: "/dashboard/team-tasks" },
+  { key: "task-manager", num: 14, name: "Task Manager", path: "/dashboard/task-manager" },
 ] as const;
 
 export type SectionKey = (typeof SECTIONS)[number]["key"];
 
-// Path prefix → section key (WhatsApp Task Bar rides on the Approvals permission).
+// Path prefix → section key. The WhatsApp Task Bar now lives inside Task
+// Manager as a tab, so its old standalone route follows the same permission.
 export const SECTION_BY_PREFIX: Record<string, string> = {
   ...Object.fromEntries(SECTIONS.map((s) => [s.path, s.key])),
-  "/dashboard/whatsapp-inbox": "approvals",
+  "/dashboard/whatsapp-inbox": "task-manager",
 };
 
 export function sectionKeyForPath(path: string): string | null {
