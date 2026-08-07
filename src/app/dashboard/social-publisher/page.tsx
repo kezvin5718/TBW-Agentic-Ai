@@ -1363,6 +1363,9 @@ export default function SocialPublisherPage() {
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0">
                                   <button onClick={() => setLibSel(p)} title="Preview" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer"><Eye className="w-3.5 h-3.5" /></button>
+                                  {(p.status === "failed" || isFuture(p)) && (
+                                    <button onClick={() => { setLibSel(p); startEdit(p); }} title="Edit caption, thumbnail or time" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer"><Pencil className="w-3.5 h-3.5" /></button>
+                                  )}
                                   {p.status === "failed" && (
                                     <button disabled={libBusy === p.id} onClick={() => retryPost(p)} title="Retry" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer disabled:opacity-50"><RotateCcw className="w-3.5 h-3.5" /></button>
                                   )}
@@ -1456,6 +1459,11 @@ export default function SocialPublisherPage() {
                         <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${p.status === "failed" ? "bg-rose-950/40 border-rose-900 text-rose-400" : scheduled ? "bg-amber-950/40 border-amber-900 text-amber-400" : "bg-emerald-950/40 border-emerald-900 text-emerald-400"}`}>
                           {p.status === "failed" ? "FAILED" : scheduled ? "SCHEDULED" : "POSTED"}
                         </span>
+                        {(p.status === "failed" || scheduled) && (
+                          <button onClick={() => { setLibSel(p); startEdit(p); }} title="Edit caption, thumbnail or time" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer">
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         {p.status === "failed" && (
                           <button disabled={libBusy === p.id} onClick={() => retryPost(p)} title="Retry" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer disabled:opacity-50">
                             {libBusy === p.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
