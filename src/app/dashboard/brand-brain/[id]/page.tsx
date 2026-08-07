@@ -34,6 +34,7 @@ interface ClientProfile {
   deliverables_per_month?: number;
   ad_budget?: number;
   whatsapp_group_id?: string;
+  qc_allowed_brands?: string[];
 }
 
 interface CreativeAsset {
@@ -94,6 +95,9 @@ export default function ClientBrandBrainPage({
   const [captionTone, setCaptionTone] = useState("");
   const [address, setAddress] = useState("");
   const [contactNumber, setContactNumber] = useState("");
+  // Sister concerns / parent companies whose names may appear on this client's
+  // artwork without it being the wrong brand.
+  const [sisterBrands, setSisterBrands] = useState("");
   
   // Design Preferences JSON key-values
   const [prefKeys, setPrefKeys] = useState<string[]>([]);
@@ -148,6 +152,7 @@ export default function ClientBrandBrainPage({
       setFontHeading(data.brandBrain?.fonts?.[0] || "");
       setFontBody(data.brandBrain?.fonts?.[1] || "");
       setCaptionTone(data.brandBrain?.caption_tone || "");
+      setSisterBrands((data.client?.qc_allowed_brands || []).join(", "));
 
       // Address + contact number (stored as addresses[0] = { address, phone })
       const firstAddr = data.brandBrain?.addresses?.[0];
@@ -250,6 +255,7 @@ export default function ClientBrandBrainPage({
           designPreferences,
           address,
           contactNumber,
+          qcAllowedBrands: sisterBrands.split(",").map((s) => s.trim()).filter(Boolean),
         }),
       });
 
@@ -878,6 +884,24 @@ export default function ClientBrandBrainPage({
                     onChange={(e) => setContactNumber(e.target.value)}
                     className="w-full bg-slate-900/40 border border-slate-800 rounded-xl py-2 px-3.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/80 transition-all"
                   />
+
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase">
+                    Sister Brands{" "}
+                    <span className="normal-case font-medium text-slate-600">
+                      — other names allowed to appear on this brand&apos;s creatives
+                    </span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Anantam Jewels"
+                    value={sisterBrands}
+                    onChange={(e) => setSisterBrands(e.target.value)}
+                    className="w-full bg-slate-900/40 border border-slate-800 rounded-xl py-2 px-3.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/80 transition-all"
+                  />
+                  <p className="text-[10px] text-slate-600 leading-relaxed">
+                    Comma-separated. Brand QC treats these as belonging to this client, so artwork reading
+                    &ldquo;Royal Rose by Anantam&rdquo; stops being flagged as the wrong brand.
+                  </p>
                 </div>
 
                 {/* Preferences Edit */}

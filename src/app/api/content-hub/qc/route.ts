@@ -68,14 +68,20 @@ export async function POST() {
     .limit(10);
   if (!rows || rows.length === 0) return NextResponse.json({ success: true, checked: 0 });
 
-  const { data: clients } = await admin.from("clients").select("id, name");
+  const { data: clients } = await admin.from("clients").select("id, name, qc_allowed_brands");
   const brandNames = (clients || []).map((c) => c.name);
+  const allowedFor = new Map(
+    (clients || []).map((c) => [c.id, ((c.qc_allowed_brands as string[] | null) || []).filter(Boolean)])
+  );
 
   let checked = 0;
   let flagged = 0;
 
   for (const row of rows) {
     const uploadedFor = (row.clients as { name?: string } | null)?.name || "Unknown";
+    // Sister concerns and parent companies share artwork, so their names on a
+    // creative are expected rather than evidence of the wrong brand.
+    const sisters = allowedFor.get(row.client_id) || [];
     let status: Verdict["verdict"] | "unsure" = "unsure";
     let detected = "";
     let note = "";
@@ -93,11 +99,11 @@ export async function POST() {
         system: "You are a brand-QC checker for an ad agency. Look at the creative and identify which brand it belongs to using visible logos, brand names, product labels and text. Output ONLY JSON.",
         prompt: `This creative was uploaded for the brand: "${uploadedFor}".
 Known agency brands: ${brandNames.join(", ")}.
-
+${sisters.length > 0 ? `"${uploadedFor}" is related to: ${sisters.join(", ")}. Seeing those names on this creative is expected and correct.\n` : ""}
 Identify the brand visible in this creative. Return JSON exactly:
 { "detected_brand": "<brand name you see, or 'unknown'>", "verdict": "match" | "mismatch" | "unsure", "reason": "<one short line>" }
 
-Rules: "match" only if the visible branding clearly belongs to "${uploadedFor}". "mismatch" if it clearly shows a DIFFERENT brand (especially one of the known brands). "unsure" if no clear branding is visible.`,
+Rules: "match" if the visible branding belongs to "${uploadedFor}"${sisters.length > 0 ? ` or to any of its related brands (${sisters.join(", ")})` : ""}. "mismatch" if it clearly shows a DIFFERENT brand (especially one of the known brands). "unsure" if no clear branding is visible.`,
         imageDataUrl: dataUrl,
       });
       const v = safeJsonParse<Verdict>(raw, { verdict: "unsure", detected_brand: "unknown", reason: "unparseable response" });
@@ -106,9 +112,23 @@ Rules: "match" only if the visible branding clearly belongs to "${uploadedFor}".
       status = ["match", "mismatch", "unsure"].includes(v.verdict) ? v.verdict : "unsure";
 
       // Safety: if the model says match but names a different known brand, flag it.
+      //
+      // Only when the right brand is absent, though. Co-branded artwork —
+      // "Royal Rose Fine Jewels by Anantam" — names both, and treating the
+      // second name as evidence of the wrong brand overrode a correct verdict.
       if (status === "match" && detected && detected.toLowerCase() !== "unknown") {
-        const other = brandNames.find((b) => b.toLowerCase() !== uploadedFor.toLowerCase() && detected.toLowerCase().includes(b.toLowerCase()));
-        if (other) { status = "mismatch"; note = `Detected "${other}" but uploaded under "${uploadedFor}". ${note}`; }
+        const seen = detected.toLowerCase();
+        const namesTheRightBrand = seen.includes(uploadedFor.toLowerCase());
+        const isSister = (b: string) => sisters.some((s) => s.toLowerCase() === b.toLowerCase());
+        const other = brandNames.find(
+          (b) => b.toLowerCase() !== uploadedFor.toLowerCase() && !isSister(b) && seen.includes(b.toLowerCase())
+        );
+        if (other && !namesTheRightBrand) {
+          status = "mismatch";
+          note = `Detected "${other}" but uploaded under "${uploadedFor}". ${note}`;
+        } else if (other) {
+          note = `Also shows "${other}" alongside ${uploadedFor}. ${note}`.trim();
+        }
       }
       if (row.media_type === "video") note = `${note} (judged from a video frame)`.trim();
     } catch (err: unknown) {

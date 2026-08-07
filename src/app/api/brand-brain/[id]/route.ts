@@ -73,19 +73,29 @@ export async function PUT(
       designPreferences,
       address,
       contactNumber,
+      qcAllowedBrands,
     } = body;
 
     // 1. Update Client fields
+    const clientUpdate: Record<string, unknown> = {
+      name: name,
+      deliverables_per_month: Number(deliverablesPerMonth),
+      ad_budget: Number(adBudget),
+      whatsapp_group_id: whatsappGroupId,
+      target_audience: targetAudience,
+      products: products,
+    };
+    // Only touch sister brands when the caller actually sent them, so a save
+    // from an older screen doesn't silently clear them.
+    if (qcAllowedBrands !== undefined) {
+      clientUpdate.qc_allowed_brands = Array.isArray(qcAllowedBrands)
+        ? qcAllowedBrands.map((b: unknown) => String(b).trim()).filter(Boolean)
+        : [];
+    }
+
     const { error: clientUpdateErr } = await supabase
       .from("clients")
-      .update({
-        name: name,
-        deliverables_per_month: Number(deliverablesPerMonth),
-        ad_budget: Number(adBudget),
-        whatsapp_group_id: whatsappGroupId,
-        target_audience: targetAudience,
-        products: products,
-      })
+      .update(clientUpdate)
       .eq("id", id);
 
     if (clientUpdateErr) {
