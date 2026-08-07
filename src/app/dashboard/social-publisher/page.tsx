@@ -317,6 +317,11 @@ export default function SocialPublisherPage() {
   }, [clientId, rpAccounts.length, rpMapping]);
 
   const upload = async (kind: "media" | "thumb", file: File) => {
+    const sizeMb = file.size / 1024 / 1024;
+    if (sizeMb > 500) {
+      setNotice({ ok: false, text: `File is ${sizeMb.toFixed(0)}MB — maximum is 500MB. Compress the video and try again.` });
+      return;
+    }
     setUploading(kind);
     setNotice(null);
     try {
