@@ -355,8 +355,14 @@ export default function SocialPublisherPage() {
       if (!res.ok) throw new Error(data.error || "Send failed");
       const okCount = (data.results || []).filter((r: { ok: boolean }) => r.ok).length;
       const failCount = (data.results || []).length - okCount;
-      const skipNote = (data.skipped || []).length > 0 ? ` Skipped ${(data.skipped as string[]).join(" ")}` : "";
-      setNotice({ ok: failCount === 0, text: (failCount === 0 ? `Sent via RecurPost for ${okCount} post(s) ✅` : `${okCount} sent, ${failCount} failed — see history below.`) + skipNote });
+      const skipNote = (data.skipped || []).length > 0 ? ` Skipped: ${(data.skipped as string[]).join(" ")}` : "";
+      setNotice({
+        ok: failCount === 0,
+        text:
+          (failCount === 0
+            ? `Sent via RecurPost for ${okCount} post(s) ✅`
+            : `${okCount} sent, ${failCount} failed. Do NOT press Send again — the ones that worked are already scheduled. Retry just the failed ones from the Library below.`) + skipNote,
+      });
       if (failCount === 0) { setTitle(""); setCaption(""); setCaptionBrief(""); setMediaUrl(""); setMediaName(""); setThumbUrl(""); setScheduledDate(""); setScheduledTime(""); setSelectedUpload(null); setSelectedThumb(null); }
       await loadHistory();
       await loadHubUploads();
@@ -417,7 +423,10 @@ export default function SocialPublisherPage() {
   const [libClient, setLibClient] = useState("all");
   const [libSel, setLibSel] = useState<PostRow | null>(null);
   const [libBusy, setLibBusy] = useState<string | null>(null);
-  const [libView, setLibView] = useState<"month" | "list">("month");
+  const [libView, setLibView] = useState<"agenda" | "month" | "list">("agenda");
+  // Agenda shows a run of days starting here — stepped a week at a time.
+  const [agendaStart, setAgendaStart] = useState(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; });
+  const AGENDA_DAYS = 7;
   const [libMonth, setLibMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
 
   // Bucket by the IST calendar day — the agency works in Kolkata time, so a
@@ -1150,10 +1159,23 @@ export default function SocialPublisherPage() {
             {/* View toggle + month navigation */}
             <div className="flex items-center gap-3 flex-wrap border-t border-slate-900 pt-3">
               <div className="flex bg-slate-950 border border-slate-900 rounded-lg p-0.5 text-[10px] font-bold uppercase">
-                {(["month", "list"] as const).map((v) => (
+                {(["agenda", "month", "list"] as const).map((v) => (
                   <button key={v} onClick={() => setLibView(v)} className={`px-3 py-1.5 rounded-md cursor-pointer ${libView === v ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>{v}</button>
                 ))}
               </div>
+              {libView === "agenda" && (
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setAgendaStart((d) => { const n = new Date(d); n.setDate(n.getDate() - AGENDA_DAYS); return n; })}
+                    className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white cursor-pointer">‹</button>
+                  <span className="text-sm font-bold text-white min-w-[190px] text-center">
+                    {fmtISTDate(agendaStart)} — {fmtISTDate(new Date(agendaStart.getTime() + (AGENDA_DAYS - 1) * 86400000))}
+                  </span>
+                  <button onClick={() => setAgendaStart((d) => { const n = new Date(d); n.setDate(n.getDate() + AGENDA_DAYS); return n; })}
+                    className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white cursor-pointer">›</button>
+                  <button onClick={() => { const d = new Date(); d.setHours(0, 0, 0, 0); setAgendaStart(d); }}
+                    className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">Today</button>
+                </div>
+              )}
               {libView === "month" && (
                 <div className="flex items-center gap-2">
                   <button onClick={() => setLibMonth(new Date(libMonth.getFullYear(), libMonth.getMonth() - 1, 1))} className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white cursor-pointer">‹</button>
@@ -1164,8 +1186,83 @@ export default function SocialPublisherPage() {
               )}
             </div>
 
-            {/* ---- MONTH CALENDAR ---- */}
-            {libView === "month" ? (() => {
+            {/* ---- AGENDA: one column per date, cards stacked down it ---- */}
+            {libView === "agenda" ? (() => {
+              const byDay: Record<string, PostRow[]> = {};
+              libRows.forEach((p) => { (byDay[dayKey(postDate(p))] ||= []).push(p); });
+              const todayKey = dayKey(new Date());
+              const days = Array.from({ length: AGENDA_DAYS }, (_, i) => {
+                const d = new Date(agendaStart);
+                d.setDate(d.getDate() + i);
+                return d;
+              });
+
+              return (
+                <div className="space-y-3">
+                  {days.map((d) => {
+                    const key = dayKey(d);
+                    const items = (byDay[key] || []).sort((a, b) => postDate(a).getTime() - postDate(b).getTime());
+                    const isToday = key === todayKey;
+                    return (
+                      <div key={key} className={`rounded-xl border ${isToday ? "border-[var(--yellow)]/60 bg-[var(--yellow)]/5" : "border-slate-900 bg-slate-950/50"}`}>
+                        <div className="flex items-center justify-between px-3 py-2 border-b border-slate-900/80">
+                          <div className="flex items-baseline gap-2">
+                            <span className={`text-sm font-black ${isToday ? "text-[var(--yellow)]" : "text-white"}`}>
+                              {d.toLocaleDateString("en-IN", { timeZone: IST_TZ, day: "numeric", month: "short" })}
+                            </span>
+                            <span className="text-[11px] font-bold text-slate-500">
+                              {d.toLocaleDateString("en-IN", { timeZone: IST_TZ, weekday: "long" })}
+                            </span>
+                            {isToday && <span className="text-[9px] font-black uppercase text-[var(--yellow)]">Today</span>}
+                          </div>
+                          <span className="text-[10px] font-mono font-bold text-slate-500">
+                            {items.length === 0 ? "nothing" : `${items.length} post${items.length > 1 ? "s" : ""}`}
+                          </span>
+                        </div>
+
+                        {items.length === 0 ? (
+                          <p className="text-[11px] text-slate-700 px-3 py-3">No posts on this date.</p>
+                        ) : (
+                          <div className="p-2 space-y-2">
+                            {items.map((p) => (
+                              <div key={p.id} className="flex items-start gap-2.5 bg-slate-950/80 border border-slate-900 rounded-lg p-2.5">
+                                <div className={`w-12 shrink-0 rounded-md overflow-hidden ${["reel", "story"].includes(p.content_type) ? "aspect-[9/16]" : "aspect-square"} bg-slate-900`}>
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img src={p.thumbnail_url || p.media_url} alt="" className="w-full h-full object-cover" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-[11px] font-black text-white">
+                                      {postDate(p).toLocaleTimeString("en-IN", { timeZone: IST_TZ, hour: "numeric", minute: "2-digit" })}
+                                    </span>
+                                    <span className="text-[10px] font-bold text-slate-300">{p.clients?.name || "—"}</span>
+                                    <span className="text-[9px] uppercase font-bold text-slate-500">{p.platform} · {p.content_type}</span>
+                                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border ${
+                                      p.status === "failed" ? "bg-rose-950/40 border-rose-900 text-rose-400"
+                                      : isFuture(p) ? "bg-amber-950/40 border-amber-900 text-amber-400"
+                                      : "bg-emerald-950/40 border-emerald-900 text-emerald-400"}`}>
+                                      {p.status === "failed" ? "failed" : isFuture(p) ? "scheduled" : "posted"}
+                                    </span>
+                                  </div>
+                                  <p className="text-[10px] text-slate-500 line-clamp-2 mt-0.5">{p.caption || p.title || "(no caption)"}</p>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button onClick={() => setLibSel(p)} title="Preview" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer"><Eye className="w-3.5 h-3.5" /></button>
+                                  {p.status === "failed" && (
+                                    <button disabled={libBusy === p.id} onClick={() => retryPost(p)} title="Retry" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer disabled:opacity-50"><RotateCcw className="w-3.5 h-3.5" /></button>
+                                  )}
+                                  <button disabled={libBusy === p.id} onClick={() => deletePost(p)} title="Remove" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-700 text-slate-400 hover:text-rose-400 cursor-pointer disabled:opacity-50"><Trash2 className="w-3.5 h-3.5" /></button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })() : libView === "month" ? (() => {
               const y = libMonth.getFullYear(), m = libMonth.getMonth();
               const lead = new Date(y, m, 1).getDay();
               const days = new Date(y, m + 1, 0).getDate();

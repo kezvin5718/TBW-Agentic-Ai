@@ -129,6 +129,23 @@ export async function POST(request: NextRequest) {
     publishUrl = staged.url;
   }
 
+  // Guard against sending the same post twice. When one platform in a batch
+  // fails (YouTube rejecting an image, say), the natural reaction is to hit
+  // Send again — which re-posted to the platforms that had ALREADY succeeded.
+  // That is how Taraash ended up on the calendar three times.
+  const sinceIso = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  let alreadyQ = admin
+    .from("social_posts")
+    .select("platform, content_type, scheduled_for")
+    .eq("client_id", clientId)
+    .eq("media_url", publishUrl)
+    .eq("status", "sent")
+    .gte("created_at", sinceIso);
+  const scheduledIso = scheduledFor ? istWallClockToUtc(scheduledFor).toISOString() : null;
+  alreadyQ = scheduledIso ? alreadyQ.eq("scheduled_for", scheduledIso) : alreadyQ.is("scheduled_for", null);
+  const { data: alreadySent } = await alreadyQ;
+  const alreadyKey = new Set((alreadySent || []).map((p) => `${p.platform}|${p.content_type}`));
+
   const results: Array<{ platform: string; contentType: string; ok: boolean; detail: string }> = [];
 
   // YouTube is video-only — an image post there always comes back 3003. The
@@ -154,6 +171,11 @@ export async function POST(request: NextRequest) {
       );
       let ok = false;
       let detail = "";
+      if (alreadyKey.has(`${platform}|${contentType}`)) {
+        // Same client, same media, same slot, already away — don't post twice.
+        skipped.push(`${platform} ${contentType} — already posted.`);
+        continue;
+      }
       if (!accountId) {
         detail = `No RecurPost account mapped for ${client?.name || "this client"} on ${platform} — map it in Social Publisher → RecurPost Accounts.`;
       } else {
