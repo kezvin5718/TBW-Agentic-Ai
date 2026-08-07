@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Avatar from "../Avatar";
 import { fmtIST, fmtISTDate, istToday, istWallClockToUtc, IST_TZ } from "@/lib/time";
-import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2 } from "lucide-react";
+import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2, Pencil } from "lucide-react";
 import PlatformIcon, { postLabel, PLATFORM_LABEL } from "./PlatformIcon";
 import { uploadDirect } from "@/lib/direct-upload";
 
@@ -21,6 +21,9 @@ interface PostRow {
   id: string; platform: string; content_type: string; title: string | null; caption: string | null;
   media_url: string; thumbnail_url: string | null; scheduled_for: string | null; status: string;
   webhook_response?: string | null;
+  media_is_video?: boolean | null;
+  recurpost_post_id?: number | null;
+  needs_recurpost_cleanup?: boolean | null;
   created_at: string; clients?: { name: string } | null;
   profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
 }
@@ -206,7 +209,12 @@ export default function SocialPublisherPage() {
   const loadHistory = useCallback(async () => {
     try {
       const res = await fetch("/api/social-publisher");
-      if (res.ok) setPosts((await res.json()).posts || []);
+      if (!res.ok) return;
+      const fresh: PostRow[] = (await res.json()).posts || [];
+      setPosts(fresh);
+      // The open detail panel is a snapshot — re-point it at the reloaded row so
+      // an edit's consequences (the RecurPost cleanup warning) actually show.
+      setLibSel((sel) => (sel ? fresh.find((p) => p.id === sel.id) || null : null));
     } catch { /* ignore */ }
   }, []);
 
@@ -431,6 +439,12 @@ export default function SocialPublisherPage() {
   const [libFilter, setLibFilter] = useState<"all" | "scheduled" | "posted" | "failed">("all");
   const [libClient, setLibClient] = useState("all");
   const [libSel, setLibSel] = useState<PostRow | null>(null);
+  const [editing, setEditing] = useState<{
+    id: string; title: string; caption: string; mediaUrl: string;
+    mediaIsVideo: boolean; thumbnailUrl: string; date: string; time: string;
+  } | null>(null);
+  const editMediaRef = useRef<HTMLInputElement>(null);
+  const editThumbRef = useRef<HTMLInputElement>(null);
   const [libBusy, setLibBusy] = useState<string | null>(null);
   const [libView, setLibView] = useState<"agenda" | "month" | "list">("agenda");
   // Which month cell is opened out — 40+ posts a day won't fit in a fixed box.
@@ -459,21 +473,90 @@ export default function SocialPublisherPage() {
     return true;
   });
 
-  const retryPost = async (p: PostRow) => {
+  const retryPost = async (p: PostRow, confirmedRemoved = false) => {
     setLibBusy(p.id);
     setNotice(null);
     try {
       const res = await fetch("/api/social-publisher", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "retry", id: p.id }),
+        body: JSON.stringify({ action: "retry", id: p.id, confirmedRemoved }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || data.error || "Retry failed");
       setNotice({ ok: true, text: "Re-sent to RecurPost ✅" });
+      setEditing(null);
       await loadHistory();
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Retry failed" });
     } finally { setLibBusy(null); }
+  };
+
+  /** Open the editor on a Library post, seeded with what it currently holds. */
+  const startEdit = (p: PostRow) => {
+    const local = p.scheduled_for ? new Date(p.scheduled_for) : null;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const istParts = local
+      ? new Intl.DateTimeFormat("en-CA", {
+          timeZone: IST_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+          hour: "2-digit", minute: "2-digit", hour12: false,
+        }).formatToParts(local).reduce<Record<string, string>>((a, x) => (a[x.type] = x.value, a), {})
+      : null;
+    setEditing({
+      id: p.id,
+      title: p.title || "",
+      caption: p.caption || "",
+      mediaUrl: p.media_url,
+      mediaIsVideo: p.media_is_video ?? /\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(p.media_url),
+      thumbnailUrl: p.thumbnail_url || "",
+      date: istParts ? `${istParts.year}-${istParts.month}-${istParts.day}` : "",
+      // Intl with hour12:false reports midnight as "24" on some runtimes.
+      time: istParts ? `${pad(Number(istParts.hour) % 24)}:${istParts.minute}` : "",
+    });
+  };
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    setLibBusy(editing.id);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/social-publisher", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: editing.id,
+          title: editing.title,
+          caption: editing.caption,
+          mediaUrl: editing.mediaUrl,
+          mediaIsVideo: editing.mediaIsVideo,
+          thumbnailUrl: editing.thumbnailUrl,
+          scheduledFor: editing.date && editing.time ? `${editing.date} ${editing.time}:00` : null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save");
+      setNotice({ ok: true, text: data.message });
+      await loadHistory();
+      // Stay open when RecurPost still holds the original — the next step
+      // (delete there, then re-send) happens right here.
+      if (!data.stillQueuedThere) setEditing(null);
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not save" });
+    } finally { setLibBusy(null); }
+  };
+
+  /** Replace the media on a post being edited, straight to Storage. */
+  const uploadForEdit = async (kind: "media" | "thumb", file: File) => {
+    if (!editing) return;
+    setUploading(kind);
+    setUploadPct(0);
+    setNotice(null);
+    try {
+      const data = await uploadDirect(file, "social", setUploadPct);
+      setEditing((e) => e && (kind === "media"
+        ? { ...e, mediaUrl: data.url, mediaIsVideo: data.mediaType === "video" }
+        : { ...e, thumbnailUrl: data.url }));
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Upload failed" });
+    } finally { setUploading(null); setUploadPct(0); }
   };
 
   const deletePost = async (p: PostRow) => {
@@ -1432,10 +1515,134 @@ export default function SocialPublisherPage() {
                       {libBusy === libSel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}<span>Retry</span>
                     </button>
                   )}
+                  {/* Editing can only achieve something while nothing has gone
+                      out yet — a published post lives on the platform now. */}
+                  {(libSel.status === "failed" || isFuture(libSel)) && editing?.id !== libSel.id && (
+                    <button onClick={() => startEdit(libSel)} className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:border-indigo-600 text-[10px] font-bold cursor-pointer flex items-center gap-1">
+                      <Pencil className="w-3 h-3" /><span>Edit</span>
+                    </button>
+                  )}
                   <button disabled={libBusy === libSel.id} onClick={() => deletePost(libSel)} className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1">
                     <Trash2 className="w-3 h-3" /><span>Remove</span>
                   </button>
                 </div>
+
+                {libSel.status === "sent" && !isFuture(libSel) && (
+                  <p className="text-[10px] text-slate-600">
+                    Already published — it can only be changed on the platform itself now.
+                  </p>
+                )}
+
+                {/* Standing warning: our copy is corrected, RecurPost's isn't. */}
+                {libSel.needs_recurpost_cleanup && (
+                  <div className="bg-amber-950/25 border border-amber-900/60 rounded-xl p-3 space-y-2">
+                    <p className="text-[11px] text-amber-200 font-bold flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5" /> RecurPost still holds the old version
+                    </p>
+                    <p className="text-[10px] text-amber-200/80 leading-relaxed">
+                      Your correction is saved here, but RecurPost gives us no way to change or cancel a queued post.
+                      Open RecurPost → Queue, delete post{" "}
+                      <b className="font-mono">{libSel.recurpost_post_id ?? "(id not recorded)"}</b>, then press Re-send —
+                      otherwise both versions publish.
+                    </p>
+                    <button
+                      disabled={libBusy === libSel.id}
+                      onClick={() => {
+                        if (!window.confirm(`Have you deleted post ${libSel.recurpost_post_id ?? ""} in RecurPost's Queue?\n\nIf it is still there, this will publish twice.`)) return;
+                        retryPost(libSel, true);
+                      }}
+                      className="px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-[10px] font-bold text-white cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                    >
+                      {libBusy === libSel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                      <span>I&apos;ve deleted it — re-send corrected</span>
+                    </button>
+                  </div>
+                )}
+
+                {editing?.id === libSel.id && (
+                  <div className="bg-slate-950 border border-indigo-900/60 rounded-xl p-3 space-y-3">
+                    <p className="text-[11px] font-bold text-indigo-300 flex items-center gap-1.5">
+                      <Pencil className="w-3.5 h-3.5" /> Editing this post
+                    </p>
+
+                    {isFuture(libSel) && libSel.status === "sent" && !libSel.needs_recurpost_cleanup && (
+                      <p className="text-[10px] text-amber-300/90 bg-amber-950/20 border border-amber-900/40 rounded-lg p-2 leading-relaxed">
+                        This one is already queued at RecurPost. Saving corrects our copy, but you will still need to
+                        delete post <b className="font-mono">{libSel.recurpost_post_id ?? "(id not recorded)"}</b> in
+                        RecurPost and re-send — their API has no way to edit a queued post.
+                      </p>
+                    )}
+
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Title</label>
+                      <input value={editing.title} onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500" />
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Caption</label>
+                      <textarea value={editing.caption} onChange={(e) => setEditing({ ...editing, caption: e.target.value })} rows={4}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white resize-none leading-relaxed focus:outline-none focus:border-indigo-500" />
+                      {storyHasNoCaption(libSel.content_type) && editing.caption && (
+                        <p className="mt-1 text-[10px] text-amber-400">Stories drop the caption — this text won&apos;t appear.</p>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Media</label>
+                        <button onClick={() => editMediaRef.current?.click()} disabled={uploading === "media"}
+                          className="w-full border border-dashed border-slate-800 hover:border-indigo-500 rounded-lg p-2 text-[10px] text-slate-400 cursor-pointer disabled:opacity-50">
+                          {uploading === "media" ? `${uploadPct}%` : "Replace media"}
+                        </button>
+                        <input ref={editMediaRef} type="file" accept="image/*,video/mp4,video/quicktime" className="hidden"
+                          onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadForEdit("media", f); e.target.value = ""; }} />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Thumbnail</label>
+                        <button onClick={() => editThumbRef.current?.click()} disabled={uploading === "thumb"}
+                          className="w-full border border-dashed border-slate-800 hover:border-indigo-500 rounded-lg p-2 text-[10px] text-slate-400 cursor-pointer disabled:opacity-50">
+                          {uploading === "thumb" ? `${uploadPct}%` : editing.thumbnailUrl ? "Change thumbnail" : "Add thumbnail"}
+                        </button>
+                        <input ref={editThumbRef} type="file" accept="image/*" className="hidden"
+                          onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadForEdit("thumb", f); e.target.value = ""; }} />
+                      </div>
+                    </div>
+
+                    {editing.thumbnailUrl && (
+                      <div className="flex items-center gap-2">
+                        <img src={editing.thumbnailUrl} alt="thumbnail" className="h-12 w-12 rounded-lg object-cover border border-slate-800" />
+                        <button onClick={() => setEditing({ ...editing, thumbnailUrl: "" })}
+                          className="text-[10px] text-slate-500 hover:text-rose-400 cursor-pointer">Remove thumbnail</button>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Date (IST)</label>
+                        <input type="date" value={editing.date} onChange={(e) => setEditing({ ...editing, date: e.target.value })}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Time (IST)</label>
+                        <input type="time" value={editing.time} onChange={(e) => setEditing({ ...editing, time: e.target.value })}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500" />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button onClick={saveEdit} disabled={libBusy === editing.id || !!uploading}
+                        className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[10px] font-bold text-white cursor-pointer disabled:opacity-50 flex items-center gap-1">
+                        {libBusy === editing.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
+                        <span>Save changes</span>
+                      </button>
+                      <button onClick={() => setEditing(null)}
+                        className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-[10px] font-bold cursor-pointer">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {libSel.status === "failed" && (
                   <div className="bg-rose-950/30 border border-rose-900/60 rounded-xl p-2.5 text-[10px] text-rose-300">
                     <b>Failure detail:</b>

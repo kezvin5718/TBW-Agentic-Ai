@@ -6,6 +6,18 @@ import { toPublishableVideoUrl } from "@/lib/publishable-media";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * RecurPost answers a successful schedule with { post_data: { id } }. That id is
+ * the only handle on a queued post, and since their API has no way to change or
+ * cancel one, it is what the team types into RecurPost's Queue to remove a post
+ * they need to correct. Worth a column of its own.
+ */
+function recurPostIdOf(res: unknown): number | null {
+  const id = (res as { post_data?: { id?: unknown } })?.post_data?.id;
+  const n = typeof id === "string" ? Number(id) : typeof id === "number" ? id : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
 // GET — post history (newest first).
 export async function GET() {
   const supabase = await createClient();
@@ -42,6 +54,20 @@ export async function POST(request: NextRequest) {
     const admin = createServiceRoleClient();
     const { data: post } = await admin.from("social_posts").select("*").eq("id", body.id).single();
     if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
+
+    // A corrected post whose original is still queued at RecurPost would go out
+    // twice — one wrong, one right. That is how Taraash ended up posted three
+    // times, so the removal has to be confirmed before we send the replacement.
+    if (post.needs_recurpost_cleanup && !body.confirmedRemoved) {
+      return NextResponse.json(
+        {
+          error: `RecurPost still has the original queued as post ${post.recurpost_post_id ?? "(id not recorded)"}. Delete it in RecurPost → Queue first, otherwise both versions publish.`,
+          needsConfirmation: true,
+          recurpostPostId: post.recurpost_post_id ?? null,
+        },
+        { status: 409 }
+      );
+    }
 
     const { data: mapRow } = await admin.from("agency_settings").select("value").eq("key", "recurpost_account_map").maybeSingle();
     const map = (mapRow?.value as Record<string, { client_id: string; platform: string }>) || {};
@@ -84,16 +110,27 @@ export async function POST(request: NextRequest) {
 
     let ok = false;
     let detail = "";
+    let rpId: number | null = null;
     try {
       const res = await postContent(params);
       detail = JSON.stringify(res).slice(0, 300);
       const lower = detail.toLowerCase();
       ok = !(lower.includes('"error"') || lower.includes('"status":"failed"') || lower.includes("invalid"));
+      if (ok) rpId = recurPostIdOf(res);
     } catch (err: unknown) {
       detail = err instanceof Error ? err.message : String(err);
     }
-    await admin.from("social_posts").update({ status: ok ? "sent" : "failed", webhook_response: `[retry] ${detail}` }).eq("id", body.id);
-    return NextResponse.json({ success: ok, detail }, { status: ok ? 200 : 500 });
+    await admin
+      .from("social_posts")
+      .update({
+        status: ok ? "sent" : "failed",
+        // The replacement carries a new RecurPost id; the old one is gone, so
+        // the cleanup warning has nothing left to warn about.
+        ...(ok ? { recurpost_post_id: rpId, needs_recurpost_cleanup: false } : {}),
+        webhook_response: `[retry] ${detail}`,
+      })
+      .eq("id", body.id);
+    return NextResponse.json({ success: ok, detail, recurpostPostId: rpId }, { status: ok ? 200 : 500 });
   }
 
   const { clientId, platforms, title, caption, mediaUrl, thumbnailUrl, scheduledFor, uploadId, thumbUploadId } = body;
@@ -162,6 +199,7 @@ export async function POST(request: NextRequest) {
       );
       let ok = false;
       let detail = "";
+      let rpId: number | null = null;
       if (alreadyKey.has(`${platform}|${contentType}`)) {
         // Same client, same media, same slot, already away — don't post twice.
         skipped.push(`${platform} ${contentType} — already posted.`);
@@ -195,6 +233,7 @@ export async function POST(request: NextRequest) {
           const lower = detail.toLowerCase();
           // The call returned 200 — treat as sent unless the body flags an error.
           ok = !(lower.includes('"error"') || lower.includes('"status":"failed"') || lower.includes("invalid"));
+          if (ok) rpId = recurPostIdOf(res);
         } catch (err: unknown) {
           detail = err instanceof Error ? err.message : String(err);
         }
@@ -213,6 +252,7 @@ export async function POST(request: NextRequest) {
         thumbnail_url: thumbnailUrl || null,
         scheduled_for: scheduledFor ? istWallClockToUtc(scheduledFor).toISOString() : null,
         status: ok ? "sent" : "failed",
+        recurpost_post_id: rpId,
         webhook_response: `[recurpost] ${detail}`,
       });
       results.push({ platform, contentType, ok, detail });
@@ -234,6 +274,76 @@ export async function POST(request: NextRequest) {
 
   // A deliberate skip is not a failure — don't report the whole send as failed.
   return NextResponse.json({ success: failed.length === 0, results, skipped });
+}
+
+/**
+ * PATCH — edit a post in the Library.
+ *
+ * What editing can actually achieve depends entirely on where the post is:
+ *
+ *  - Failed, or never scheduled: nothing is queued anywhere, so the edit is the
+ *    whole fix. Correct it and send.
+ *  - Accepted by RecurPost for a future time: RecurPost's API can create a post
+ *    but cannot change or cancel one. Editing here does NOT change what they
+ *    will publish. The row is flagged so the Library keeps saying so, and the
+ *    team is told to delete that post id in RecurPost's Queue and re-send.
+ *  - Already published: the platform has it. Nothing here can alter that.
+ *
+ * Body: { id, title?, caption?, mediaUrl?, mediaIsVideo?, thumbnailUrl?, scheduledFor? }
+ */
+export async function PATCH(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const role = (user?.user_metadata?.role as string) || "client";
+  if (!user) return NextResponse.json({ error: "Your session has expired. Please sign in again." }, { status: 401 });
+  if (!["founder", "employee"].includes(role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+  const body = await request.json();
+  if (!body.id) return NextResponse.json({ error: "id required" }, { status: 400 });
+
+  const admin = createServiceRoleClient();
+  const { data: post } = await admin.from("social_posts").select("*").eq("id", body.id).maybeSingle();
+  if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
+
+  const scheduledMs = post.scheduled_for ? new Date(post.scheduled_for as string).getTime() : 0;
+  const alreadyPublished = post.status === "sent" && (!post.scheduled_for || scheduledMs <= Date.now());
+  if (alreadyPublished) {
+    return NextResponse.json(
+      { error: "This one has already gone out — editing here would change our record but not the live post. Edit or remove it on the platform itself." },
+      { status: 409 }
+    );
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (body.title !== undefined) patch.title = body.title || null;
+  if (body.caption !== undefined) patch.caption = body.caption || null;
+  if (body.thumbnailUrl !== undefined) patch.thumbnail_url = body.thumbnailUrl || null;
+  if (body.mediaUrl !== undefined && body.mediaUrl) {
+    patch.media_url = body.mediaUrl;
+    patch.media_is_video = !!body.mediaIsVideo;
+  }
+  if (body.scheduledFor !== undefined) {
+    patch.scheduled_for = body.scheduledFor ? istWallClockToUtc(body.scheduledFor).toISOString() : null;
+  }
+  if (Object.keys(patch).length === 0) {
+    return NextResponse.json({ error: "Nothing to change" }, { status: 400 });
+  }
+
+  // Queued at RecurPost — our copy and theirs are now deliberately out of step.
+  const stillQueuedThere = post.status === "sent" && scheduledMs > Date.now();
+  if (stillQueuedThere) patch.needs_recurpost_cleanup = true;
+
+  const { error } = await admin.from("social_posts").update(patch).eq("id", body.id);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  return NextResponse.json({
+    success: true,
+    stillQueuedThere,
+    recurpostPostId: post.recurpost_post_id ?? null,
+    message: stillQueuedThere
+      ? `Saved here — but RecurPost still holds the original and their API gives us no way to change or cancel it. Open RecurPost → Queue, delete post ${post.recurpost_post_id ?? "(id not recorded)"}, then press Re-send.`
+      : "Saved. Nothing is queued anywhere yet, so press Send when you're ready.",
+  });
 }
 
 // DELETE — remove a post from the Library. Note: RecurPost's API has no cancel
