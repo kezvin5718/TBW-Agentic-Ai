@@ -738,7 +738,7 @@ export default function SocialPublisherPage() {
   };
 
   return (
-    <div className={`${view === "library" ? "max-w-7xl" : "max-w-4xl"} mx-auto space-y-6`}>
+    <div className={`${view === "library" ? "max-w-7xl" : "max-w-[1700px]"} mx-auto space-y-6`}>
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
@@ -874,9 +874,12 @@ export default function SocialPublisherPage() {
         </div>
       )}
 
-      {view === "compose" && (<>
+      {view === "compose" && (
+      /* Three columns: what the designers delivered, what you're composing, and
+         how it will look — so picking a creative never scrolls the form away. */
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)_330px] gap-5 items-start">
       {/* Received from Content Hub — what designers have delivered, per client */}
-      <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5">
+      <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto">
         <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
           <h3 className="text-sm font-bold text-white flex items-center space-x-2">
             <UploadCloud className="w-4 h-4 text-[var(--yellow)]" />
@@ -898,7 +901,7 @@ export default function SocialPublisherPage() {
         {hubMedia.length === 0 ? (
           <p className="text-xs text-slate-600 py-3 text-center">Nothing waiting — new designer uploads will appear here, grouped by client.</p>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
             {hubSorted.filter((u) => hubFilter === "all" || (u.clients?.name || "Unknown") === hubFilter).map((u) => (
               <div key={u.id} className={`rounded-xl border p-3 space-y-2 ${selectedUpload?.id === u.id ? "border-indigo-500 bg-indigo-950/20" : "border-slate-900 bg-slate-950/60"}`}>
                 <div className="flex items-center space-x-2.5">
@@ -932,8 +935,7 @@ export default function SocialPublisherPage() {
         )}
       </div>
 
-      {/* Composer + live social preview */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-5 items-start">
+      {/* Composer — the middle column */}
       <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-5">
         {/* 1. Client + platforms + type */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1200,26 +1202,26 @@ export default function SocialPublisherPage() {
             ))}
           </div>
 
-          <div className="flex items-end justify-between gap-4 flex-wrap">
-            <div className="flex gap-3 flex-wrap">
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">📅 Date (click for calendar)</label>
                 <input type="date" value={scheduledDate} onClick={openPicker} onChange={(e) => setScheduledDate(e.target.value)}
                   min={istToday()}
-                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 cursor-pointer [color-scheme:dark]" />
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 cursor-pointer [color-scheme:dark]" />
               </div>
               <div>
                 <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">🕐 Time (click to pick)</label>
                 <input type="time" value={scheduledTime} onClick={openPicker} onChange={(e) => setScheduledTime(e.target.value)}
-                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 cursor-pointer [color-scheme:dark]" />
-              </div>
-              <div className="self-end pb-1 text-[11px] text-slate-500">
-                {composeSchedule()
-                  ? <>Scheduled: <span className="signal">{fmtIST(istWallClockToUtc(composeSchedule()), { weekday: "short", year: undefined })} IST</span></>
-                  : "Posts immediately"}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 cursor-pointer [color-scheme:dark]" />
               </div>
             </div>
-            <button onClick={submit} disabled={!canSend} className={`px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center space-x-2 transition-all ${canSend ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>
+            <p className="text-[11px] text-slate-500">
+              {composeSchedule()
+                ? <>Scheduled: <span className="signal">{fmtIST(istWallClockToUtc(composeSchedule()), { weekday: "short", year: undefined })} IST</span></>
+                : "Posts immediately"}
+            </p>
+            <button onClick={submit} disabled={!canSend} className={`w-full px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 transition-all ${canSend ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>
               {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
               <span>{sending ? "Sending…" : `Post via RecurPost (${platforms.length * contentTypes.length})`}</span>
             </button>
@@ -1228,7 +1230,7 @@ export default function SocialPublisherPage() {
       </div>
 
       {/* Social preview panel — .pv keeps true white inside even in day view */}
-      <div className="pv lg:sticky lg:top-4 space-y-3">
+      <div className="pv xl:sticky xl:top-4 space-y-3">
         <h3 className="text-sm font-bold text-white flex items-center gap-2"><Eye className="w-4 h-4 text-[var(--yellow)]" /><span>Social preview</span></h3>
         {platforms.length > 1 && (
           <div className="flex flex-wrap gap-1.5">
@@ -1248,8 +1250,7 @@ export default function SocialPublisherPage() {
         <p className="text-[10px] text-slate-600">Approximate preview — final look can differ slightly per platform.</p>
       </div>
       </div>
-
-      </>)}
+      )}
 
       {/* ------------------------------- LIBRARY ------------------------------- */}
       {view === "library" && (
