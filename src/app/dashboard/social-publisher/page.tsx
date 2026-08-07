@@ -901,7 +901,10 @@ export default function SocialPublisherPage() {
         {hubMedia.length === 0 ? (
           <p className="text-xs text-slate-600 py-3 text-center">Nothing waiting — new designer uploads will appear here, grouped by client.</p>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+          // Two across, not three: in a side column three cards squeeze the
+          // filename down to "Irin …", and that number is what the team matches
+          // a reel to its thumbnail by.
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {hubSorted.filter((u) => hubFilter === "all" || (u.clients?.name || "Unknown") === hubFilter).map((u) => (
               <div key={u.id} className={`rounded-xl border p-3 space-y-2 ${selectedUpload?.id === u.id ? "border-indigo-500 bg-indigo-950/20" : "border-slate-900 bg-slate-950/60"}`}>
                 <div className="flex items-center space-x-2.5">
