@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import Avatar from "../Avatar";
 import { fmtIST, fmtISTDate, istToday, istWallClockToUtc, IST_TZ } from "@/lib/time";
 import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2 } from "lucide-react";
+import PlatformIcon, { postLabel, PLATFORM_LABEL } from "./PlatformIcon";
 
 interface ClientRow { id: string; name: string; logo?: string }
 interface HubUpload {
@@ -31,6 +32,9 @@ const PLATFORMS = [
   { key: "youtube", label: "YouTube" },
 ];
 const TYPES = ["post", "reel", "story"] as const;
+
+/** Instagram and Facebook Stories carry no caption — the text is dropped. */
+const storyHasNoCaption = (contentType: string) => contentType === "story";
 
 export default function SocialPublisherPage() {
   const [clients, setClients] = useState<ClientRow[]>([]);
@@ -424,6 +428,8 @@ export default function SocialPublisherPage() {
   const [libSel, setLibSel] = useState<PostRow | null>(null);
   const [libBusy, setLibBusy] = useState<string | null>(null);
   const [libView, setLibView] = useState<"agenda" | "month" | "list">("agenda");
+  // Which month cell is opened out — 40+ posts a day won't fit in a fixed box.
+  const [expandedDay, setExpandedDay] = useState<string | null>(null);
   // Agenda shows a run of days starting here — stepped a week at a time.
   const [agendaStart, setAgendaStart] = useState(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; });
   const AGENDA_DAYS = 7;
@@ -1062,6 +1068,12 @@ export default function SocialPublisherPage() {
           </div>
           <input value={captionBrief} onChange={(e) => setCaptionBrief(e.target.value)} placeholder="Optional: what is this post about? (e.g. Diwali offer on gold necklaces)"
             className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500" />
+          {contentTypes.length > 0 && contentTypes.every(storyHasNoCaption) && caption.trim() && (
+            <p className="text-[10px] text-amber-400 font-bold flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3 shrink-0" />
+              Stories don&apos;t carry a caption — Instagram and Facebook drop this text. Add it onto the image, or also select Post/Reel.
+            </p>
+          )}
           <textarea value={caption} onChange={(e) => setCaption(e.target.value)} rows={5} placeholder="Write the caption, or generate it from the brand's brain…"
             className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 resize-none leading-relaxed" />
         </div>
@@ -1281,28 +1293,37 @@ export default function SocialPublisherPage() {
                       const k = cellKey(y, m, day);
                       const dayPosts = (byDay[k] || []).sort((a, b) => postDate(a).getTime() - postDate(b).getTime());
                       return (
-                        <div key={k} className={`bg-slate-950/70 min-h-[110px] p-1.5 space-y-1 ${k === todayKey ? "ring-1 ring-inset ring-[var(--yellow)]" : ""}`}>
+                        <div key={k} className={`bg-slate-950/70 min-h-[110px] p-1.5 space-y-1 ${expandedDay === k ? "max-h-[420px] overflow-y-auto" : ""} ${k === todayKey ? "ring-1 ring-inset ring-[var(--yellow)]" : ""}`}>
                           <div className="flex items-center justify-between">
                             <span className={`text-[11px] font-bold ${k === todayKey ? "text-[var(--yellow)]" : "text-slate-400"}`}>{day}</span>
                             {dayPosts.length > 0 && <span className="text-[8px] font-black px-1 rounded bg-slate-900 text-slate-500">{dayPosts.length}</span>}
                           </div>
-                          {dayPosts.slice(0, 3).map((p) => {
+                          {/* Brand + platform only — the caption belongs in the
+                              preview, not squeezed into a calendar cell. */}
+                          {(expandedDay === k ? dayPosts : dayPosts.slice(0, 3)).map((p) => {
                             const sch = p.status === "sent" && isFuture(p);
                             return (
-                              <button key={p.id} onClick={() => setLibSel(p)} title={`${p.clients?.name} · ${p.platform} · ${p.caption?.slice(0, 60) || ""}`}
+                              <button key={p.id} onClick={() => setLibSel(p)} title={`${p.clients?.name || ""} · ${postLabel(p.platform, p.content_type)} — click to read the caption`}
                                 className={`w-full text-left rounded-md border p-1 flex items-center gap-1 cursor-pointer transition-all ${libSel?.id === p.id ? "border-indigo-500 bg-indigo-950/30" : "border-slate-800 bg-slate-950 hover:border-slate-600"}`}>
                                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${p.status === "failed" ? "bg-rose-500" : sch ? "bg-amber-400" : "bg-emerald-400"}`} />
-                                <div className="w-5 h-5 rounded overflow-hidden bg-slate-900 shrink-0">
-                                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                                  <img src={p.thumbnail_url || p.media_url} alt="" className="w-full h-full object-cover" />
-                                </div>
-                                <span className="text-[8.5px] text-slate-300 truncate leading-tight">
-                                  {postDate(p).toLocaleTimeString("en-IN", { timeZone: IST_TZ, hour: "numeric", minute: "2-digit" })} {p.clients?.name}
+                                <PlatformIcon platform={p.platform} size={11} />
+                                <span className="min-w-0 leading-tight">
+                                  <span className="block text-[8.5px] font-bold text-slate-200 truncate">{p.clients?.name || "—"}</span>
+                                  <span className="block text-[7.5px] text-slate-500 truncate">
+                                    {PLATFORM_LABEL[p.platform] || p.platform} {p.content_type}
+                                  </span>
                                 </span>
                               </button>
                             );
                           })}
-                          {dayPosts.length > 3 && <p className="text-[8px] text-indigo-400 font-bold pl-1">+{dayPosts.length - 3} more</p>}
+                          {dayPosts.length > 3 && (
+                            <button
+                              onClick={() => setExpandedDay(expandedDay === k ? null : k)}
+                              className="text-[8px] text-indigo-400 font-bold pl-1 hover:text-indigo-300 cursor-pointer"
+                            >
+                              {expandedDay === k ? "− show less" : `+${dayPosts.length - 3} more`}
+                            </button>
+                          )}
                         </div>
                       );
                     })}
@@ -1359,7 +1380,10 @@ export default function SocialPublisherPage() {
                   <div className="flex items-center gap-2 px-3 py-2.5">
                     <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-amber-400 to-pink-500 flex items-center justify-center text-white font-black text-xs">{(libSel.clients?.name || "B")[0].toUpperCase()}</div>
                     <span className="text-xs font-bold">{libSel.clients?.name}</span>
-                    <span className="ml-auto text-[10px] text-slate-500 capitalize">{libSel.platform}</span>
+                    <span className="ml-auto flex items-center gap-1 text-[10px] text-slate-500">
+                      <PlatformIcon platform={libSel.platform} size={11} />
+                      {postLabel(libSel.platform, libSel.content_type)}
+                    </span>
                   </div>
                   <div className={["reel", "story"].includes(libSel.content_type) ? "aspect-[9/16] bg-black" : "aspect-square bg-slate-100"}>
                     {/\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(libSel.media_url) ? (
@@ -1372,6 +1396,11 @@ export default function SocialPublisherPage() {
                   <div className="px-3 py-2 text-xs">
                     {libSel.title && <p className="font-bold mb-1">{libSel.title}</p>}
                     <p className="text-slate-700 whitespace-pre-wrap break-words">{libSel.caption || "(no caption)"}</p>
+                    {storyHasNoCaption(libSel.content_type) && libSel.caption && (
+                      <p className="mt-1.5 text-[10px] font-bold text-amber-600">
+                        ⚠ Stories don&apos;t show a caption — this text was not published with it.
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
