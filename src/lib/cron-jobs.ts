@@ -264,10 +264,12 @@ export async function runLearningLoop(): Promise<string[]> {
   const supabase = createServiceRoleClient();
   const logs: string[] = [];
 
-  // Query all active clients
+  // Query all active clients — archived ones are past business, so the loop
+  // shouldn't keep learning from them or messaging about them.
   const { data: clients, error: clientErr } = await supabase
     .from("clients")
-    .select("*");
+    .select("*")
+    .is("archived_at", null);
 
   if (clientErr || !clients || clients.length === 0) {
     logs.push("⚠️ No active clients found to run learning loop synchronization.");

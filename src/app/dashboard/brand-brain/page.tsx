@@ -1,21 +1,23 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import ClientGrid, { type ClientRow } from "./ClientGrid";
 import {
   Sparkles,
   Layers,
-  ChevronRight,
-  UserCheck,
-  TrendingUp,
   Briefcase
 } from "lucide-react";
 
 export default async function BrandBrainIndexPage() {
   const supabase = await createClient();
 
-  // Fetch all clients
+  const { data: { user } } = await supabase.auth.getUser();
+  const isFounder = (user?.user_metadata?.role as string) === "founder";
+
+  // Archived clients come through too — the grid keeps them in their own
+  // collapsed section rather than hiding them from the one page that manages them.
   const { data: clients, error } = await supabase
     .from("clients")
-    .select("id, name, logo_url, deliverables_per_month, ad_budget")
+    .select("id, name, logo_url, deliverables_per_month, ad_budget, archived_at")
     .order("name", { ascending: true });
 
   return (
@@ -63,43 +65,7 @@ export default async function BrandBrainIndexPage() {
           </Link>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {clients.map((client) => (
-            <Link
-              key={client.id}
-              href={`/dashboard/brand-brain/${client.id}`}
-              className="group bg-slate-950/40 border border-slate-900 hover:border-slate-800 rounded-2xl p-5 block transition-all relative overflow-hidden"
-            >
-              <div className="absolute top-0 right-0 left-0 h-[1.5px] bg-gradient-to-r from-transparent via-indigo-500/0 group-hover:via-indigo-500/20 to-transparent transition-all" />
-              
-              <div className="flex items-start justify-between">
-                <div className="space-y-3">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-8 h-8 rounded-lg bg-indigo-950/40 border border-indigo-900/50 flex items-center justify-center text-indigo-400 font-bold text-xs uppercase">
-                      {client.name.substring(0, 2)}
-                    </div>
-                    <h3 className="font-bold text-white group-hover:text-indigo-400 transition-colors text-sm">{client.name}</h3>
-                  </div>
-                  
-                  <div className="flex items-center space-x-4 text-[10px] text-slate-500">
-                    <div className="flex items-center space-x-1">
-                      <UserCheck className="w-3.5 h-3.5" />
-                      <span>{client.deliverables_per_month} ads/mo</span>
-                    </div>
-                    <div className="flex items-center space-x-1">
-                      <TrendingUp className="w-3.5 h-3.5" />
-                      <span>Budget: INR {client.ad_budget?.toLocaleString("en-IN")}</span>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="w-7 h-7 rounded-lg border border-slate-900 group-hover:border-slate-800 bg-slate-950 flex items-center justify-center text-slate-500 group-hover:text-indigo-400 transition-all">
-                  <ChevronRight className="w-4 h-4" />
-                </div>
-              </div>
-            </Link>
-          ))}
-        </div>
+        <ClientGrid clients={clients as ClientRow[]} isFounder={isFounder} />
       )}
     </div>
   );

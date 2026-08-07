@@ -89,6 +89,7 @@ export default function PlanningIndexPage() {
       const { data: clientsData } = await supabase
         .from("clients")
         .select("id, name, deliverables_per_month, ad_budget")
+        .is("archived_at", null)
         .order("name");
 
       const { data: plansData } = await supabase

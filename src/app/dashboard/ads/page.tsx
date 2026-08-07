@@ -124,6 +124,7 @@ export default function MetaAdsManagerPage() {
       const { data: clientsData } = await supabase
         .from("clients")
         .select("id, name, ad_budget")
+        .is("archived_at", null)
         .order("name", { ascending: true });
       setClients(clientsData || []);
 

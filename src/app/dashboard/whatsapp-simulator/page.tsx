@@ -48,6 +48,7 @@ export default function WhatsAppSimulatorPage() {
         const { data } = await supabase
           .from("clients")
           .select("id, name, whatsapp_group_id, social_accounts")
+          .is("archived_at", null)
           .order("name");
 
         setClients(data || []);

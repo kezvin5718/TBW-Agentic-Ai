@@ -150,7 +150,7 @@ export default function ContentHubPage() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (user) setMe({ id: user.id, role: (user.user_metadata?.role as string) || "employee" });
-      const { data } = await supabase.from("clients").select("id, name").order("name");
+      const { data } = await supabase.from("clients").select("id, name").is("archived_at", null).order("name");
       setClients(data || []);
     })();
     fetchUploads();

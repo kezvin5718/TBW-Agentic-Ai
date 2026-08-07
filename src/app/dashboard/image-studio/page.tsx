@@ -499,6 +499,7 @@ function ImageStudioWorkspace() {
       const { data, error } = await supabase
         .from("clients")
         .select("id, name")
+        .is("archived_at", null)
         .order("name", { ascending: true });
 
       if (!error && data) {

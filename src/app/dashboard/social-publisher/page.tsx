@@ -280,7 +280,7 @@ export default function SocialPublisherPage() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       setMyRole((user?.user_metadata?.role as string) || "employee");
-      const { data } = await supabase.from("clients").select("id, name, logo_url").order("name");
+      const { data } = await supabase.from("clients").select("id, name, logo_url").is("archived_at", null).order("name");
       setClients(
         (data || []).map((c: { id: string; name: string; logo_url?: string | null }) => ({
           id: c.id,

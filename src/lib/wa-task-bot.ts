@@ -91,7 +91,8 @@ export async function runWhatsAppTaskBot(): Promise<BotResult> {
   if (!rows || rows.length === 0) return out;
 
   const [{ data: clients }, { data: team }] = await Promise.all([
-    admin.from("clients").select("id, name"),
+    // Archived clients are past business — never frame a new task against one.
+    admin.from("clients").select("id, name").is("archived_at", null),
     admin.from("team_members").select("name, role_title").eq("active", true),
   ]);
   const nameToId = new Map((clients || []).map((c) => [c.name.toLowerCase().trim(), c.id]));

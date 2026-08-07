@@ -54,7 +54,7 @@ export default function WhatsAppInboxPage() {
       setMe(user?.id || null);
       const { data } = await supabase.from("profiles").select("id, name").in("role", ["founder", "employee"]);
       setStaff(data || []);
-      const { data: cl } = await supabase.from("clients").select("id, name").order("name");
+      const { data: cl } = await supabase.from("clients").select("id, name").is("archived_at", null).order("name");
       setClients(cl || []);
     })();
   }, []);

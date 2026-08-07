@@ -100,6 +100,7 @@ export default function AdPublishingPage() {
       const { data: clientsData } = await supabase
         .from("clients")
         .select("id, name")
+        .is("archived_at", null)
         .order("name", { ascending: true });
       setClients(clientsData || []);
 

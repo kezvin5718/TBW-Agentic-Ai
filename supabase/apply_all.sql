@@ -116,8 +116,14 @@ CREATE TABLE IF NOT EXISTS public.clients (
   deliverables_per_month INTEGER DEFAULT 0,
   ad_budget NUMERIC DEFAULT 0.0,
   whatsapp_group_id TEXT,
+  -- Archiving hides a client everywhere but keeps its history. Permanent
+  -- deletion cascades into a dozen tables, so it is never the easy path.
+  archived_at TIMESTAMP WITH TIME ZONE,
+  archived_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS clients_archived_at_idx ON public.clients (archived_at);
 
 ALTER TABLE public.clients ENABLE ROW LEVEL SECURITY;
 
