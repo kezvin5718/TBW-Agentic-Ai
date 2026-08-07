@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, use } from "react";
+import { fetchWithAuthRetry } from "@/lib/api-fetch";
 import { fmtIST } from "@/lib/time";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -278,7 +279,8 @@ export default function ClientBrandBrainPage({
     formData.append("file", file);
 
     try {
-      const res = await fetch(`/api/brand-brain/${clientId}/import`, {
+      // Sessions expire while a long page sits open; retry once after refresh.
+      const res = await fetchWithAuthRetry(`/api/brand-brain/${clientId}/import`, {
         method: "POST",
         body: formData,
       });
@@ -325,7 +327,7 @@ export default function ClientBrandBrainPage({
     setImportError(null);
 
     try {
-      const res = await fetch(`/api/brand-brain/${clientId}/import`, {
+      const res = await fetchWithAuthRetry(`/api/brand-brain/${clientId}/import`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

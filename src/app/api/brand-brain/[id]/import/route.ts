@@ -20,7 +20,7 @@ export async function POST(
     // Verify Session and Role
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-      return new NextResponse("Unauthorized", { status: 401 });
+      return NextResponse.json({ error: "Your session has expired — sign in again and retry the import." }, { status: 401 });
     }
 
     const role = user.user_metadata?.role;
@@ -221,7 +221,7 @@ export async function PUT(
     // Verify Session and Role
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-      return new NextResponse("Unauthorized", { status: 401 });
+      return NextResponse.json({ error: "Your session has expired — sign in again and retry the import." }, { status: 401 });
     }
 
     const role = user.user_metadata?.role;
