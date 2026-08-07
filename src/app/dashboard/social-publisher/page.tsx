@@ -355,7 +355,8 @@ export default function SocialPublisherPage() {
       if (!res.ok) throw new Error(data.error || "Send failed");
       const okCount = (data.results || []).filter((r: { ok: boolean }) => r.ok).length;
       const failCount = (data.results || []).length - okCount;
-      setNotice({ ok: failCount === 0, text: failCount === 0 ? `Sent via RecurPost for ${okCount} post(s) ✅` : `${okCount} sent, ${failCount} failed — see history below.` });
+      const skipNote = (data.skipped || []).length > 0 ? ` Skipped ${(data.skipped as string[]).join(" ")}` : "";
+      setNotice({ ok: failCount === 0, text: (failCount === 0 ? `Sent via RecurPost for ${okCount} post(s) ✅` : `${okCount} sent, ${failCount} failed — see history below.`) + skipNote });
       if (failCount === 0) { setTitle(""); setCaption(""); setCaptionBrief(""); setMediaUrl(""); setMediaName(""); setThumbUrl(""); setScheduledDate(""); setScheduledTime(""); setSelectedUpload(null); setSelectedThumb(null); }
       await loadHistory();
       await loadHubUploads();
@@ -367,7 +368,15 @@ export default function SocialPublisherPage() {
   // Reels are a hard requirement on Meta — a still image tagged "Reel" always
   // fails there, and used to surface as a cryptic RecurPost 415. Catch it here.
   const reelNeedsVideo = contentTypes.includes("reel") && !!mediaUrl && !mediaIsVideo;
+  // YouTube is video-only. Platforms come pre-ticked from the client's mapping,
+  // so on a photo post YouTube would silently ride along and fail.
+  const ytNeedsVideo = !!mediaUrl && !mediaIsVideo;
   const canSend = !!clientId && platforms.length > 0 && contentTypes.length > 0 && !!mediaUrl && !reelNeedsVideo && !sending;
+
+  // Untick YouTube as soon as the loaded media turns out to be an image.
+  useEffect(() => {
+    if (ytNeedsVideo) setPlatforms((prev) => (prev.includes("youtube") ? prev.filter((p) => p !== "youtube") : prev));
+  }, [ytNeedsVideo]);
 
   // Per-client sequence numbers. The number in the filename wins (that's what the
   // designer and the video editor agreed on); upload order is the fallback.
@@ -853,12 +862,19 @@ export default function SocialPublisherPage() {
           </label>
           <div className="flex flex-wrap gap-2">
             {PLATFORMS.map((p) => {
-              const available = !clientId || mappedPlatforms.length === 0 || mappedPlatforms.includes(p.key);
+              const mapped = !clientId || mappedPlatforms.length === 0 || mappedPlatforms.includes(p.key);
+              const blockedByMedia = p.key === "youtube" && ytNeedsVideo;
+              const available = mapped && !blockedByMedia;
               return (
                 <button
                   key={p.key}
-                  onClick={() => togglePlatform(p.key)}
-                  title={available ? "" : `${clients.find((c) => c.id === clientId)?.name || "This client"} has no ${p.label} account connected in RecurPost — posting here will fail.`}
+                  onClick={() => { if (!blockedByMedia) togglePlatform(p.key); }}
+                  disabled={blockedByMedia}
+                  title={
+                    blockedByMedia
+                      ? "YouTube only accepts video — this post is an image."
+                      : mapped ? "" : `${clients.find((c) => c.id === clientId)?.name || "This client"} has no ${p.label} account connected in RecurPost — posting here will fail.`
+                  }
                   className={`px-4 py-2 rounded-full text-xs font-bold border cursor-pointer transition-all ${
                     platforms.includes(p.key)
                       ? "bg-indigo-500 border-indigo-500 text-black"
@@ -867,7 +883,7 @@ export default function SocialPublisherPage() {
                       : "bg-slate-950 border-slate-900 text-slate-700 opacity-50"
                   }`}
                 >
-                  {p.label}{!available && " ⚠"}
+                  {p.label}{blockedByMedia ? " — needs video" : !available ? " ⚠" : ""}
                 </button>
               );
             })}
