@@ -339,7 +339,37 @@ export default function TaskBoard() {
         <div className="py-16 flex justify-center"><Loader2 className="w-6 h-6 text-indigo-500 animate-spin" /></div>
       ) : filtered.length === 0 ? (
         <p className="text-xs text-slate-600 py-16 text-center">No tasks here. Add one above, or create tasks from the WhatsApp Task Bar.</p>
-      ) : view === "board" ? (
+      ) : null}
+
+      {/* Everyone's outstanding work, one line each — the whole picture first,
+          before it is split up per person. */}
+      {!loading && filtered.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-xs font-bold text-white flex items-center gap-2">
+              <Rows3 className="w-3.5 h-3.5 text-indigo-400" />
+              <span>{tab === "done" ? "Completed" : "All pending tasks"}</span>
+              <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{byUrgency.length}</span>
+            </h3>
+            <span className="text-[10px] text-slate-600">Soonest due first</span>
+          </div>
+          <div className="hidden md:grid grid-cols-12 gap-2 px-3 text-[9px] font-bold uppercase tracking-wider text-slate-600">
+            <span className="col-span-4">Task</span>
+            <span className="col-span-2">Client</span>
+            <span className="col-span-2">Assigned to</span>
+            <span className="col-span-2">Assigned on</span>
+            <span className="col-span-2 text-right">Due</span>
+          </div>
+          <div className="space-y-1.5">{byUrgency.map(oneLine)}</div>
+        </div>
+      )}
+
+      {/* Then the same work split by person. */}
+      {!loading && filtered.length > 0 && view === "board" && (
+        <div className="space-y-2 border-t border-slate-900 pt-4">
+        <h3 className="text-xs font-bold text-white flex items-center gap-2">
+          <Users className="w-3.5 h-3.5 text-indigo-400" /><span>By team member</span>
+        </h3>
         <div className="flex gap-4 overflow-x-auto pb-4">
           {columns.map((col) => (
             <div key={col.name} className="w-72 shrink-0 space-y-2">
@@ -361,29 +391,6 @@ export default function TaskBoard() {
             </div>
           ))}
         </div>
-      ) : null}
-
-      {/* Everyone's outstanding work, one line each. Shown under the board so
-          the space beneath the shorter columns earns its keep, and on its own
-          in list view. */}
-      {!loading && filtered.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-3 border-t border-slate-900 pt-4">
-            <h3 className="text-xs font-bold text-white flex items-center gap-2">
-              <Rows3 className="w-3.5 h-3.5 text-indigo-400" />
-              <span>{tab === "done" ? "Completed" : "All pending tasks"}</span>
-              <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{byUrgency.length}</span>
-            </h3>
-            <span className="text-[10px] text-slate-600">Soonest due first</span>
-          </div>
-          <div className="hidden md:grid grid-cols-12 gap-2 px-3 text-[9px] font-bold uppercase tracking-wider text-slate-600">
-            <span className="col-span-4">Task</span>
-            <span className="col-span-2">Client</span>
-            <span className="col-span-2">Assigned to</span>
-            <span className="col-span-2">Assigned on</span>
-            <span className="col-span-2 text-right">Due</span>
-          </div>
-          <div className="space-y-1.5">{byUrgency.map(oneLine)}</div>
         </div>
       )}
     </div>
