@@ -129,6 +129,72 @@ export default function TaskBoard() {
     return cols;
   }, [filtered, team]);
 
+  /**
+   * Everyone's work as one line each, sorted by what is late first.
+   *
+   * The per-member columns answer "what is on Bhavesh's plate"; they can't
+   * answer "what is outstanding across the agency, and since when", because the
+   * eye has to hop between columns of different heights. This reads top to
+   * bottom in one pass — task, client, who has it, when it landed, when it is
+   * due — and fills the empty space under the shorter columns.
+   */
+  const oneLine = (t: Task) => {
+    const overdue = new Date(t.deadline).getTime() < now && t.status !== "done";
+    const assignedOn = new Date(t.created_at);
+    const ageDays = Math.floor((now - assignedOn.getTime()) / 86400000);
+    const member = team.find((m) => m.name.toLowerCase() === (t.assignee_name || "").toLowerCase());
+    return (
+      <div key={t.id}
+        className="grid grid-cols-12 gap-2 items-center px-3 py-2 rounded-lg border border-slate-900 bg-slate-950/60 hover:border-slate-800 transition-colors">
+        <div className="col-span-12 md:col-span-4 flex items-center gap-2 min-w-0">
+          <span className={`shrink-0 w-2 h-2 rounded-full ${PRIORITY_DOT[t.priority] || PRIORITY_DOT.medium}`} title={`Priority: ${t.priority}`} />
+          <span className="text-xs font-semibold text-white truncate" title={t.title || ""}>{t.title || "Untitled task"}</span>
+          {t.source === "whatsapp" && <MessageSquare className="w-3 h-3 shrink-0 text-emerald-500" aria-label="From WhatsApp" />}
+          {t.source === "call" && <MessageSquare className="w-3 h-3 shrink-0 text-indigo-400" aria-label="From a call" />}
+          {t.source === "excel_import" && <FileSpreadsheet className="w-3 h-3 shrink-0 text-slate-600" aria-label="Imported" />}
+        </div>
+
+        <div className="col-span-6 md:col-span-2 min-w-0">
+          {t.clients?.name
+            ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-950/40 border border-indigo-900 text-indigo-300 truncate inline-block max-w-full">{t.clients.name}</span>
+            : <span className="text-[10px] text-slate-700">—</span>}
+        </div>
+
+        <div className="col-span-6 md:col-span-2 flex items-center gap-1.5 min-w-0">
+          <Avatar name={t.assignee_name || "?"} url={member?.avatar_url} size={18} rounded="rounded-full" />
+          <span className="text-[10px] text-slate-300 truncate">{t.assignee_name || "Unassigned"}</span>
+        </div>
+
+        <div className="col-span-6 md:col-span-2 text-[10px] font-mono text-slate-500" title={`Assigned ${assignedOn.toLocaleString("en-IN")}`}>
+          {assignedOn.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+          <span className="text-slate-700"> · {ageDays === 0 ? "today" : `${ageDays}d ago`}</span>
+        </div>
+
+        <div className="col-span-6 md:col-span-2 flex items-center justify-end gap-1.5">
+          <span className={`flex items-center gap-1 text-[10px] font-mono font-bold ${overdue ? "text-red-400" : "text-slate-500"}`}>
+            {overdue ? <AlertTriangle className="w-3 h-3" /> : <Calendar className="w-3 h-3" />}
+            {new Date(t.deadline).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+          </span>
+          {busy === t.id ? <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" /> : (
+            <select value={t.status} disabled={!!busy} onChange={(e) => patch(t.id, { status: e.target.value })}
+              className={`text-[9px] font-bold rounded-md px-1.5 py-0.5 border cursor-pointer focus:outline-none ${STATUS_STYLE[t.status]}`}>
+              <option value="todo">To Do</option>
+              <option value="in_progress">In Progress</option>
+              <option value="review">Review</option>
+              <option value="done">Done</option>
+            </select>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  /** Late first, then soonest due — the order you'd actually work through. */
+  const byUrgency = useMemo(
+    () => [...filtered].sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime()),
+    [filtered]
+  );
+
   const card = (t: Task, showAssignee: boolean) => {
     const overdue = new Date(t.deadline).getTime() < now && t.status !== "done";
     return (
@@ -295,9 +361,29 @@ export default function TaskBoard() {
             </div>
           ))}
         </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {filtered.map((t) => card(t, true))}
+      ) : null}
+
+      {/* Everyone's outstanding work, one line each. Shown under the board so
+          the space beneath the shorter columns earns its keep, and on its own
+          in list view. */}
+      {!loading && filtered.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3 border-t border-slate-900 pt-4">
+            <h3 className="text-xs font-bold text-white flex items-center gap-2">
+              <Rows3 className="w-3.5 h-3.5 text-indigo-400" />
+              <span>{tab === "done" ? "Completed" : "All pending tasks"}</span>
+              <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{byUrgency.length}</span>
+            </h3>
+            <span className="text-[10px] text-slate-600">Soonest due first</span>
+          </div>
+          <div className="hidden md:grid grid-cols-12 gap-2 px-3 text-[9px] font-bold uppercase tracking-wider text-slate-600">
+            <span className="col-span-4">Task</span>
+            <span className="col-span-2">Client</span>
+            <span className="col-span-2">Assigned to</span>
+            <span className="col-span-2">Assigned on</span>
+            <span className="col-span-2 text-right">Due</span>
+          </div>
+          <div className="space-y-1.5">{byUrgency.map(oneLine)}</div>
         </div>
       )}
     </div>
