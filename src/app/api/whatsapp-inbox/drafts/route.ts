@@ -13,7 +13,17 @@ async function requireStaff() {
   const { data: { user } } = await supabase.auth.getUser();
   const role = (user?.user_metadata?.role as string) || "client";
   if (!user || !["founder", "employee"].includes(role)) return null;
-  return user;
+  return Object.assign(user, { isFounder: role === "founder" });
+}
+
+/**
+ * A draft from a call belongs to whoever recorded it — their call, their
+ * approval. WhatsApp drafts have no owner and stay open to any staff member,
+ * which is how they already work. The founder can act on everything.
+ */
+function mayApprove(draft: { owner_id?: string | null }, user: { id: string; isFounder: boolean }) {
+  if (user.isFounder) return true;
+  return !draft.owner_id || draft.owner_id === user.id;
 }
 
 // GET — pending drafts, each with the exact messages the bot read.
@@ -24,12 +34,17 @@ export async function GET(request: NextRequest) {
   const status = new URL(request.url).searchParams.get("status") || "pending";
   const admin = createServiceRoleClient();
 
-  const { data: drafts, error } = await admin
+  let q = admin
     .from("wa_task_drafts")
     .select("*, clients(name)")
     .eq("status", status)
     .order("created_at", { ascending: false })
     .limit(50);
+  // A manager sees their own calls' drafts plus the shared WhatsApp ones —
+  // never another person's call.
+  if (!user.isFounder) q = q.or(`owner_id.is.null,owner_id.eq.${user.id}`);
+
+  const { data: drafts, error } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // Pull the source messages in one go so the approver can see what was read.
@@ -69,6 +84,9 @@ export async function POST(request: NextRequest) {
 
   const { data: draft } = await admin.from("wa_task_drafts").select("*").eq("id", body.id).single();
   if (!draft) return NextResponse.json({ error: "Draft not found" }, { status: 404 });
+  if (!mayApprove(draft, user)) {
+    return NextResponse.json({ error: "This came from someone else's call — only they or the founder can approve it." }, { status: 403 });
+  }
   if (draft.status !== "pending") {
     return NextResponse.json({ error: `This draft was already ${draft.status}.` }, { status: 409 });
   }
@@ -78,7 +96,10 @@ export async function POST(request: NextRequest) {
       .update({ status: "rejected", reviewed_by: user.id, reviewed_at: new Date().toISOString() })
       .eq("id", draft.id);
     // The messages stay closed — rejecting means "not a task", not "read again".
-    await admin.from("wa_inbox").update({ is_task: false, status: "done" }).in("id", draft.source_message_ids || []);
+    // Call drafts have no inbox messages behind them — only WhatsApp ones do.
+    if ((draft.source_message_ids || []).length > 0) {
+      await admin.from("wa_inbox").update({ is_task: false, status: "done" }).in("id", draft.source_message_ids);
+    }
     return NextResponse.json({ success: true, rejected: true });
   }
 
@@ -108,13 +129,15 @@ export async function POST(request: NextRequest) {
     deadline: body.deadline
       ? new Date(body.deadline).toISOString()
       : new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString(),
-    source: "whatsapp",
+    source: draft.source === "call" ? "call" : "whatsapp",
     assignee_name: assigneeName,
     assignee_id: assigneeId,
     metadata: {
       approved_by: user.id,
       wa_draft_id: draft.id,
+      // For a call this is the recording's title; for WhatsApp, the group.
       wa_group: draft.group_name,
+      ...(draft.call_id ? { call_id: draft.call_id } : {}),
     },
   }).select("id").single();
 
@@ -124,9 +147,11 @@ export async function POST(request: NextRequest) {
     status: "approved", reviewed_by: user.id, reviewed_at: new Date().toISOString(), task_id: task.id,
   }).eq("id", draft.id);
 
-  await admin.from("wa_inbox")
-    .update({ task_id: task.id, status: "assigned", assigned_to: assigneeId })
-    .in("id", draft.source_message_ids || []);
+  if ((draft.source_message_ids || []).length > 0) {
+    await admin.from("wa_inbox")
+      .update({ task_id: task.id, status: "assigned", assigned_to: assigneeId })
+      .in("id", draft.source_message_ids);
+  }
 
   return NextResponse.json({ success: true, taskId: task.id });
 }

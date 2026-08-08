@@ -20,7 +20,7 @@ export type DirectUpload = {
  */
 export async function uploadDirect(
   file: File,
-  destination: "social" = "social",
+  destination: "social" | "calls" = "social",
   onProgress?: (percent: number) => void
 ): Promise<DirectUpload> {
   const ticketRes = await fetchWithAuthRetry("/api/storage/signed-upload", {

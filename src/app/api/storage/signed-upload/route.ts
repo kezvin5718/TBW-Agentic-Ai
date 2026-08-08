@@ -20,6 +20,7 @@ export const dynamic = "force-dynamic";
 /** Only these destinations may be requested — never a caller-supplied bucket. */
 const DESTINATIONS: Record<string, { bucket: string; folder: string }> = {
   social: { bucket: "studio-outputs", folder: "social" },
+  calls: { bucket: "studio-outputs", folder: "calls" },
 };
 
 export async function POST(request: NextRequest) {
