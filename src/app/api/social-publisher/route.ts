@@ -55,15 +55,17 @@ export async function POST(request: NextRequest) {
     const { data: post } = await admin.from("social_posts").select("*").eq("id", body.id).single();
     if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
 
-    // A corrected post whose original is still queued at RecurPost would go out
-    // twice — one wrong, one right. That is how Taraash ended up posted three
-    // times, so the removal has to be confirmed before we send the replacement.
-    if (post.needs_recurpost_cleanup && !body.confirmedRemoved) {
+    // A RecurPost id means they accepted this post and it is sitting in their
+    // queue — whatever our own status column says. Sending it again adds a
+    // second copy rather than replacing the first, because their API has no
+    // cancel. That is the duplicate: not two clicks of Send, but a retry on a
+    // post RecurPost had already taken.
+    if (post.recurpost_post_id && !body.confirmedRemoved) {
       return NextResponse.json(
         {
-          error: `RecurPost still has the original queued as post ${post.recurpost_post_id ?? "(id not recorded)"}. Delete it in RecurPost → Queue first, otherwise both versions publish.`,
+          error: `RecurPost already has this queued as post ${post.recurpost_post_id}. Retrying adds a second copy — their API cannot replace one. Delete post ${post.recurpost_post_id} in RecurPost → Queue first, then retry.`,
           needsConfirmation: true,
-          recurpostPostId: post.recurpost_post_id ?? null,
+          recurpostPostId: post.recurpost_post_id,
         },
         { status: 409 }
       );
@@ -104,7 +106,9 @@ export async function POST(request: NextRequest) {
     }
     if (post.platform === "youtube") {
       if (post.title) params.yt_title = post.title;
-      if (post.thumbnail_url) params.yt_thumbnail = post.thumbnail_url;
+      // RecurPost calls this yt_thumb. We sent yt_thumbnail for months and it
+      // was silently ignored, which is why no thumbnail ever appeared.
+      if (post.thumbnail_url) params.yt_thumb = post.thumbnail_url;
     }
     if (post.platform === "pinterest" && post.title) params.pi_title = post.title;
 
@@ -115,8 +119,11 @@ export async function POST(request: NextRequest) {
       const res = await postContent(params);
       detail = JSON.stringify(res).slice(0, 300);
       const lower = detail.toLowerCase();
-      ok = !(lower.includes('"error"') || lower.includes('"status":"failed"') || lower.includes("invalid"));
-      if (ok) rpId = recurPostIdOf(res);
+      // An id coming back means RecurPost queued it, and that is the truth
+      // regardless of any other wording in the body. Recording an accepted post
+      // as "failed" is what invites the retry that duplicates it.
+      rpId = recurPostIdOf(res);
+      ok = rpId !== null || !(lower.includes('"error"') || lower.includes('"status":"failed"') || lower.includes("invalid"));
     } catch (err: unknown) {
       detail = err instanceof Error ? err.message : String(err);
     }
@@ -124,9 +131,9 @@ export async function POST(request: NextRequest) {
       .from("social_posts")
       .update({
         status: ok ? "sent" : "failed",
-        // The replacement carries a new RecurPost id; the old one is gone, so
-        // the cleanup warning has nothing left to warn about.
-        ...(ok ? { recurpost_post_id: rpId, needs_recurpost_cleanup: false } : {}),
+        // Record the id whenever RecurPost gave one, even on a failure — it is
+        // the handle for deleting the copy they are holding.
+        ...(rpId !== null ? { recurpost_post_id: rpId, needs_recurpost_cleanup: false } : {}),
         webhook_response: `[retry] ${detail}`,
       })
       .eq("id", body.id);
@@ -171,12 +178,15 @@ export async function POST(request: NextRequest) {
   // Send again — which re-posted to the platforms that had ALREADY succeeded.
   // That is how Taraash ended up on the calendar three times.
   const sinceIso = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  // Anything carrying a RecurPost id is in their queue, whether we recorded it
+  // as sent or failed. Keying the guard on our own status let a mis-read
+  // failure through and the same creative went out twice.
   let alreadyQ = admin
     .from("social_posts")
     .select("platform, content_type, scheduled_for")
     .eq("client_id", clientId)
     .eq("media_url", publishUrl)
-    .eq("status", "sent")
+    .not("recurpost_post_id", "is", null)
     .gte("created_at", sinceIso);
   const scheduledIso = scheduledFor ? istWallClockToUtc(scheduledFor).toISOString() : null;
   alreadyQ = scheduledIso ? alreadyQ.eq("scheduled_for", scheduledIso) : alreadyQ.is("scheduled_for", null);
@@ -224,16 +234,19 @@ export async function POST(request: NextRequest) {
         }
         if (platform === "youtube") {
           if (title) params.yt_title = title;
-          if (thumbnailUrl) params.yt_thumbnail = thumbnailUrl;
+          // yt_thumb, not yt_thumbnail — the wrong name was accepted with a 200
+          // and dropped, so thumbnails never reached YouTube.
+          if (thumbnailUrl) params.yt_thumb = thumbnailUrl;
         }
         if (platform === "pinterest" && title) params.pi_title = title;
         try {
           const res = await postContent(params);
           detail = JSON.stringify(res).slice(0, 300);
           const lower = detail.toLowerCase();
-          // The call returned 200 — treat as sent unless the body flags an error.
-          ok = !(lower.includes('"error"') || lower.includes('"status":"failed"') || lower.includes("invalid"));
-          if (ok) rpId = recurPostIdOf(res);
+          // A post id back means RecurPost queued it — that settles it. Only
+          // when there is no id do we fall back to reading the body for errors.
+          rpId = recurPostIdOf(res);
+          ok = rpId !== null || !(lower.includes('"error"') || lower.includes('"status":"failed"') || lower.includes("invalid"));
         } catch (err: unknown) {
           detail = err instanceof Error ? err.message : String(err);
         }

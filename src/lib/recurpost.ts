@@ -35,3 +35,14 @@ export async function rpCall<T = Record<string, unknown>>(endpoint: string, para
 export const verifyLogin = () => rpCall("/api/user_login");
 export const listSocialAccounts = () => rpCall("/api/social_account_list");
 export const postContent = (params: Record<string, unknown>) => rpCall("/api/post_content", params);
+
+/**
+ * What actually happened to an account's posts.
+ *
+ * post_content answers 200 the moment RecurPost accepts a post — it says
+ * nothing about whether Facebook or Instagram later published it. A creative
+ * Meta rejects looks identical to one that went out, which is why "sent" in our
+ * Library could mean "never appeared". This is the only endpoint that tells us
+ * the real outcome.
+ */
+export const getHistory = (accountId: string) => rpCall("/api/history_data", { id: accountId });

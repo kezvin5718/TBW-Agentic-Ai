@@ -439,6 +439,7 @@ export default function SocialPublisherPage() {
   const [libFilter, setLibFilter] = useState<"all" | "scheduled" | "posted" | "failed">("all");
   const [libClient, setLibClient] = useState("all");
   const [libSel, setLibSel] = useState<PostRow | null>(null);
+  const [verifying, setVerifying] = useState(false);
   const [editing, setEditing] = useState<{
     id: string; title: string; caption: string; mediaUrl: string;
     mediaIsVideo: boolean; thumbnailUrl: string; date: string; time: string;
@@ -468,10 +469,32 @@ export default function SocialPublisherPage() {
   const libRows = posts.filter((p) => {
     if (libClient !== "all" && (p.clients?.name || "") !== libClient) return false;
     if (libFilter === "failed") return p.status === "failed";
-    if (libFilter === "scheduled") return p.status === "sent" && isFuture(p);
-    if (libFilter === "posted") return p.status === "sent" && !isFuture(p);
+    if (libFilter === "scheduled") return ["sent", "published"].includes(p.status) && isFuture(p);
+    if (libFilter === "posted") return ["sent", "published"].includes(p.status) && !isFuture(p);
     return true;
   });
+
+  /** Ask RecurPost what the platforms actually did with our posts. */
+  const verifyPublished = async () => {
+    setVerifying(true);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/social-publisher/verify", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not check");
+      const lines = (data.failures || []).map((f: { platform: string; contentType: string; reason: string }) =>
+        `• ${postLabel(f.platform, f.contentType)} — ${f.reason || "no reason given"}`);
+      setNotice({
+        ok: (data.rejected || 0) === 0,
+        text: [data.message, ...lines].join("\n"),
+      });
+      await loadHistory();
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not check" });
+    } finally { setVerifying(false); }
+  };
 
   const retryPost = async (p: PostRow, confirmedRemoved = false) => {
     setLibBusy(p.id);
@@ -756,8 +779,8 @@ export default function SocialPublisherPage() {
 
       {notice && (
         <div className={`rounded-xl p-3 text-sm flex items-center space-x-2 border ${notice.ok ? "bg-emerald-950/30 border-emerald-900/60 text-emerald-300" : "bg-rose-950/30 border-rose-900/60 text-rose-300"}`}>
-          {notice.ok ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
-          <span>{notice.text}</span>
+          {notice.ok ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />}
+          <span className="whitespace-pre-wrap">{notice.text}</span>
         </div>
       )}
 
@@ -1038,7 +1061,7 @@ export default function SocialPublisherPage() {
             {mediaUrl && !mediaIsVideo && <img src={mediaUrl} alt="preview" className="mt-2 h-24 rounded-lg object-cover border border-slate-800" />}
           </div>
           <div>
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Thumbnail (optional — for reels/video)</label>
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Thumbnail (YouTube only)</label>
             <div onClick={() => thumbRef.current?.click()} className="border border-dashed border-slate-800 hover:border-indigo-500 rounded-xl p-4 text-center cursor-pointer transition-colors">
               {uploading === "thumb" ? <Loader2 className="w-5 h-5 animate-spin mx-auto text-[var(--yellow)]" /> :
                 thumbUrl ? (
@@ -1049,6 +1072,14 @@ export default function SocialPublisherPage() {
             </div>
             <input ref={thumbRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload("thumb", f); e.target.value = ""; }} />
             {thumbUrl && <img src={thumbUrl} alt="thumb" className="mt-2 h-24 rounded-lg object-cover border border-slate-800" />}
+            {/* Saying this plainly beats letting people keep uploading covers
+                that Instagram and Facebook were never going to receive. */}
+            {thumbUrl && !platforms.includes("youtube") && (
+              <p className="mt-2 text-[10px] text-amber-400 leading-relaxed">
+                RecurPost only accepts a thumbnail for YouTube — Instagram and Facebook have no cover parameter in their API.
+                For a reel cover on Meta, set it in RecurPost&apos;s own composer, or make the video&apos;s first frame the cover.
+              </p>
+            )}
           </div>
         </div>
 
@@ -1263,13 +1294,20 @@ export default function SocialPublisherPage() {
             <div className="flex items-center gap-2 flex-wrap">
               {([
                 { k: "all", label: `All (${posts.length})` },
-                { k: "scheduled", label: `⏰ Scheduled (${posts.filter((p) => p.status === "sent" && isFuture(p)).length})` },
-                { k: "posted", label: `✓ Posted (${posts.filter((p) => p.status === "sent" && !isFuture(p)).length})` },
+                { k: "scheduled", label: `⏰ Scheduled (${posts.filter((p) => ["sent", "published"].includes(p.status) && isFuture(p)).length})` },
+                { k: "posted", label: `✓ Posted (${posts.filter((p) => ["sent", "published"].includes(p.status) && !isFuture(p)).length})` },
                 { k: "failed", label: `⚠ Failed (${posts.filter((p) => p.status === "failed").length})` },
               ] as const).map((f) => (
                 <button key={f.k} onClick={() => setLibFilter(f.k)} className={`px-3 py-1.5 rounded-full text-[11px] font-bold border cursor-pointer ${libFilter === f.k ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>{f.label}</button>
               ))}
-              <select value={libClient} onChange={(e) => setLibClient(e.target.value)} className="ml-auto text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-white cursor-pointer focus:outline-none">
+              {/* "Sent" only ever meant RecurPost took it. This asks the
+                  platforms what actually went live. */}
+              <button onClick={verifyPublished} disabled={verifying}
+                className="ml-auto inline-flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-full border bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-indigo-500 cursor-pointer disabled:opacity-50">
+                {verifying ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
+                <span>{verifying ? "Checking…" : "Check what actually published"}</span>
+              </button>
+              <select value={libClient} onChange={(e) => setLibClient(e.target.value)} className="text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-white cursor-pointer focus:outline-none">
                 <option value="all">All clients</option>
                 {Array.from(new Set(posts.map((p) => p.clients?.name).filter(Boolean))).sort().map((n) => <option key={n} value={n as string}>{n}</option>)}
               </select>
