@@ -154,6 +154,22 @@ export function startCronScheduler() {
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;
 
+  // 6b. Call recordings synced from phones into Drive (every 5 minutes).
+  // Transcribing is slow and costs money per minute, so this runs less often
+  // than the WhatsApp bot and caps how many files it takes per sweep.
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      const { sweepCallFolders } = await import("@/lib/call-watcher");
+      const res = await sweepCallFolders();
+      cronSchedulerStatus.lastRun["call_watcher"] = new Date().toISOString();
+      if (res.processed > 0) console.log(`✅ In-App Cron: turned ${res.processed} call recording(s) into task drafts.`);
+      if (res.failed > 0) for (const n of res.notes) console.warn("   ↳ call-watcher:", n);
+    } catch (err: unknown) {
+      console.error("❌ In-App Cron: call watcher failed:", err instanceof Error ? err.message : String(err));
+    }
+  }, { timezone: "Asia/Kolkata" });
+  cronSchedulerStatus.jobsScheduledCount++;
+
   // 7. Storage sweep (3:30 AM IST) — move spent files to Drive, free Supabase.
   cron.schedule("30 3 * * *", async () => {
     console.log("⏰ In-App Cron: Starting Storage Sweep...");

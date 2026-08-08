@@ -8,7 +8,7 @@ import { fmtIST } from "@/lib/time";
 import TaskDrafts from "../whatsapp-inbox/TaskDrafts";
 import {
   Phone, UploadCloud, Loader2, CheckCircle2, AlertTriangle, Mic, Square,
-  Trash2, RotateCcw, FileText, ChevronRight,
+  Trash2, RotateCcw, FileText, ChevronRight, FolderOpen, ExternalLink,
 } from "lucide-react";
 
 interface CallRow {
@@ -44,6 +44,16 @@ export default function CallsPage() {
   const [openTranscript, setOpenTranscript] = useState<string | null>(null);
   const [draftsKey, setDraftsKey] = useState(0);
 
+  // Drive folders being watched
+  interface FolderRow {
+    id: string; folder_id: string; folder_name: string; folder_url: string;
+    last_scanned_at: string | null;
+    profiles?: { name: string; avatar_url?: string | null } | null;
+  }
+  const [folders, setFolders] = useState<FolderRow[]>([]);
+  const [rootFolderName, setRootFolderName] = useState("TBW Call Recordings");
+  const [folderBusy, setFolderBusy] = useState(false);
+
   // New call being added
   const [title, setTitle] = useState("");
   const [clientId, setClientId] = useState("");
@@ -71,8 +81,56 @@ export default function CallsPage() {
     }
   }, []);
 
+  const loadFolders = useCallback(async () => {
+    try {
+      const res = await fetch("/api/calls/folders", { cache: "no-store" });
+      const data = await res.json();
+      if (res.ok) {
+        setFolders(data.folders || []);
+        if (data.rootFolderName) setRootFolderName(data.rootFolderName);
+      }
+    } catch { /* the panel explains itself when empty */ }
+  }, []);
+
+  const claimFolder = async () => {
+    setFolderBusy(true);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/calls/folders", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not create the folder");
+      setNotice({ ok: true, text: data.message });
+      await loadFolders();
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Failed" });
+    } finally { setFolderBusy(false); }
+  };
+
+  const sweepNow = async () => {
+    setFolderBusy(true);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/calls/folders", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "sweep" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not check");
+      const head = data.processed > 0
+        ? `${data.processed} recording(s) turned into tasks.`
+        : "Nothing new to pick up.";
+      setNotice({ ok: (data.failed || 0) === 0, text: [head, ...(data.notes || [])].join("\n") });
+      setDraftsKey((k) => k + 1);
+      await Promise.all([load(), loadFolders()]);
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Failed" });
+    } finally { setFolderBusy(false); }
+  };
+
   useEffect(() => {
     load();
+    loadFolders();
     (async () => {
       const supabase = createClient();
       const [{ data: cl }, { data: st }] = await Promise.all([
@@ -82,7 +140,7 @@ export default function CallsPage() {
       setClients(cl || []);
       setStaff(st || []);
     })();
-  }, [load]);
+  }, [load, loadFolders]);
 
   const send = async (file: File) => {
     setNotice(null);
@@ -211,7 +269,7 @@ export default function CallsPage() {
       {notice && (
         <div className={`rounded-xl p-3 text-sm flex items-start gap-2 border ${notice.ok ? "bg-emerald-950/30 border-emerald-900/60 text-emerald-300" : "bg-rose-950/30 border-rose-900/60 text-rose-300"}`}>
           {notice.ok ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />}
-          <span>{notice.text}</span>
+          <span className="whitespace-pre-wrap">{notice.text}</span>
         </div>
       )}
 
@@ -282,6 +340,57 @@ export default function CallsPage() {
             <input ref={fileRef} type="file" className="hidden"
               accept="audio/*,video/mp4,.mp3,.m4a,.wav,.ogg,.opus,.webm,.aac,.amr,.mp4"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) send(f); e.target.value = ""; }} />
+          </div>
+        )}
+      </div>
+
+      {/* Drive folders — each person's own, so ownership is settled by where a
+          recording lands rather than guessed from the audio. */}
+      <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-3">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <FolderOpen className="w-4 h-4 text-[var(--yellow)]" /><span>Automatic pickup from Google Drive</span>
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+              Point your phone&apos;s call-recording backup at your own folder. Anything that lands there is transcribed
+              and turned into tasks within a few minutes — no uploading. Recordings stay in Drive.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={claimFolder} disabled={folderBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold cursor-pointer disabled:opacity-50">
+              {folderBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderOpen className="w-3.5 h-3.5" />}
+              <span>Create my folder</span>
+            </button>
+            <button onClick={sweepNow} disabled={folderBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:border-indigo-600 text-[11px] font-bold cursor-pointer disabled:opacity-50">
+              <RotateCcw className="w-3.5 h-3.5" /><span>Check now</span>
+            </button>
+          </div>
+        </div>
+
+        {folders.length === 0 ? (
+          <p className="text-[11px] text-slate-600 py-2">
+            No folder yet — press <b>Create my folder</b> and the link to map your phone to will appear here.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {folders.map((f) => (
+              <div key={f.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-900 bg-slate-950/60 px-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-white truncate">📁 {rootFolderName} / {f.folder_name}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">
+                    {f.profiles?.name || "—"}
+                    {f.last_scanned_at ? ` · last checked ${fmtIST(f.last_scanned_at)} IST` : " · not checked yet"}
+                  </p>
+                </div>
+                <a href={f.folder_url} target="_blank" rel="noopener noreferrer"
+                  className="shrink-0 inline-flex items-center gap-1.5 text-[10px] font-bold text-indigo-300 hover:text-indigo-200 border border-slate-800 hover:border-indigo-700 rounded-lg px-2.5 py-1.5">
+                  Open in Drive <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+            ))}
           </div>
         )}
       </div>

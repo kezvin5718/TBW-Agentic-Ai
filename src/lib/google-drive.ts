@@ -171,6 +171,115 @@ export async function isDriveConnected(): Promise<boolean> {
   return !!creds && creds.status === "connected";
 }
 
+/** Where call recordings are dropped, one subfolder per person. */
+export const CALL_ROOT_FOLDER = "TBW Call Recordings";
+
+/**
+ * Makes (or finds) one person's recordings folder and hands back its link.
+ *
+ * Each person gets their own folder so a recording's owner is decided by where
+ * it landed rather than inferred — the founder's calls never mix with a
+ * manager's, which is what keeps the approval rules honest.
+ */
+export async function ensureCallFolder(personFolderName: string): Promise<{ folderId: string; folderUrl: string; rootUrl: string }> {
+  const drive = await getDriveService();
+  if (!drive) throw new Error("Google Drive is not connected — connect it in Integrations first.");
+
+  const rootId = await findOrCreateFolder(drive, CALL_ROOT_FOLDER);
+  const folderId = await findOrCreateFolder(drive, personFolderName, rootId);
+  return {
+    folderId,
+    folderUrl: `https://drive.google.com/drive/folders/${folderId}`,
+    rootUrl: `https://drive.google.com/drive/folders/${rootId}`,
+  };
+}
+
+export interface DriveAudioFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdTime: string;
+}
+
+/**
+ * Audio and video files sitting in a folder, newest first.
+ *
+ * Phone recorders write .m4a, .mp3, .amr or .opus depending on the handset, and
+ * some report no useful MIME at all, so match on extension as well as type —
+ * the same lesson as the Content Hub picker.
+ */
+export async function listCallRecordings(folderId: string, limit = 25): Promise<DriveAudioFile[]> {
+  const drive = await getDriveService();
+  if (!drive) throw new Error("Google Drive is not connected.");
+
+  const res = await drive.files.list({
+    q: `'${folderId}' in parents and trashed=false`,
+    fields: "files(id,name,mimeType,size,createdTime)",
+    orderBy: "createdTime desc",
+    pageSize: limit,
+    spaces: "drive",
+  });
+
+  const audioish = /\.(m4a|mp3|wav|ogg|opus|amr|aac|webm|mp4|3gp|flac)$/i;
+  return (res.data.files || [])
+    .filter((f) => {
+      const t = f.mimeType || "";
+      if (t === "application/vnd.google-apps.folder") return false;
+      return t.startsWith("audio") || t.startsWith("video") || audioish.test(f.name || "");
+    })
+    .map((f) => ({
+      id: f.id as string,
+      name: (f.name as string) || "recording",
+      mimeType: (f.mimeType as string) || "audio/mpeg",
+      sizeBytes: Number(f.size || 0),
+      createdTime: (f.createdTime as string) || new Date().toISOString(),
+    }));
+}
+
+/**
+ * Parks a manually-uploaded recording in Drive so Supabase doesn't keep it.
+ *
+ * The browser can only upload to Supabase — it has no access to the server's
+ * Drive credentials — so a manual upload lands there first. Once we've finished
+ * with it, it belongs in Drive like everything else.
+ */
+export async function moveCallToDrive(
+  buffer: Buffer,
+  fileName: string,
+  mimeType: string,
+  personFolderName: string
+): Promise<string | null> {
+  const drive = await getDriveService();
+  if (!drive) return null;
+  try {
+    const rootId = await findOrCreateFolder(drive, CALL_ROOT_FOLDER);
+    const folderId = await findOrCreateFolder(drive, personFolderName, rootId);
+    const created = await drive.files.create({
+      requestBody: { name: fileName, parents: [folderId] },
+      media: { mimeType, body: Readable.from(buffer) },
+      fields: "id",
+    });
+    return created.data.id || null;
+  } catch (err) {
+    console.error("Could not move the recording to Drive:", err);
+    return null;
+  }
+}
+
+/** Raw bytes of a Drive file by id — the API route, which works for audio. */
+export async function downloadDriveFileById(fileId: string): Promise<Buffer | null> {
+  const drive = await getDriveService();
+  if (!drive) return null;
+  try {
+    const res = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
+    return Buffer.from(res.data as ArrayBuffer);
+  } catch (err) {
+    console.error("Drive download failed:", err);
+    return null;
+  }
+}
+
 /** Download a Drive file's raw bytes via the API (works for video, unlike lh3 links). */
 export async function downloadDriveFileByUrl(url: string): Promise<Buffer | null> {
   const m = url.match(/googleusercontent\.com\/d\/([^=/?&]+)/) || url.match(/drive\.google\.com\/file\/d\/([^/?&]+)/);

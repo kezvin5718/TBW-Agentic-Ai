@@ -1,4 +1,5 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import { downloadDriveFileById, moveCallToDrive } from "@/lib/google-drive";
 import { complete, safeJsonParse } from "@/lib/llm";
 import { MODEL_SMART } from "@/lib/llm-config";
 import { spawn } from "child_process";
@@ -66,8 +67,15 @@ async function transcribeOne(path: string, apiKey: string): Promise<string> {
   return String(data.text || "");
 }
 
-/** Download, compress, split if needed, transcribe, stitch back together. */
-export async function transcribeCall(audioUrl: string): Promise<{ text: string; seconds: number | null }> {
+/**
+ * Download, compress, split if needed, transcribe, stitch back together.
+ *
+ * A recording that lives in Drive is fetched through the Drive API rather than
+ * a URL — Drive links don't serve raw bytes for media, the same trap that made
+ * published videos come back as JPEG poster frames. Nothing is copied into
+ * Supabase on the way.
+ */
+export async function transcribeCall(audioUrl: string, driveFileId?: string | null): Promise<{ text: string; seconds: number | null }> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("Transcription needs OPENAI_API_KEY on the server — add it to /opt/tbw-os/.env and redeploy.");
@@ -79,9 +87,17 @@ export async function transcribeCall(audioUrl: string): Promise<{ text: string; 
   const cleanup: string[] = [rawPath, smallPath];
 
   try {
-    const resp = await fetch(audioUrl);
-    if (!resp.ok) throw new Error(`Could not fetch the recording (${resp.status}).`);
-    await writeFile(rawPath, Buffer.from(await resp.arrayBuffer()));
+    let raw: Buffer;
+    if (driveFileId) {
+      const fromDrive = await downloadDriveFileById(driveFileId);
+      if (!fromDrive) throw new Error("Could not read the recording from Google Drive.");
+      raw = fromDrive;
+    } else {
+      const resp = await fetch(audioUrl);
+      if (!resp.ok) throw new Error(`Could not fetch the recording (${resp.status}).`);
+      raw = Buffer.from(await resp.arrayBuffer());
+    }
+    await writeFile(rawPath, raw);
 
     const seconds = await durationOf(rawPath);
 
@@ -222,16 +238,62 @@ Return STRICTLY this JSON:
   return { created: rows.length, skipped: "" };
 }
 
+
+/**
+ * Moves a Supabase-hosted recording into the owner's Drive folder and drops the
+ * Supabase copy. Best effort: if Drive is unavailable the recording simply
+ * stays put rather than being lost.
+ */
+async function parkInDrive(callId: string): Promise<void> {
+  const admin = createServiceRoleClient();
+  const { data: call } = await admin
+    .from("call_recordings")
+    .select("id, audio_url, file_name, uploaded_by, drive_file_id")
+    .eq("id", callId)
+    .single();
+  if (!call || call.drive_file_id) return;
+
+  const marker = "/storage/v1/object/public/studio-outputs/";
+  const at = String(call.audio_url).indexOf(marker);
+  if (at === -1) return; // not ours to move
+
+  const objectPath = String(call.audio_url).slice(at + marker.length);
+  try {
+    const resp = await fetch(call.audio_url);
+    if (!resp.ok) return;
+    const buf = Buffer.from(await resp.arrayBuffer());
+
+    const { data: profile } = await admin.from("profiles").select("name, role").eq("id", call.uploaded_by).maybeSingle();
+    const person = (profile?.name || "Staff").trim();
+    const folderName = profile?.role === "founder" ? `${person} (Founder)` : person;
+
+    const fileId = await moveCallToDrive(
+      buf,
+      call.file_name || `call-${callId}.mp3`,
+      resp.headers.get("content-type") || "audio/mpeg",
+      folderName
+    );
+    if (!fileId) return;
+
+    await admin.from("call_recordings")
+      .update({ drive_file_id: fileId, audio_url: `https://drive.google.com/file/d/${fileId}/view` })
+      .eq("id", callId);
+    await admin.storage.from("studio-outputs").remove([objectPath]);
+  } catch (err) {
+    console.error("Could not park the recording in Drive:", err);
+  }
+}
+
 /** Transcribe then draft, recording failure on the row rather than throwing away. */
 export async function processCall(callId: string): Promise<{ ok: boolean; created: number; message: string }> {
   const admin = createServiceRoleClient();
-  const { data: call } = await admin.from("call_recordings").select("id, audio_url").eq("id", callId).single();
+  const { data: call } = await admin.from("call_recordings").select("id, audio_url, drive_file_id").eq("id", callId).single();
   if (!call) return { ok: false, created: 0, message: "Recording not found." };
 
   await admin.from("call_recordings").update({ status: "transcribing", error: null }).eq("id", callId);
 
   try {
-    const { text, seconds } = await transcribeCall(call.audio_url);
+    const { text, seconds } = await transcribeCall(call.audio_url, call.drive_file_id);
     if (!text.trim()) {
       await admin.from("call_recordings").update({ status: "failed", error: "Nothing could be heard in this recording." }).eq("id", callId);
       return { ok: false, created: 0, message: "Nothing could be heard in this recording." };
@@ -239,6 +301,11 @@ export async function processCall(callId: string): Promise<{ ok: boolean; create
     await admin.from("call_recordings")
       .update({ transcript: text, duration_seconds: seconds, status: "transcribed" })
       .eq("id", callId);
+
+    // A manual upload had to land in Supabase first — the browser cannot reach
+    // the server's Drive credentials. Now that we're done reading it, move it to
+    // Drive and free the space; Supabase has no room for hours of call audio.
+    if (!call.drive_file_id) await parkInDrive(callId);
 
     const { created, skipped } = await draftTasksFromCall(callId);
     return {
