@@ -3,7 +3,7 @@ import { createServiceRoleClient } from "@/lib/supabase/server";
 import { completeVision } from "@/lib/llm-vision";
 import { safeJsonParse } from "@/lib/llm";
 import { generateBrandImage } from "@/lib/integrations/openai-images";
-import { storeFromBuffer } from "@/lib/google-drive";
+import { storeToDriveStrict } from "@/lib/google-drive";
 import { analysePlan, pixelsFor, shapeFor, type PostSpec } from "@/lib/post-designer";
 
 /**
@@ -283,23 +283,22 @@ export async function generatePlanPosts(
         const { buffer, note } = await renderFrame(spec, photos[frame] || photos[0] || null);
         const verdict = await critique(buffer, spec);
 
-        const url = await storeFromBuffer(
+        // Generated creatives go to Drive or nowhere. Supabase has no room for
+        // them, and a quiet fallback would hide a Drive problem behind a
+        // filling bucket.
+        const { url, error: storeErr } = await storeToDriveStrict(
           buffer,
           `${(client?.name || "client").replace(/[^a-zA-Z0-9]/g, "-")}-${monthLabel}-post-${spec.item + 1}${spec.frames > 1 ? `-${frame + 1}` : ""}.jpg`,
           "image/jpeg",
           client?.name || undefined,
-          monthLabel
+          monthLabel,
+          "TBW Generated Posts"
         );
         if (!url) {
           failed++;
-          notes.push(`Post ${spec.item + 1}: could not be stored.`);
+          notes.push(`Post ${spec.item + 1}: not saved — ${storeErr || "Google Drive refused the upload."}`);
           continue;
         }
-        // These belong in Drive. Landing in Supabase means the Drive upload
-        // failed and fell back — worth saying, since Supabase has no room.
-        const storedNote = url.includes("supabase.co")
-          ? "Saved to Supabase because the Drive upload failed — check Integrations."
-          : "";
 
         const { error } = await admin.from("creatives").insert({
           client_id: plan.clientId,
@@ -313,7 +312,7 @@ export async function generatePlanPosts(
           scheduled_for: spec.date ? new Date(`${spec.date}T10:00:00+05:30`).toISOString() : null,
           spec,
           qc_status: verdict.ok ? "passed" : "failed",
-          qc_note: [note, storedNote, ...verdict.issues].filter(Boolean).join(" · ") || null,
+          qc_note: [note, ...verdict.issues].filter(Boolean).join(" · ") || null,
           founder_approval: "pending",
           client_approval: "pending",
           source: "plan",

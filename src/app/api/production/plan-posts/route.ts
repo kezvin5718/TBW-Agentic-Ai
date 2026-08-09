@@ -3,6 +3,7 @@ import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { analysePlan } from "@/lib/post-designer";
 import { generatePlanPosts } from "@/lib/post-studio";
 import { describeImageViaVision, isImageGenerationConfigured } from "@/lib/integrations/openai-images";
+import { isDriveConnected, getDriveQuota } from "@/lib/google-drive";
 
 export const dynamic = "force-dynamic";
 // Designing, rendering and checking a month of posts is slow work.
@@ -39,6 +40,8 @@ export async function GET(request: NextRequest) {
       photos: photos || [],
       alreadyMade: made || [],
       imagesReady: isImageGenerationConfigured(),
+      driveConnected: await isDriveConnected(),
+      driveQuota: await getDriveQuota(),
     });
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Could not read the plan" }, { status: 500 });

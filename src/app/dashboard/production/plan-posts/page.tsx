@@ -25,6 +25,8 @@ export default function PlanPostsPage() {
     clientName: string; month: string; total: number; needPhoto: number;
     photosRequired: number; generated: number; skippedReels: number;
     specs: SpecRow[]; photos: PhotoRow[]; alreadyMade: { id: string }[]; imagesReady: boolean;
+    driveConnected?: boolean;
+    driveQuota?: { usedGb: number; limitGb: number | null; percent: number | null } | null;
   } | null>(null);
 
   const [loading, setLoading] = useState(false);
@@ -166,6 +168,23 @@ export default function PlanPostsPage() {
 
       {analysis && !loading && (
         <>
+          {analysis.driveConnected === false && (
+            <div className="bg-rose-950/20 border border-rose-900/50 rounded-xl p-3 text-xs text-rose-300 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>Google Drive isn&apos;t connected — finished posts are saved there, so nothing can be built. Connect it under Integrations.</span>
+            </div>
+          )}
+
+          {analysis.driveQuota && analysis.driveQuota.percent !== null && analysis.driveQuota.percent >= 85 && (
+            <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-3 text-xs text-amber-300 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                Google Drive is {analysis.driveQuota.percent}% full ({analysis.driveQuota.usedGb} GB of {analysis.driveQuota.limitGb} GB).
+                Uploads start failing when it runs out — clear space before building a batch.
+              </span>
+            </div>
+          )}
+
           {!analysis.imagesReady && (
             <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-3 text-xs text-amber-300 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />

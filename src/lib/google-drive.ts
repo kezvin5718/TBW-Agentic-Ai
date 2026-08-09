@@ -161,7 +161,15 @@ export async function uploadImageToDrive(
 
   // Make it viewable by anyone with the link (same posture as the current public bucket)
   // so the in-app gallery can display it.
-  await drive.permissions.create({ fileId, requestBody: { role: "reader", type: "anyone" } });
+  //
+  // A failure here must not discard the upload: the bytes are already in Drive,
+  // and throwing would both orphan that file and push a second copy into
+  // Supabase. Log it and hand back the file we have.
+  try {
+    await drive.permissions.create({ fileId, requestBody: { role: "reader", type: "anyone" } });
+  } catch (err) {
+    console.error(`Drive: uploaded ${fileName} but could not make it link-viewable —`, err);
+  }
 
   return { fileId, viewUrl: `https://lh3.googleusercontent.com/d/${fileId}` };
 }
@@ -169,6 +177,58 @@ export async function uploadImageToDrive(
 export async function isDriveConnected(): Promise<boolean> {
   const creds = await loadCreds();
   return !!creds && creds.status === "connected";
+}
+
+
+/**
+ * Stores a file in Drive and refuses to fall back.
+ *
+ * storeFromBuffer quietly writes to Supabase when Drive misbehaves, which is
+ * right for incidental media but wrong for generated creatives — Supabase has
+ * no room for them, and a silent fallback hides the Drive problem instead of
+ * surfacing it.
+ */
+export async function storeToDriveStrict(
+  buffer: Buffer,
+  fileName: string,
+  mimeType: string,
+  clientName?: string,
+  monthLabel?: string,
+  rootFolder: string = ROOT_FOLDER_NAME
+): Promise<{ url: string | null; error?: string }> {
+  if (!(await isDriveConnected())) {
+    return { url: null, error: "Google Drive is not connected — connect it under Integrations." };
+  }
+  try {
+    const { viewUrl } = await uploadImageToDrive(buffer, fileName, mimeType, clientName, monthLabel, rootFolder);
+    return { url: viewUrl };
+  } catch (err: unknown) {
+    const raw = err instanceof Error ? err.message : String(err);
+    // The one worth naming, because it needs an action rather than a retry.
+    const friendly = /quota|storageQuotaExceeded/i.test(raw)
+      ? "Google Drive is out of space — free some up or upgrade the plan."
+      : raw;
+    return { url: null, error: friendly };
+  }
+}
+
+/** Drive space, so a full account is visible before it breaks an upload. */
+export async function getDriveQuota(): Promise<{ usedGb: number; limitGb: number | null; percent: number | null } | null> {
+  const drive = await getDriveService();
+  if (!drive) return null;
+  try {
+    const res = await drive.about.get({ fields: "storageQuota" });
+    const q = res.data.storageQuota;
+    const used = Number(q?.usage || 0);
+    const limit = q?.limit ? Number(q.limit) : null;
+    return {
+      usedGb: Number((used / 1024 ** 3).toFixed(2)),
+      limitGb: limit ? Number((limit / 1024 ** 3).toFixed(2)) : null,
+      percent: limit ? Math.round((used / limit) * 100) : null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Where call recordings are dropped, one subfolder per person. */
