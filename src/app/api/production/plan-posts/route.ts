@@ -136,7 +136,8 @@ export async function POST(request: NextRequest) {
       );
     }
     try {
-      const result = await generatePlanPosts(planId, body.pairing || {}, Number(body.limit) || 30);
+      const items = Array.isArray(body.items) ? body.items.map(Number).filter(Number.isFinite) : undefined;
+      const result = await generatePlanPosts(planId, body.pairing || {}, { items, limit: Number(body.limit) || 30 });
       return NextResponse.json({
         success: result.failed === 0,
         ...result,

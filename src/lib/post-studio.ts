@@ -208,10 +208,14 @@ Return JSON: { "ok": true|false, "issues": ["short description", ...] }`,
 export async function generatePlanPosts(
   planId: string,
   photoByItem: Record<string, string[]>,
-  limit = 30
+  options: { items?: number[]; limit?: number } = {}
 ): Promise<{ created: number; failed: number; notes: string[] }> {
   const admin = createServiceRoleClient();
   const plan = await analysePlan(planId);
+  const limit = options.limit ?? 30;
+  // Building one or two posts at a time is the sane way to judge whether the
+  // templates are any good — and it keeps the bill small while doing it.
+  const wanted = options.items && options.items.length > 0 ? new Set(options.items) : null;
 
   const { data: client } = await admin
     .from("clients")
@@ -224,7 +228,9 @@ export async function generatePlanPosts(
   let failed = 0;
   const notes: string[] = [];
 
-  for (const spec of plan.specs.slice(0, limit)) {
+  const chosen = (wanted ? plan.specs.filter((s) => wanted.has(s.item)) : plan.specs).slice(0, limit);
+
+  for (const spec of chosen) {
     const photos = photoByItem[String(spec.item)] || [];
     if (spec.kind === "product" && photos.length === 0) {
       notes.push(`Post ${spec.item + 1} (“${spec.headline}”) skipped — it needs a product photo.`);

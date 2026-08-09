@@ -31,6 +31,9 @@ export default function PlanPostsPage() {
   const [working, setWorking] = useState<"" | "photos" | "generate">("");
   const [uploadPct, setUploadPct] = useState(0);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  // Nothing is selected to begin with. While the templates are still being
+  // judged, building the whole month by accident is the expensive mistake.
+  const [picked, setPicked] = useState<number[]>([]);
   const photoRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -62,6 +65,7 @@ export default function PlanPostsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not read the plan");
       setAnalysis(data);
+      setPicked([]);
     } catch (err: unknown) {
       setAnalysis(null);
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Failed" });
@@ -107,7 +111,7 @@ export default function PlanPostsPage() {
 
       const res = await fetch("/api/production/plan-posts", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planId, action: "generate", pairing: pairData.pairing }),
+        body: JSON.stringify({ planId, action: "generate", pairing: pairData.pairing, items: picked }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Generation failed");
@@ -235,9 +239,34 @@ export default function PlanPostsPage() {
 
           {/* The plan, post by post */}
           <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-2">
-            <h3 className="text-sm font-bold text-white mb-1">What will be made</h3>
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
+              <h3 className="text-sm font-bold text-white">
+                Pick what to build
+                <span className="ml-2 text-[10px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">
+                  {picked.length} of {analysis.specs.length}
+                </span>
+              </h3>
+              <div className="flex items-center gap-2 text-[10px] font-bold">
+                <button onClick={() => setPicked(analysis.specs.map((s) => s.item))}
+                  className="text-slate-400 hover:text-white cursor-pointer">Select all</button>
+                <span className="text-slate-700">·</span>
+                <button onClick={() => setPicked([])}
+                  className="text-slate-400 hover:text-white cursor-pointer">Clear</button>
+                <span className="text-slate-700">·</span>
+                <button onClick={() => setPicked(analysis.specs.slice(0, 2).map((s) => s.item))}
+                  className="text-indigo-400 hover:text-indigo-300 cursor-pointer">Just the first 2</button>
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-600 mb-1">
+              Start with one or two while you are judging the templates — each build costs real money and takes a
+              minute or so per post.
+            </p>
             {analysis.specs.map((s) => (
-              <div key={s.item} className="flex items-center gap-3 rounded-lg border border-slate-900 bg-slate-950/60 px-3 py-2">
+              <label key={s.item}
+                className={`flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${picked.includes(s.item) ? "border-indigo-600 bg-indigo-950/20" : "border-slate-900 bg-slate-950/60 hover:border-slate-800"}`}>
+                <input type="checkbox" checked={picked.includes(s.item)}
+                  onChange={(e) => setPicked((prev) => e.target.checked ? [...prev, s.item] : prev.filter((n) => n !== s.item))}
+                  className="shrink-0 accent-indigo-500 cursor-pointer" />
                 <span className="text-[10px] font-mono text-slate-600 w-6 shrink-0">{s.item + 1}</span>
                 <span className={`text-[9px] font-black px-1.5 py-0.5 rounded shrink-0 border ${s.kind === "product" ? "bg-amber-950/40 border-amber-900 text-amber-400" : "bg-emerald-950/40 border-emerald-900 text-emerald-400"}`}>
                   {s.kind === "product" ? "PHOTO" : "GENERATED"}
@@ -245,7 +274,7 @@ export default function PlanPostsPage() {
                 <span className="text-xs text-white truncate flex-1" title={s.reason}>{s.headline || "(untitled)"}</span>
                 <span className="text-[10px] text-slate-500 shrink-0 capitalize">{s.contentType}{s.frames > 1 ? ` ×${s.frames}` : ""}</span>
                 <span className="text-[10px] font-mono text-slate-600 shrink-0">{s.date?.slice(5) || "—"}</span>
-              </div>
+              </label>
             ))}
           </div>
 
@@ -259,10 +288,16 @@ export default function PlanPostsPage() {
                 className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:border-indigo-600 text-[11px] font-bold">
                 Creative Approvals <ArrowRight className="w-3.5 h-3.5" />
               </Link>
-              <button onClick={generate} disabled={working !== "" || !analysis.imagesReady}
+              <button onClick={generate} disabled={working !== "" || !analysis.imagesReady || picked.length === 0}
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-bold uppercase tracking-wider cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
                 {working === "generate" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                <span>{working === "generate" ? "Building…" : "Build the posts"}</span>
+                <span>
+                  {working === "generate"
+                    ? "Building…"
+                    : picked.length === 0
+                    ? "Pick a post to build"
+                    : `Build ${picked.length} post${picked.length === 1 ? "" : "s"}`}
+                </span>
               </button>
             </div>
           </div>
