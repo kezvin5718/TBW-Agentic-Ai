@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { analysePlan } from "@/lib/post-designer";
 import { generatePlanPosts } from "@/lib/post-studio";
-import { describeImageViaVision } from "@/lib/integrations/openai-images";
+import { describeImageViaVision, isImageGenerationConfigured } from "@/lib/integrations/openai-images";
 
 export const dynamic = "force-dynamic";
 // Designing, rendering and checking a month of posts is slow work.
@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
       ...plan,
       photos: photos || [],
       alreadyMade: made || [],
-      imagesReady: !!process.env.OPENAI_API_KEY,
+      imagesReady: isImageGenerationConfigured(),
     });
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Could not read the plan" }, { status: 500 });
@@ -129,9 +129,9 @@ export async function POST(request: NextRequest) {
   }
 
   if (body.action === "generate") {
-    if (!process.env.OPENAI_API_KEY) {
+    if (!isImageGenerationConfigured()) {
       return NextResponse.json(
-        { error: "Image generation needs OPENAI_API_KEY on the server — add it to /opt/tbw-os/.env and redeploy." },
+        { error: "Image generation needs OPENROUTER_API_KEY (or OPENAI_API_KEY) on the server." },
         { status: 400 }
       );
     }

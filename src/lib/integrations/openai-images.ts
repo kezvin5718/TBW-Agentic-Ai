@@ -77,26 +77,55 @@ export async function generateBrandImage(
   prompt: string,
   shape: "square" | "portrait" | "landscape" = "square"
 ): Promise<{ buffer: Buffer | null; error?: string }> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return { buffer: null, error: "OPENAI_API_KEY is not set on the server." };
+  const viaRouter = !!process.env.OPENROUTER_API_KEY;
+  const apiKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return { buffer: null, error: "Neither OPENROUTER_API_KEY nor OPENAI_API_KEY is set on the server." };
+  }
 
-  const size = shape === "portrait" ? "1024x1536" : shape === "landscape" ? "1536x1024" : "1024x1024";
+  // OpenRouter reaches the same model through its own image endpoint, which
+  // takes an aspect ratio; OpenAI's takes explicit pixels. Both answer with
+  // base64 in data[0].b64_json.
+  const endpoint = viaRouter ? "https://openrouter.ai/api/v1/images" : "https://api.openai.com/v1/images/generations";
+  const body = viaRouter
+    ? {
+        model: "openai/gpt-image-1",
+        prompt,
+        n: 1,
+        aspect_ratio: shape === "portrait" ? "9:16" : shape === "landscape" ? "16:9" : "1:1",
+        quality: "high",
+        output_format: "png",
+      }
+    : {
+        model: "gpt-image-1",
+        prompt,
+        n: 1,
+        size: shape === "portrait" ? "1024x1536" : shape === "landscape" ? "1536x1024" : "1024x1024",
+        quality: "high",
+      };
 
   try {
-    const res = await fetch("https://api.openai.com/v1/images/generations", {
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model: "gpt-image-1", prompt, n: 1, size, quality: "high" }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
-    if (!res.ok) return { buffer: null, error: data.error?.message || `Image generation failed (${res.status})` };
+    if (!res.ok) {
+      return { buffer: null, error: data.error?.message || `Image generation failed (${res.status})` };
+    }
 
     const b64 = data.data?.[0]?.b64_json;
-    if (!b64) return { buffer: null, error: "No image came back from OpenAI." };
+    if (!b64) return { buffer: null, error: `No image came back from ${viaRouter ? "OpenRouter" : "OpenAI"}.` };
     return { buffer: Buffer.from(b64, "base64") };
   } catch (err: unknown) {
     return { buffer: null, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/** Whether anything can generate an image at all. */
+export function isImageGenerationConfigured(): boolean {
+  return !!(process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY);
 }
 
 /**

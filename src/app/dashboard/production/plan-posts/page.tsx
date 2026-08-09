@@ -169,7 +169,7 @@ export default function PlanPostsPage() {
           {!analysis.imagesReady && (
             <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-3 text-xs text-amber-300 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>Add <span className="font-mono">OPENAI_API_KEY</span> to the server .env — without it the generated posts can&apos;t be made.</span>
+              <span>No image key on the server — add <span className="font-mono">OPENROUTER_API_KEY</span> (or <span className="font-mono">OPENAI_API_KEY</span>) to the .env. Product posts would still build, but the generated ones can&apos;t.</span>
             </div>
           )}
 
