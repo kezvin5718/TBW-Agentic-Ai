@@ -63,6 +63,43 @@ export async function describeImageViaVision(imageUrl: string, instruction: stri
 }
 
 /**
+ * Generates an image with gpt-image-1 and returns the raw bytes.
+ *
+ * Chosen over DALL·E 3 for one specific reason: it renders text inside an image
+ * far more reliably, and the posts this is used for — festival greetings, offer
+ * cards — are mostly text, often in Devanagari as well as Latin. It always
+ * answers with base64 rather than a URL, so there is nothing to download.
+ *
+ * Only ever used for creatives with no real product in them. A photograph of a
+ * client's jewellery is composited, never regenerated.
+ */
+export async function generateBrandImage(
+  prompt: string,
+  shape: "square" | "portrait" | "landscape" = "square"
+): Promise<{ buffer: Buffer | null; error?: string }> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return { buffer: null, error: "OPENAI_API_KEY is not set on the server." };
+
+  const size = shape === "portrait" ? "1024x1536" : shape === "landscape" ? "1536x1024" : "1024x1024";
+
+  try {
+    const res = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ model: "gpt-image-1", prompt, n: 1, size, quality: "high" }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { buffer: null, error: data.error?.message || `Image generation failed (${res.status})` };
+
+    const b64 = data.data?.[0]?.b64_json;
+    if (!b64) return { buffer: null, error: "No image came back from OpenAI." };
+    return { buffer: Buffer.from(b64, "base64") };
+  } catch (err: unknown) {
+    return { buffer: null, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
  * Generates an image using OpenAI's DALL-E 3 API.
  * If a productImageUrl is provided, it first uses describeImageViaVision to get a detailed
  * visual description of the product and appends it to the prompt.

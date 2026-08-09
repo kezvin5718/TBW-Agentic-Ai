@@ -34,6 +34,7 @@ import {
   Send,
   Wallet,
   ListTodo,
+  Wand2,
   Phone
 } from "lucide-react";
 
@@ -74,6 +75,7 @@ export default async function DashboardLayout({
     { name: "Task Manager", href: "/dashboard/task-manager", icon: ListTodo, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "Call Notes", href: "/dashboard/calls", icon: Phone, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "5 · Ad Production", href: "/dashboard/production", icon: Clapperboard, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "5b · Plan → Posts", href: "/dashboard/production/plan-posts", icon: Wand2, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "6 · Image Studio", href: "/dashboard/image-studio", icon: Image, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "7 · Creative Approvals", href: "/dashboard/creatives-review", icon: Shield, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "8 · Content Hub", href: "/dashboard/content-hub", icon: FolderUp, roles: ["founder", "employee"], section: "Client Workflow" },
