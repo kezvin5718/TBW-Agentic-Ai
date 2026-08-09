@@ -23,8 +23,21 @@ import { analysePlan, pixelsFor, shapeFor, type PostSpec } from "@/lib/post-desi
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** Wraps text to a rough character width — DejaVu is roughly 0.55em per glyph. */
-function wrap(text: string, maxChars: number): string[] {
+/**
+ * Lays out the type so it always fits.
+ *
+ * The first version wrapped on a fixed character count and anchored from the
+ * top, which overflowed both edges: "CUT TO CATCH EVERY EYE" ran off the right
+ * and the block ran off the bottom. Width now comes from the font size, the
+ * size shrinks until the text fits, and the block is anchored to the bottom so
+ * it can never run past the frame.
+ */
+
+/** DejaVu Sans Bold, uppercase, averages a little over 0.6em per glyph. */
+const BOLD_ADVANCE = 0.62;
+const REG_ADVANCE = 0.55;
+
+function wrapAt(text: string, maxChars: number): string[] {
   const words = text.split(/\s+/).filter(Boolean);
   const lines: string[] = [];
   let line = "";
@@ -37,61 +50,89 @@ function wrap(text: string, maxChars: number): string[] {
     }
   }
   if (line) lines.push(line);
-  return lines.slice(0, 4);
+  return lines;
 }
 
-/** The type block: headline, supporting line, CTA pill. */
+/** Largest size at which the text fits the width in at most `maxLines`. */
+function fitText(text: string, availPx: number, startPx: number, maxLines: number, advance: number) {
+  let size = startPx;
+  for (let i = 0; i < 12; i++) {
+    const perLine = Math.max(6, Math.floor(availPx / (size * advance)));
+    const lines = wrapAt(text, perLine);
+    const longest = Math.max(...lines.map((l) => l.length), 1);
+    if (lines.length <= maxLines && longest * size * advance <= availPx) {
+      return { size, lines };
+    }
+    size = Math.round(size * 0.9);
+  }
+  const perLine = Math.max(6, Math.floor(availPx / (size * advance)));
+  return { size, lines: wrapAt(text, perLine).slice(0, maxLines) };
+}
+
+/** The type block: headline, supporting line, CTA pill — bottom anchored. */
 function textLayer(spec: PostSpec, width: number, height: number): Buffer {
+  const marginX = Math.round(width * 0.08);
+  const avail = width - marginX * 2;
   const portrait = height > width;
-  const headSize = Math.round(width * (portrait ? 0.085 : 0.095));
-  const subSize = Math.round(headSize * 0.42);
-  const ctaSize = Math.round(headSize * 0.34);
 
-  const headLines = wrap(spec.headline.toUpperCase(), portrait ? 16 : 18);
-  // Type sits in the lower third so a composited product has the upper frame.
-  const blockTop = Math.round(height * (portrait ? 0.62 : 0.60));
+  const head = fitText(spec.headline.toUpperCase(), avail, Math.round(width * 0.10), 3, BOLD_ADVANCE);
+  const subSize = Math.max(18, Math.round(head.size * 0.38));
+  const subLines = spec.subtext ? fitText(spec.subtext, avail, subSize, 2, REG_ADVANCE) : { size: subSize, lines: [] };
+  const ctaSize = Math.max(16, Math.round(head.size * 0.30));
 
-  let y = blockTop;
+  const headLead = Math.round(head.size * 1.14);
+  const subLead = Math.round(subLines.size * 1.32);
+  const ctaH = spec.cta ? Math.round(ctaSize * 2.2) : 0;
+
+  const blockH =
+    head.lines.length * headLead +
+    (subLines.lines.length ? Math.round(subLines.size * 0.6) + subLines.lines.length * subLead : 0) +
+    (ctaH ? Math.round(ctaSize * 0.8) + ctaH : 0);
+
+  // Sit the block above the bottom edge rather than growing down past it.
+  const bottomPad = Math.round(height * (portrait ? 0.09 : 0.08));
+  let y = height - bottomPad - blockH + head.size;
+
   const parts: string[] = [];
-
-  for (const line of headLines) {
+  for (const line of head.lines) {
     parts.push(
-      `<text x="${Math.round(width * 0.08)}" y="${y}" font-family="DejaVu Sans" font-size="${headSize}" font-weight="bold" fill="${spec.textHex}" letter-spacing="1">${esc(line)}</text>`
+      `<text x="${marginX}" y="${y}" font-family="DejaVu Sans" font-size="${head.size}" font-weight="bold" fill="${spec.textHex}">${esc(line)}</text>`
     );
-    y += Math.round(headSize * 1.15);
+    y += headLead;
   }
 
-  if (spec.subtext) {
-    y += Math.round(subSize * 0.5);
-    for (const line of wrap(spec.subtext, portrait ? 34 : 38).slice(0, 2)) {
+  if (subLines.lines.length) {
+    y += Math.round(subLines.size * 0.6);
+    for (const line of subLines.lines) {
       parts.push(
-        `<text x="${Math.round(width * 0.08)}" y="${y}" font-family="DejaVu Sans" font-size="${subSize}" fill="${spec.textHex}" opacity="0.85">${esc(line)}</text>`
+        `<text x="${marginX}" y="${y}" font-family="DejaVu Sans" font-size="${subLines.size}" fill="${spec.textHex}" opacity="0.88">${esc(line)}</text>`
       );
-      y += Math.round(subSize * 1.3);
+      y += subLead;
     }
   }
 
   if (spec.cta) {
-    y += Math.round(ctaSize * 1.2);
-    const padX = Math.round(ctaSize * 0.9);
-    const padY = Math.round(ctaSize * 0.6);
-    const textW = Math.round(spec.cta.length * ctaSize * 0.58);
+    y += Math.round(ctaSize * 0.8);
+    const padX = Math.round(ctaSize * 0.95);
+    const padY = Math.round(ctaSize * 0.55);
+    const textW = Math.round(spec.cta.length * ctaSize * REG_ADVANCE);
     parts.push(
-      `<rect x="${Math.round(width * 0.08)}" y="${y - ctaSize}" rx="${Math.round(ctaSize * 0.6)}" width="${textW + padX * 2}" height="${ctaSize + padY * 2}" fill="${spec.accentHex}" />`,
-      `<text x="${Math.round(width * 0.08) + padX}" y="${y + padY * 0.6}" font-family="DejaVu Sans" font-size="${ctaSize}" font-weight="bold" fill="${spec.backgroundHex}">${esc(spec.cta)}</text>`
+      `<rect x="${marginX}" y="${y - ctaSize}" rx="${Math.round(ctaSize * 0.75)}" width="${Math.min(avail, textW + padX * 2)}" height="${ctaSize + padY * 2}" fill="${spec.accentHex}" />`,
+      `<text x="${marginX + padX}" y="${y + Math.round(padY * 0.55)}" font-family="DejaVu Sans" font-size="${ctaSize}" font-weight="bold" fill="${spec.backgroundHex}">${esc(spec.cta)}</text>`
     );
   }
 
-  // A scrim keeps type readable over a busy photograph or scene.
-  const scrim = `<linearGradient id="s" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="${spec.backgroundHex}" stop-opacity="0"/>
-      <stop offset="55%" stop-color="${spec.backgroundHex}" stop-opacity="0.75"/>
-      <stop offset="100%" stop-color="${spec.backgroundHex}" stop-opacity="0.97"/>
-    </linearGradient>`;
-
+  // The scrim covers only as much as the type needs, so the product stays visible.
+  const scrimTop = Math.max(0, height - bottomPad - blockH - Math.round(height * 0.10));
   const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-    <defs>${scrim}</defs>
-    <rect x="0" y="${Math.round(height * 0.42)}" width="${width}" height="${Math.round(height * 0.58)}" fill="url(#s)"/>
+    <defs>
+      <linearGradient id="s" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${spec.backgroundHex}" stop-opacity="0"/>
+        <stop offset="45%" stop-color="${spec.backgroundHex}" stop-opacity="0.72"/>
+        <stop offset="100%" stop-color="${spec.backgroundHex}" stop-opacity="0.95"/>
+      </linearGradient>
+    </defs>
+    <rect x="0" y="${scrimTop}" width="${width}" height="${height - scrimTop}" fill="url(#s)"/>
     ${parts.join("\n")}
   </svg>`;
   return Buffer.from(svg);
@@ -254,6 +295,11 @@ export async function generatePlanPosts(
           notes.push(`Post ${spec.item + 1}: could not be stored.`);
           continue;
         }
+        // These belong in Drive. Landing in Supabase means the Drive upload
+        // failed and fell back — worth saying, since Supabase has no room.
+        const storedNote = url.includes("supabase.co")
+          ? "Saved to Supabase because the Drive upload failed — check Integrations."
+          : "";
 
         const { error } = await admin.from("creatives").insert({
           client_id: plan.clientId,
@@ -267,7 +313,7 @@ export async function generatePlanPosts(
           scheduled_for: spec.date ? new Date(`${spec.date}T10:00:00+05:30`).toISOString() : null,
           spec,
           qc_status: verdict.ok ? "passed" : "failed",
-          qc_note: [note, ...verdict.issues].filter(Boolean).join(" · ") || null,
+          qc_note: [note, storedNote, ...verdict.issues].filter(Boolean).join(" · ") || null,
           founder_approval: "pending",
           client_approval: "pending",
           source: "plan",

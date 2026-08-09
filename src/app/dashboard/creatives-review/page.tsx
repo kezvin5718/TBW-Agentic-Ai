@@ -21,6 +21,9 @@ export default function FounderCreativesReviewPage() {
     caption: string;
     media_url: string;
     qc_status: string;
+    qc_note?: string | null;
+    scheduled_for?: string | null;
+    clients?: { name: string } | null;
     founder_approval: string;
     client_approval: string;
     created_at: string;
@@ -68,6 +71,7 @@ export default function FounderCreativesReviewPage() {
           .from("creatives")
           .select(`
             *,
+            clients(name),
             tasks(
               *,
               monthly_plans(
@@ -178,7 +182,7 @@ export default function FounderCreativesReviewPage() {
               <div>
                 <span className="text-[9px] text-slate-500 uppercase tracking-widest font-mono">Client name</span>
                 <h2 className="text-sm font-bold text-white leading-tight">
-                  {activeCreative.tasks?.monthly_plans?.clients?.name}
+                  {activeCreative.clients?.name || activeCreative.tasks?.monthly_plans?.clients?.name || "—"}
                 </h2>
               </div>
 
@@ -241,8 +245,9 @@ export default function FounderCreativesReviewPage() {
                 <Calendar className="w-3.5 h-3.5 text-slate-500" />
                 <span>Planned Post Date:</span>
                 <strong className="text-white">
-                  {activeCreative.tasks?.deadline
-                    ? new Date(activeCreative.tasks.deadline).toLocaleDateString("en-IN", { month: "long", day: "numeric", year: "numeric" })
+                  {activeCreative.scheduled_for || activeCreative.tasks?.deadline
+                    ? new Date((activeCreative.scheduled_for || activeCreative.tasks?.deadline) as string)
+                        .toLocaleDateString("en-IN", { month: "long", day: "numeric", year: "numeric" })
                     : "N/A"}
                 </strong>
               </div>
@@ -286,7 +291,9 @@ export default function FounderCreativesReviewPage() {
                     ))}
                   </div>
                 ) : (
-                  <span className="text-[10px] text-slate-500 italic">No QC records.</span>
+                  activeCreative.qc_note
+                    ? <span className="text-[10px] text-amber-300">{activeCreative.qc_note}</span>
+                    : <span className="text-[10px] text-slate-500 italic">No QC records.</span>
                 )}
 
                 {activeCreative.qc_report?.suggested_corrections && activeCreative.qc_status !== "passed" && (
