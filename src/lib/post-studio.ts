@@ -3,7 +3,7 @@ import { createServiceRoleClient } from "@/lib/supabase/server";
 import { completeVision } from "@/lib/llm-vision";
 import { safeJsonParse } from "@/lib/llm";
 import { generateBrandImage } from "@/lib/integrations/openai-images";
-import { storeToDriveStrict } from "@/lib/google-drive";
+import { storeToDriveStrict, isDriveConnected } from "@/lib/google-drive";
 import { analysePlan, pixelsFor, shapeFor, type PostSpec } from "@/lib/post-designer";
 
 /**
@@ -252,6 +252,18 @@ export async function generatePlanPosts(
   options: { items?: number[]; limit?: number } = {}
 ): Promise<{ created: number; failed: number; notes: string[] }> {
   const admin = createServiceRoleClient();
+
+  // Check the destination before making anything. Rendering and generating cost
+  // real money, and there is no point spending it on posts that have nowhere to
+  // be saved.
+  if (!(await isDriveConnected())) {
+    return {
+      created: 0,
+      failed: 0,
+      notes: ["Google Drive isn't connected, so nothing was built. Reconnect it under Integrations and run this again — no images were generated, so this cost nothing."],
+    };
+  }
+
   const plan = await analysePlan(planId);
   const limit = options.limit ?? 30;
   // Building one or two posts at a time is the sane way to judge whether the
@@ -297,6 +309,13 @@ export async function generatePlanPosts(
         if (!url) {
           failed++;
           notes.push(`Post ${spec.item + 1}: not saved — ${storeErr || "Google Drive refused the upload."}`);
+          // A broken connection or a full Drive will not fix itself between
+          // frames. Stop rather than paying to generate images that cannot be
+          // stored — the first four failures cost four generations for nothing.
+          if (/not connected|rejected the saved|out of space/i.test(storeErr || "")) {
+            notes.push("Stopped here — every remaining post would fail the same way.");
+            return { created, failed, notes };
+          }
           continue;
         }
 
