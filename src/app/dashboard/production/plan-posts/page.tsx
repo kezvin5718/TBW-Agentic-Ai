@@ -26,6 +26,7 @@ export default function PlanPostsPage() {
     photosRequired: number; generated: number; skippedReels: number;
     specs: SpecRow[]; photos: PhotoRow[]; alreadyMade: { id: string }[]; imagesReady: boolean;
     driveConnected?: boolean;
+    driveError?: string | null;
     driveQuota?: { usedGb: number; limitGb: number | null; percent: number | null } | null;
   } | null>(null);
 
@@ -171,7 +172,11 @@ export default function PlanPostsPage() {
           {analysis.driveConnected === false && (
             <div className="bg-rose-950/20 border border-rose-900/50 rounded-xl p-3 text-xs text-rose-300 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>Google Drive isn&apos;t connected — finished posts are saved there, so nothing can be built. Connect it under Integrations.</span>
+              <span>
+                Google Drive isn&apos;t connected — finished posts are saved there, so nothing can be built.{" "}
+                <Link href="/dashboard/settings/integrations" className="underline font-bold">Reconnect it under Integrations</Link>.
+                {analysis.driveError ? <> Reason: {analysis.driveError}</> : null}
+              </span>
             </div>
           )}
 

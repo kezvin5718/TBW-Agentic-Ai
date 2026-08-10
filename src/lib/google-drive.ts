@@ -94,14 +94,50 @@ export async function disconnectDrive(): Promise<void> {
   await supabase.from("agency_settings").delete().eq("key", SETTINGS_KEY);
 }
 
-export async function getDriveStatus(): Promise<{ connected: boolean; email?: string; status: string; configured: boolean }> {
+export async function getDriveStatus(): Promise<{ connected: boolean; email?: string; status: string; configured: boolean; error?: string }> {
   const creds = await loadCreds();
   return {
     connected: !!creds && creds.status === "connected",
     email: creds?.email,
     status: creds?.status || "disconnected",
     configured: isConfigured(),
+    error: creds?.error_message,
   };
+}
+
+
+/**
+ * Google answers "invalid_grant" when a refresh token is no longer usable.
+ *
+ * The usual cause is an OAuth consent screen still in Testing, where Google
+ * expires refresh tokens after seven days — so Drive works for a week after
+ * every reconnect and then quietly stops. Access being revoked or the account
+ * password changing does the same thing.
+ *
+ * Whatever the cause, the connection needs a human, so mark it broken rather
+ * than letting every Drive call fail on its own with an opaque code.
+ */
+function isDeadGrant(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /invalid_grant|Token has been expired or revoked/i.test(msg);
+}
+
+async function markDriveBroken(reason: string): Promise<void> {
+  const creds = await loadCreds();
+  if (!creds || creds.status === "error") return;
+  await saveCreds({ ...creds, status: "error", error_message: reason });
+}
+
+/** A human explanation for a Drive failure, plus the action it needs. */
+export function explainDriveError(err: unknown): string {
+  if (isDeadGrant(err)) {
+    return "Google has rejected the saved Drive connection. Reconnect Google Drive under Integrations — and if this keeps happening every week, the Google Cloud consent screen is still in Testing, where refresh tokens expire after 7 days; publishing it stops that.";
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/quota|storageQuotaExceeded/i.test(msg)) {
+    return "Google Drive is out of space — free some up or upgrade the plan.";
+  }
+  return msg;
 }
 
 async function getDriveService() {
@@ -203,12 +239,8 @@ export async function storeToDriveStrict(
     const { viewUrl } = await uploadImageToDrive(buffer, fileName, mimeType, clientName, monthLabel, rootFolder);
     return { url: viewUrl };
   } catch (err: unknown) {
-    const raw = err instanceof Error ? err.message : String(err);
-    // The one worth naming, because it needs an action rather than a retry.
-    const friendly = /quota|storageQuotaExceeded/i.test(raw)
-      ? "Google Drive is out of space — free some up or upgrade the plan."
-      : raw;
-    return { url: null, error: friendly };
+    if (isDeadGrant(err)) await markDriveBroken("Google rejected the saved refresh token (invalid_grant).");
+    return { url: null, error: explainDriveError(err) };
   }
 }
 

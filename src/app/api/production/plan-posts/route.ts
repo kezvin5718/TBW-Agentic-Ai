@@ -3,7 +3,7 @@ import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { analysePlan } from "@/lib/post-designer";
 import { generatePlanPosts } from "@/lib/post-studio";
 import { describeImageViaVision, isImageGenerationConfigured } from "@/lib/integrations/openai-images";
-import { isDriveConnected, getDriveQuota } from "@/lib/google-drive";
+import { isDriveConnected, getDriveQuota, getDriveStatus } from "@/lib/google-drive";
 
 export const dynamic = "force-dynamic";
 // Designing, rendering and checking a month of posts is slow work.
@@ -41,6 +41,7 @@ export async function GET(request: NextRequest) {
       alreadyMade: made || [],
       imagesReady: isImageGenerationConfigured(),
       driveConnected: await isDriveConnected(),
+      driveError: (await getDriveStatus()).error || null,
       driveQuota: await getDriveQuota(),
     });
   } catch (err: unknown) {
