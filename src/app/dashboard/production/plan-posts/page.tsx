@@ -94,7 +94,14 @@ export default function PlanPostsPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not save the photos");
-      setNotice({ ok: true, text: `${data.added} photo(s) added. They'll be paired to the posts that need them.` });
+      // Say plainly when a finished post was cropped back to the jewellery —
+      // otherwise the change is invisible and looks like a bug later.
+      const lines = [`${data.added} photo(s) added.`];
+      if (data.cleaned > 0) lines.push(`${data.cleaned} had branding cropped away to leave just the product.`);
+      if (data.needsHuman?.length) {
+        lines.push(`Text sits across the jewellery in: ${data.needsHuman.join(", ")}. Cropping cannot remove that — supply a clean photo for these.`);
+      }
+      setNotice({ ok: !(data.needsHuman?.length), text: lines.join("\n") });
       await analyse();
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Failed" });

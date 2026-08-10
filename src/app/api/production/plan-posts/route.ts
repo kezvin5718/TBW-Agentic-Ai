@@ -3,7 +3,8 @@ import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { analysePlan } from "@/lib/post-designer";
 import { generatePlanPosts } from "@/lib/post-studio";
 import { describeImageViaVision, isImageGenerationConfigured } from "@/lib/integrations/openai-images";
-import { isDriveConnected, getDriveQuota, getDriveStatus } from "@/lib/google-drive";
+import { isDriveConnected, getDriveQuota, getDriveStatus, storeToDriveStrict } from "@/lib/google-drive";
+import { cleanProductPhoto } from "@/lib/product-photo";
 
 export const dynamic = "force-dynamic";
 // Designing, rendering and checking a month of posts is slow work.
@@ -77,14 +78,45 @@ export async function POST(request: NextRequest) {
     const { data: existing } = await admin.from("plan_product_photos").select("seq").eq("plan_id", planId).order("seq", { ascending: false }).limit(1);
     let seq = (existing?.[0]?.seq ?? 0) + 1;
 
+    const { data: clientRow } = await admin.from("clients").select("name").eq("id", plan.client_id).maybeSingle();
+
     const rows = [];
     for (const p of incoming) {
-      // Knowing what is in the picture is what lets us pair it with the right
-      // post rather than relying on upload order.
+      // Strip the border, logo and tagline first. What designers hand over is
+      // usually a finished post, and building on top of one produces exactly
+      // the double-branded, cropped result QC kept rejecting.
+      let useUrl = p.url;
+      let cleanNote = "";
+      let needsHuman = false;
+      try {
+        const res = await fetch(p.url);
+        if (res.ok) {
+          const cleaned = await cleanProductPhoto(Buffer.from(await res.arrayBuffer()));
+          cleanNote = cleaned.note;
+          needsHuman = cleaned.needsHuman;
+          if (cleaned.changed) {
+            const stored = await storeToDriveStrict(
+              cleaned.buffer,
+              `clean-${(p.fileName || "product").replace(/\.[a-z0-9]+$/i, "")}.png`,
+              "image/png",
+              clientRow?.name || undefined,
+              "product-photos",
+              "TBW Generated Posts"
+            );
+            if (stored.url) useUrl = stored.url;
+            else cleanNote = `${cleanNote} (could not save the cleaned copy: ${stored.error})`;
+          }
+        }
+      } catch (err: unknown) {
+        cleanNote = `could not clean the photo: ${err instanceof Error ? err.message : String(err)}`;
+      }
+
+      // Describe the cleaned product, so pairing matches the jewellery rather
+      // than whatever the original artwork happened to say.
       let description = "";
       try {
         description = await describeImageViaVision(
-          p.url,
+          useUrl,
           "Describe this jewellery or product photograph in under 25 words: what the piece is, its metal and stones, and the occasion it suits."
         );
       } catch { /* pairing falls back to order */ }
@@ -93,7 +125,10 @@ export async function POST(request: NextRequest) {
         plan_id: planId,
         client_id: plan.client_id,
         seq: seq++,
-        image_url: p.url,
+        image_url: useUrl,
+        original_url: useUrl === p.url ? null : p.url,
+        clean_note: cleanNote || null,
+        needs_human: needsHuman,
         file_name: p.fileName || null,
         description: description || null,
         uploaded_by: guard.user!.id,
@@ -102,7 +137,15 @@ export async function POST(request: NextRequest) {
 
     const { error } = await admin.from("plan_product_photos").insert(rows);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ success: true, added: rows.length });
+
+    const flagged = rows.filter((r) => r.needs_human).map((r) => r.file_name || "a photo");
+    return NextResponse.json({
+      success: true,
+      added: rows.length,
+      cleaned: rows.filter((r) => r.original_url).length,
+      needsHuman: flagged,
+      notes: rows.filter((r) => r.clean_note).map((r) => `${r.file_name}: ${r.clean_note}`),
+    });
   }
 
   if (body.action === "pair") {
