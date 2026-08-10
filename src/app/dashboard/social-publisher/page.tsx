@@ -99,6 +99,9 @@ export default function SocialPublisherPage() {
   // ui state
   const [uploading, setUploading] = useState<"media" | "thumb" | null>(null);
   const [uploadPct, setUploadPct] = useState(0);
+  // The preview is only worth anything if it shows the shape the platform will
+  // actually publish. A hard-coded square told everyone a 3:4 was fine.
+  const [mediaAspect, setMediaAspect] = useState<number | null>(null);
   const [generating, setGenerating] = useState(false);
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
@@ -339,7 +342,7 @@ export default function SocialPublisherPage() {
       // Straight to Supabase Storage — a reel routed through our own server
       // held the whole file in memory and killed the container mid-upload.
       const data = await uploadDirect(file, "social", setUploadPct);
-      if (kind === "media") { setMediaUrl(data.url); setMediaName(data.fileName); setMediaIsVideo(data.mediaType === "video"); }
+      if (kind === "media") { setMediaUrl(data.url); setMediaName(data.fileName); setMediaIsVideo(data.mediaType === "video"); setMediaAspect(null); }
       else { setThumbUrl(data.url); setSelectedThumb(null); }
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Upload failed" });
@@ -629,7 +632,17 @@ export default function SocialPublisherPage() {
     }
     if (!mediaIsVideo) {
       // eslint-disable-next-line @next/next/no-img-element
-      return <img src={mediaUrl} alt="" className={`w-full h-full object-cover ${className}`} />;
+      return (
+        <img
+          src={mediaUrl}
+          alt=""
+          onLoad={(e) => {
+            const el = e.currentTarget;
+            if (el.naturalWidth && el.naturalHeight) setMediaAspect(el.naturalWidth / el.naturalHeight);
+          }}
+          className={`w-full h-full object-cover ${className}`}
+        />
+      );
     }
     // Drive won't stream raw bytes to <video> — use its own player for those.
     const driveId = mediaUrl.match(/googleusercontent\.com\/d\/([^=/?&]+)/)?.[1] || mediaUrl.match(/drive\.google\.com\/file\/d\/([^/?&]+)/)?.[1];
@@ -637,6 +650,22 @@ export default function SocialPublisherPage() {
       return <iframe src={`https://drive.google.com/file/d/${driveId}/preview`} allow="autoplay" className={`w-full h-full border-0 bg-black ${className}`} />;
     }
     return <video src={mediaUrl} poster={thumbUrl || undefined} playsInline controls className={`w-full h-full object-cover bg-black ${className}`} />;
+  };
+
+  /**
+   * What the platform will actually show.
+   *
+   * Instagram's feed accepts between 1.91:1 and 4:5 and crops anything outside
+   * that; Facebook is more permissive with portrait. Previewing everything as a
+   * square (or, for Facebook, 16:9) hid real cropping — a 3:4 image looked fine
+   * here and came out cut on the platform.
+   */
+  const feedAspect = (platform: string): { ratio: number; cropped: boolean } => {
+    const natural = mediaAspect ?? 1;
+    const min = platform === "instagram" ? 0.8 : 0.75; // 4:5 / 3:4
+    const max = 1.91;
+    const ratio = Math.min(max, Math.max(min, natural));
+    return { ratio, cropped: mediaAspect !== null && Math.abs(ratio - natural) > 0.01 };
   };
 
   const renderPreview = () => {
@@ -676,7 +705,7 @@ export default function SocialPublisherPage() {
             <PvAvatar className="w-8 h-8" /><span className="text-xs font-bold">{pvHandle}</span>
             <MoreHorizontal className="w-4 h-4 ml-auto text-slate-500" />
           </div>
-          <div className="aspect-square bg-slate-100"><PvMedia /></div>
+          <div className="bg-slate-100" style={{ aspectRatio: String(feedAspect("instagram").ratio) }}><PvMedia /></div>
           <div className="px-3 pt-2.5 flex items-center gap-3 text-slate-800">
             <Heart className="w-5 h-5" /><MessageCircle className="w-5 h-5" /><Send className="w-5 h-5" /><Bookmark className="w-5 h-5 ml-auto" />
           </div>
@@ -698,7 +727,7 @@ export default function SocialPublisherPage() {
             <MoreHorizontal className="w-4 h-4 ml-auto text-slate-500" />
           </div>
           <p className="px-3 pb-2 text-xs text-slate-800">{pvCaption.slice(0, 160)}{pvCaption.length > 160 ? "… See more" : ""}</p>
-          <div className="aspect-video bg-slate-100"><PvMedia /></div>
+          <div className="bg-slate-100" style={{ aspectRatio: String(feedAspect("facebook").ratio) }}><PvMedia /></div>
           <div className="px-3 py-2 flex items-center justify-around text-slate-600 text-[11px] font-semibold border-t border-slate-100">
             <span className="flex items-center gap-1"><ThumbsUp className="w-4 h-4" />Like</span>
             <span className="flex items-center gap-1"><MessageCircle className="w-4 h-4" />Comment</span>
@@ -726,7 +755,7 @@ export default function SocialPublisherPage() {
             <div><p className="text-xs font-bold leading-tight">{pvName}</p><p className="text-[10px] text-slate-500">Marketing · Just now</p></div>
           </div>
           <p className="px-3 pb-2 text-xs text-slate-800">{pvCaption.slice(0, 180)}{pvCaption.length > 180 ? "… see more" : ""}</p>
-          <div className="aspect-video bg-slate-100"><PvMedia /></div>
+          <div className="bg-slate-100" style={{ aspectRatio: String(feedAspect("facebook").ratio) }}><PvMedia /></div>
           <div className="px-3 py-2 flex items-center justify-around text-slate-600 text-[11px] font-semibold border-t border-slate-100">
             <span className="flex items-center gap-1"><ThumbsUp className="w-4 h-4" />Like</span>
             <span className="flex items-center gap-1"><MessageCircle className="w-4 h-4" />Comment</span>
@@ -1281,6 +1310,16 @@ export default function SocialPublisherPage() {
           </div>
         )}
         {renderPreview()}
+        {/* Cropping is the thing worth flagging: it is invisible until the post
+            is live, and by then the jewellery has lost its top or bottom. */}
+        {mediaAspect !== null && !mediaIsVideo && ["instagram", "facebook"].includes(previewPlat)
+          && !["reel", "story"].includes(previewType) && feedAspect(previewPlat).cropped && (
+          <p className="text-[10px] text-amber-400 leading-relaxed">
+            This image is {mediaAspect < 1 ? `${(1 / mediaAspect).toFixed(2)}:1 tall` : `${mediaAspect.toFixed(2)}:1 wide`} —
+            {previewPlat === "instagram" ? " Instagram crops feed posts to 4:5" : " Facebook crops this shape"}, so the edges above
+            will be trimmed. Export at 4:5 (1080×1350) or 1:1 to keep all of it.
+          </p>
+        )}
         <p className="text-[10px] text-slate-600">Approximate preview — final look can differ slightly per platform.</p>
       </div>
       </div>
