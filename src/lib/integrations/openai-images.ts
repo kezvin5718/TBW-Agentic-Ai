@@ -63,12 +63,12 @@ export async function describeImageViaVision(imageUrl: string, instruction: stri
 }
 
 /**
- * Generates an image with gpt-image-1 and returns the raw bytes.
+ * Generates a background image and returns the raw bytes.
  *
- * Chosen over DALL·E 3 for one specific reason: it renders text inside an image
- * far more reliably, and the posts this is used for — festival greetings, offer
- * cards — are mostly text, often in Devanagari as well as Latin. It always
- * answers with base64 rather than a URL, so there is nothing to download.
+ * The model matters for one specific reason: it must render text inside an
+ * image reliably, since the posts this is used for — festival greetings, offer
+ * cards — are mostly type, often in Devanagari as well as Latin. Every option
+ * answers with base64 in data[0].b64_json, so there is nothing to download.
  *
  * Only ever used for creatives with no real product in them. A photograph of a
  * client's jewellery is composited, never regenerated.
@@ -83,13 +83,19 @@ export async function generateBrandImage(
     return { buffer: null, error: "Neither OPENROUTER_API_KEY nor OPENAI_API_KEY is set on the server." };
   }
 
+  // Image models are retired and replaced faster than anything else here —
+  // gpt-image-1 was current when this was written and has already gone from
+  // OpenRouter's catalogue. Settable from the environment so a swap is a
+  // config change and a restart, not an edit and a deploy.
+  const model = process.env.IMAGE_MODEL || (viaRouter ? "openai/gpt-5-image" : "gpt-image-1");
+
   // OpenRouter reaches the same model through its own image endpoint, which
   // takes an aspect ratio; OpenAI's takes explicit pixels. Both answer with
   // base64 in data[0].b64_json.
   const endpoint = viaRouter ? "https://openrouter.ai/api/v1/images" : "https://api.openai.com/v1/images/generations";
   const body = viaRouter
     ? {
-        model: "openai/gpt-image-1",
+        model,
         prompt,
         n: 1,
         aspect_ratio: shape === "portrait" ? "9:16" : shape === "landscape" ? "16:9" : "1:1",
@@ -97,7 +103,7 @@ export async function generateBrandImage(
         output_format: "png",
       }
     : {
-        model: "gpt-image-1",
+        model,
         prompt,
         n: 1,
         size: shape === "portrait" ? "1024x1536" : shape === "landscape" ? "1536x1024" : "1024x1024",
@@ -112,7 +118,16 @@ export async function generateBrandImage(
     });
     const data = await res.json();
     if (!res.ok) {
-      return { buffer: null, error: data.error?.message || `Image generation failed (${res.status})` };
+      const raw = data.error?.message || `Image generation failed (${res.status})`;
+      // A retired or misspelled model is the likeliest cause and reads as an
+      // opaque 400, so name the setting that fixes it.
+      if (/model/i.test(raw) && /(not found|invalid|unknown|no endpoints)/i.test(raw)) {
+        return {
+          buffer: null,
+          error: `The image model "${model}" was rejected: ${raw}. Set IMAGE_MODEL in the server .env to a current one — openai/gpt-5-image, openai/gpt-5-image-mini, openai/gpt-5.4-image-2 or google/gemini-3-pro-image.`,
+        };
+      }
+      return { buffer: null, error: raw };
     }
 
     const b64 = data.data?.[0]?.b64_json;
