@@ -87,7 +87,7 @@ export async function generateBrandImage(
   // gpt-image-1 was current when this was written and has already gone from
   // OpenRouter's catalogue. Settable from the environment so a swap is a
   // config change and a restart, not an edit and a deploy.
-  const model = process.env.IMAGE_MODEL || (viaRouter ? "openai/gpt-5-image" : "gpt-image-1");
+  const model = process.env.IMAGE_MODEL || (viaRouter ? "openai/gpt-5.4-image-2" : "gpt-image-1");
 
   // OpenRouter reaches the same model through its own image endpoint, which
   // takes an aspect ratio; OpenAI's takes explicit pixels. Both answer with
