@@ -31,10 +31,15 @@ export async function POST(
       return NextResponse.json({ error: "Invalid review decision" }, { status: 400 });
     }
 
-    // 1. Fetch creative, parent task, monthly plan, client details
+    // 1. Fetch creative, parent task, monthly plan, client details.
+    //
+    // A creative built from a monthly plan has no parent task — the machine made
+    // it, so there was no assignment behind it. Reaching through tasks for the
+    // client threw on every one of them, so read the creative's own client and
+    // treat the task as optional throughout.
     const { data: creative, error: creativeErr } = await supabase
       .from("creatives")
-      .select("*, tasks(*, monthly_plans(*, clients(*)))")
+      .select("*, clients(*), tasks(*, monthly_plans(*, clients(*)))")
       .eq("id", id)
       .single();
 
@@ -42,11 +47,10 @@ export async function POST(
       return NextResponse.json({ error: "Creative asset not found" }, { status: 404 });
     }
 
-    const task = creative.tasks;
-    const plan = task.monthly_plans;
-    const client = plan.clients;
+    const task = creative.tasks as { id?: string; metadata?: unknown; monthly_plans?: { clients?: Record<string, unknown> } } | null;
+    const client = (creative.clients || task?.monthly_plans?.clients || null) as Record<string, unknown> | null;
 
-    const taskMeta = (task.metadata || {}) as Record<string, unknown>;
+    const taskMeta = (task?.metadata || {}) as Record<string, unknown>;
 
     if (decision === "approved") {
       // A. Update creative status
@@ -69,10 +73,11 @@ export async function POST(
         notes: notes || "Approved by founder via Review console.",
       });
 
-      // C. Dispatch to client on WhatsApp
+      // C. Dispatch to client on WhatsApp — only when we know who the client is.
       try {
+        if (!client?.id) throw new Error("No client on this creative — skipped the client dispatch.");
         await requestWhatsAppApproval({
-          clientId: client.id,
+          clientId: client.id as string,
           entityType: "creative",
           entityId: id,
           subject: `Creative Approval: ${creative.caption || "Social Post Draft"}`,
@@ -86,7 +91,7 @@ export async function POST(
           status_from: "founder_approved",
           status_to: "sent_to_client",
           actor_role: "system",
-          notes: `Simulated document and template message dispatched to group number: ${client.whatsapp_group_id || "Unconfigured"}`,
+          notes: `Simulated document and template message dispatched to group number: ${client?.whatsapp_group_id || "Unconfigured"}`,
         });
       } catch (whatsappErr) {
         console.error("Failed to trigger WhatsApp client dispatch:", whatsappErr);
@@ -114,17 +119,18 @@ export async function POST(
         notes: notes || "Rejection notes not specified.",
       });
 
-      // C. Re-open parent task to todo so assignee can review changes
-      await supabase
-        .from("tasks")
-        .update({
-          status: "todo",
-          metadata: {
-            ...taskMeta,
-            founder_feedback: notes || "",
-          },
-        })
-        .eq("id", task.id);
+      // C. Re-open the parent task so the assignee sees the feedback. Posts
+      // built from a plan have no task, so there is nothing to reopen — the
+      // rejection lives on the creative itself.
+      if (task?.id) {
+        await supabase
+          .from("tasks")
+          .update({
+            status: "todo",
+            metadata: { ...taskMeta, founder_feedback: notes || "" },
+          })
+          .eq("id", task.id);
+      }
     }
 
     return NextResponse.json({

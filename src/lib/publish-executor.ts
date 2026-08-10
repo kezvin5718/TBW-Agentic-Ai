@@ -11,7 +11,7 @@ export async function executePublishForCreative(
   // 1. Fetch creative details
   const { data: creative, error: creativeErr } = await supabase
     .from("creatives")
-    .select("*, tasks(*, monthly_plans(*, clients(*)))")
+    .select("*, clients(*), tasks(*, monthly_plans(*, clients(*)))")
     .eq("id", creativeId)
     .single();
 
@@ -19,9 +19,11 @@ export async function executePublishForCreative(
     return { success: false, error: creativeErr?.message || "Creative not found" };
   }
 
-  const client = creative.tasks?.monthly_plans?.clients;
+  // Creatives built from a plan carry their client directly and have no task,
+  // so prefer that and fall back to the old task chain for older rows.
+  const client = creative.clients || creative.tasks?.monthly_plans?.clients;
   if (!client) {
-    return { success: false, error: "Client relation not found on creative task" };
+    return { success: false, error: "This creative has no client on it, so there is nowhere to publish it." };
   }
 
   // 2. Fetch and decrypt client credentials
