@@ -47,7 +47,7 @@ export default function IntegrationsPage() {
   const [savingManual, setSavingManual] = useState(false);
 
   // Google Drive states
-  const [driveStatus, setDriveStatus] = useState<{ connected: boolean; email?: string; configured: boolean } | null>(null);
+  const [driveStatus, setDriveStatus] = useState<{ connected: boolean; email?: string; configured: boolean; status?: string; error?: string } | null>(null);
 
   // Storage cleanup: check first (dry run), then apply.
   const [sweeping, setSweeping] = useState(false);
@@ -495,9 +495,23 @@ export default function IntegrationsPage() {
               <span>Connected{driveStatus.email ? ` — ${driveStatus.email}` : ""}</span>
             </span>
           ) : (
-            <span className="text-slate-500 text-xs font-bold">Not connected</span>
+            <span className={`text-xs font-bold ${driveStatus?.status === "error" ? "text-rose-400" : "text-slate-500"}`}>
+              {driveStatus?.status === "error" ? "Connection expired" : "Not connected"}
+            </span>
           )}
         </div>
+
+        {/* Why it stopped working, and what actually fixes it for good. */}
+        {driveStatus?.error && (
+          <div className="p-3 bg-rose-950/20 border border-rose-900/40 rounded-xl text-[10px] text-rose-200 leading-relaxed space-y-1.5">
+            <p><b>Drive stopped working:</b> {driveStatus.error}</p>
+            <p className="text-rose-300/80">
+              Press <b>Connect Google Drive</b> below to fix it now. If this returns every week, the Google Cloud
+              consent screen is still in <b>Testing</b> — Google expires those refresh tokens after 7 days. Set it to
+              <b> In production</b> under Google Cloud Console → APIs &amp; Services → OAuth consent screen and it stops.
+            </p>
+          </div>
+        )}
 
         {driveStatus && !driveStatus.configured && (
           <div className="p-3 bg-amber-950/20 border border-amber-900/40 rounded-xl text-[10px] text-amber-300 leading-relaxed">
