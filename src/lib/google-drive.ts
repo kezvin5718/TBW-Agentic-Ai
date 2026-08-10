@@ -79,6 +79,17 @@ export async function exchangeCodeAndSave(code: string): Promise<DriveCreds> {
     /* email is best-effort */
   }
 
+  // Google's consent screen lets people approve the sign-in but leave the Drive
+  // permission unticked. That yields a perfectly valid token which 403s on the
+  // first upload with "Insufficient Permission" — hours later, far from the
+  // cause. Check it here, while the person is still in the flow.
+  const granted = String(tokens.scope || "");
+  if (!granted.includes("drive")) {
+    throw new Error(
+      "Connected, but Drive permission wasn't granted. On Google's consent screen there is a tick box for accessing Google Drive — it needs to be ticked. Press Connect again and allow that one."
+    );
+  }
+
   const creds: DriveCreds = {
     refresh_token_encrypted: encrypt(tokens.refresh_token),
     email,
@@ -136,6 +147,9 @@ export function explainDriveError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   if (/quota|storageQuotaExceeded/i.test(msg)) {
     return "Google Drive is out of space — free some up or upgrade the plan.";
+  }
+  if (/insufficient permission|insufficientPermissions|403/i.test(msg)) {
+    return "The Drive connection is missing permission to write files. Disconnect Google Drive under Integrations, connect again, and make sure the Google Drive tick box is ticked on Google's consent screen — approving the sign-in alone is not enough.";
   }
   return msg;
 }
@@ -239,7 +253,14 @@ export async function storeToDriveStrict(
     const { viewUrl } = await uploadImageToDrive(buffer, fileName, mimeType, clientName, monthLabel, rootFolder);
     return { url: viewUrl };
   } catch (err: unknown) {
-    if (isDeadGrant(err)) await markDriveBroken("Google rejected the saved refresh token (invalid_grant).");
+    const msg = err instanceof Error ? err.message : String(err);
+    // Both of these mean the connection itself needs a human, so flag it rather
+    // than letting every later call rediscover the same thing on its own.
+    if (isDeadGrant(err)) {
+      await markDriveBroken("Google rejected the saved refresh token (invalid_grant).");
+    } else if (/insufficient permission|insufficientPermissions/i.test(msg)) {
+      await markDriveBroken("Connected, but without permission to write files — the Drive tick box wasn't granted.");
+    }
     return { url: null, error: explainDriveError(err) };
   }
 }
@@ -249,6 +270,8 @@ export async function getDriveQuota(): Promise<{ usedGb: number; limitGb: number
   const drive = await getDriveService();
   if (!drive) return null;
   try {
+    // Needs broader scope than drive.file, so this legitimately returns nothing
+    // on a least-privilege connection. Absence of a figure is not a problem.
     const res = await drive.about.get({ fields: "storageQuota" });
     const q = res.data.storageQuota;
     const used = Number(q?.usage || 0);
