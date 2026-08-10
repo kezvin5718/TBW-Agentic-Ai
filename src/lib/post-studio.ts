@@ -69,13 +69,23 @@ function fitText(text: string, availPx: number, startPx: number, maxLines: numbe
   return { size, lines: wrapAt(text, perLine).slice(0, maxLines) };
 }
 
-/** The type block: headline, supporting line, CTA pill — bottom anchored. */
-function textLayer(spec: PostSpec, width: number, height: number): Buffer {
+/**
+ * The type block, laid into a band of known height at the foot of the frame.
+ *
+ * `bandTop` is where the product stops and the type begins. Giving the words
+ * their own space is what stopped the headline sitting across the necklace —
+ * a scrim made it legible, but legible-on-top-of-the-jewellery is still the
+ * wrong look for a jewellery brand.
+ */
+function textLayer(spec: PostSpec, width: number, height: number, bandTop: number): Buffer {
   const marginX = Math.round(width * 0.08);
   const avail = width - marginX * 2;
   const portrait = height > width;
+  const bandH = height - bandTop;
 
-  const head = fitText(spec.headline.toUpperCase(), avail, Math.round(width * 0.10), 3, BOLD_ADVANCE);
+  // Start from what the band can hold rather than from the frame width, so a
+  // long headline shrinks instead of spilling out of its own area.
+  const head = fitText(spec.headline.toUpperCase(), avail, Math.round(Math.min(width * 0.10, bandH * 0.26)), 3, BOLD_ADVANCE);
   const subSize = Math.max(18, Math.round(head.size * 0.38));
   const subLines = spec.subtext ? fitText(spec.subtext, avail, subSize, 2, REG_ADVANCE) : { size: subSize, lines: [] };
   const ctaSize = Math.max(16, Math.round(head.size * 0.30));
@@ -89,9 +99,10 @@ function textLayer(spec: PostSpec, width: number, height: number): Buffer {
     (subLines.lines.length ? Math.round(subLines.size * 0.6) + subLines.lines.length * subLead : 0) +
     (ctaH ? Math.round(ctaSize * 0.8) + ctaH : 0);
 
-  // Sit the block above the bottom edge rather than growing down past it.
-  const bottomPad = Math.round(height * (portrait ? 0.09 : 0.08));
-  let y = height - bottomPad - blockH + head.size;
+  // Sit the block above the bottom edge rather than growing down past it, and
+  // never above the band it belongs to.
+  const bottomPad = Math.round(height * (portrait ? 0.07 : 0.06));
+  let y = Math.max(bandTop + head.size, height - bottomPad - blockH + head.size);
 
   const parts: string[] = [];
   for (const line of head.lines) {
@@ -122,17 +133,18 @@ function textLayer(spec: PostSpec, width: number, height: number): Buffer {
     );
   }
 
-  // The scrim covers only as much as the type needs, so the product stays visible.
-  const scrimTop = Math.max(0, height - bottomPad - blockH - Math.round(height * 0.10));
+  // A short gradient softens the join between photograph and band; the band
+  // itself is solid, so type never sits over the product.
+  const fade = Math.round(height * 0.06);
   const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
     <defs>
       <linearGradient id="s" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="${spec.backgroundHex}" stop-opacity="0"/>
-        <stop offset="45%" stop-color="${spec.backgroundHex}" stop-opacity="0.72"/>
-        <stop offset="100%" stop-color="${spec.backgroundHex}" stop-opacity="0.95"/>
+        <stop offset="100%" stop-color="${spec.backgroundHex}" stop-opacity="1"/>
       </linearGradient>
     </defs>
-    <rect x="0" y="${scrimTop}" width="${width}" height="${height - scrimTop}" fill="url(#s)"/>
+    <rect x="0" y="${Math.max(0, bandTop - fade)}" width="${width}" height="${fade}" fill="url(#s)"/>
+    <rect x="0" y="${bandTop}" width="${width}" height="${height - bandTop}" fill="${spec.backgroundHex}"/>
     ${parts.join("\n")}
   </svg>`;
   return Buffer.from(svg);
@@ -148,13 +160,14 @@ async function canvas(spec: PostSpec, width: number, height: number): Promise<Bu
   return sharp({ create: { width, height, channels: 3, background: rgb } }).png().toBuffer();
 }
 
-/** The client's own photograph, filling the frame. Never redrawn. */
-async function productBase(photoUrl: string, width: number, height: number): Promise<Buffer | null> {
+/** The client's own photograph, filling the area above the type band. Never redrawn. */
+async function productBase(photoUrl: string, width: number, areaH: number): Promise<Buffer | null> {
   try {
     const res = await fetch(photoUrl);
     if (!res.ok) return null;
     const buf = Buffer.from(await res.arrayBuffer());
-    return await sharp(buf).resize({ width, height, fit: "cover", position: "attention" }).png().toBuffer();
+    // "attention" keeps the jewellery in frame rather than centre-cropping it away.
+    return await sharp(buf).resize({ width, height: areaH, fit: "cover", position: "attention" }).png().toBuffer();
   } catch {
     return null;
   }
@@ -171,12 +184,23 @@ export interface RenderedPost {
  */
 export async function renderFrame(spec: PostSpec, photoUrl?: string | null): Promise<RenderedPost> {
   const { width, height } = pixelsFor(spec);
+  // The picture takes the upper two-thirds; the words get the rest to
+  // themselves. Stories are taller, so they can spare a little more.
+  const bandTop = Math.round(height * (height > width ? 0.66 : 0.62));
+
   let base: Buffer | null = null;
   let note = "";
 
   if (spec.kind === "product" && photoUrl) {
-    base = await productBase(photoUrl, width, height);
-    if (!base) note = "Could not read the product photo — fell back to a plain brand background.";
+    const photo = await productBase(photoUrl, width, bandTop);
+    if (photo) {
+      base = await sharp(await canvas(spec, width, height))
+        .composite([{ input: photo, top: 0, left: 0 }])
+        .png()
+        .toBuffer();
+    } else {
+      note = "Could not read the product photo — fell back to a plain brand background.";
+    }
   } else if (spec.kind === "generated" && spec.scenePrompt) {
     const prompt = `${spec.scenePrompt}
 
@@ -193,7 +217,7 @@ Absolutely no text, no letters, no numbers, no logos, no watermarks, no people, 
   if (!base) base = await canvas(spec, width, height);
 
   const composed = await sharp(base)
-    .composite([{ input: textLayer(spec, width, height), top: 0, left: 0 }])
+    .composite([{ input: textLayer(spec, width, height, bandTop), top: 0, left: 0 }])
     .jpeg({ quality: 92 })
     .toBuffer();
 

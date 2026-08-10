@@ -48,6 +48,7 @@ export default function FounderCreativesReviewPage() {
   }
 
   const [creatives, setCreatives] = useState<CreativeItem[]>([]);
+  const [imageBroken, setImageBroken] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -216,23 +217,28 @@ export default function FounderCreativesReviewPage() {
                 </div>
               ) : (
                 <div className="w-full h-full flex flex-col items-center justify-center p-4">
-                  {/* Simulated Image preview */}
-                  <img
-                    src={activeCreative.media_url || "/fallback-media.jpg"}
-                    alt="Creative Preview"
-                    onError={(e) => {
-                      // Fallback display if URL is not loading
-                      (e.target as HTMLElement).style.display = "none";
-                    }}
-                    className="max-h-full max-w-full object-contain"
-                  />
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/90 text-center p-4">
-                    <div className="w-12 h-12 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center mb-2">
-                      <Eye className="w-6 h-6 text-slate-400" />
+                  {/* The creative itself. The panel below is a fallback for when
+                      the image genuinely cannot load — it used to sit on top of
+                      every image at 90% opacity, hiding the thing under review. */}
+                  {activeCreative.media_url && !imageBroken && (
+                    <img
+                      src={activeCreative.media_url}
+                      alt="Creative preview"
+                      onError={() => setImageBroken(true)}
+                      className="max-h-full max-w-full object-contain rounded-lg"
+                    />
+                  )}
+                  {(!activeCreative.media_url || imageBroken) && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/90 text-center p-4">
+                      <div className="w-12 h-12 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center mb-2">
+                        <Eye className="w-6 h-6 text-slate-400" />
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-bold block mb-1">
+                        {activeCreative.media_url ? "This image could not be loaded" : "No image on this creative"}
+                      </span>
+                      <span className="text-[8px] text-slate-600 font-mono break-all max-w-xs">{activeCreative.media_url}</span>
                     </div>
-                    <span className="text-[10px] text-slate-400 font-bold block mb-1">Image Preview Slot</span>
-                    <span className="text-[8px] text-slate-600 font-mono break-all max-w-xs">{activeCreative.media_url}</span>
-                  </div>
+                  )}
                 </div>
               )}
             </div>
