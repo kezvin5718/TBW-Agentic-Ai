@@ -1,4 +1,4 @@
-import sharp from "sharp";
+import sharp, { type OverlayOptions } from "sharp";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { completeVision } from "@/lib/llm-vision";
 import { safeJsonParse } from "@/lib/llm";
@@ -173,20 +173,97 @@ async function productBase(photoUrl: string, width: number, areaH: number): Prom
   }
 }
 
+/**
+ * The client's logo, in a soft white chip in the top-left corner.
+ *
+ * A designer never ships a post without the mark on it; the pipeline was
+ * skipping it entirely. The chip is there so the logo stays legible over a
+ * dark photo just as reliably as a light one, and it is small on purpose —
+ * this is a corner credit, not a second headline.
+ */
+async function logoLayer(logoUrl: string | null | undefined, width: number, height: number): Promise<OverlayOptions[]> {
+  if (!logoUrl) return [];
+  try {
+    const res = await fetch(logoUrl);
+    if (!res.ok) return [];
+    const buf = Buffer.from(await res.arrayBuffer());
+    const maxW = Math.round(width * 0.2);
+    const maxH = Math.round(height * 0.07);
+    const resized = await sharp(buf)
+      .resize({ width: maxW, height: maxH, fit: "inside", withoutEnlargement: true })
+      .ensureAlpha()
+      .png()
+      .toBuffer();
+    const meta = await sharp(resized).metadata();
+    const lw = meta.width || maxW;
+    const lh = meta.height || maxH;
+    const pad = Math.round(lw * 0.22);
+    const margin = Math.round(width * 0.05);
+
+    const chip = Buffer.from(
+      `<svg width="${lw + pad * 2}" height="${lh + pad * 2}" xmlns="http://www.w3.org/2000/svg">
+        <rect width="100%" height="100%" rx="${Math.round((lh + pad * 2) * 0.22)}" fill="#ffffff" fill-opacity="0.92"/>
+      </svg>`
+    );
+
+    return [
+      { input: chip, top: margin, left: margin },
+      { input: resized, top: margin + pad, left: margin + pad },
+    ];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Decides what each carousel frame carries.
+ *
+ * The pipeline was repeating the exact same headline and layout on every
+ * frame, differing only by which photo sat behind it — four near-identical
+ * posts swiped past, not a carousel. A real one has a cover that makes the
+ * case, a run of near full-bleed product frames that let the photography do
+ * the work, and a close that repeats the offer with the call to action.
+ * Single-frame posts are untouched.
+ */
+function frameLayout(spec: PostSpec, frame: number, width: number, height: number): { bandTop: number; content: PostSpec } {
+  const standardBand = Math.round(height * (height > width ? 0.66 : 0.62));
+  if (spec.frames <= 1) return { bandTop: standardBand, content: spec };
+
+  const isCover = frame === 0;
+  const isLast = frame === spec.frames - 1;
+
+  if (isCover) {
+    // Makes the case; no CTA competing for attention before anyone has swiped.
+    return { bandTop: standardBand, content: { ...spec, cta: "" } };
+  }
+  if (isLast) {
+    // The close — full headline, subtext and the call to action together.
+    return { bandTop: standardBand, content: spec };
+  }
+  // Middle frames: almost full-bleed product, just a slim brand strip at the foot.
+  return { bandTop: Math.round(height * 0.94), content: { ...spec, headline: "", subtext: "", cta: "" } };
+}
+
 export interface RenderedPost {
   buffer: Buffer;
   note: string;
+  /** The text this frame actually carries — pass to critique(), not the base spec. */
+  content: PostSpec;
 }
 
 /**
  * Renders one frame. `photoUrl` is required for product posts and ignored for
- * generated ones.
+ * generated ones. `frame` selects where this sits in a carousel (0 = cover);
+ * `logoUrl` composites the client's mark into the corner when supplied.
  */
-export async function renderFrame(spec: PostSpec, photoUrl?: string | null): Promise<RenderedPost> {
+export async function renderFrame(
+  spec: PostSpec,
+  photoUrl?: string | null,
+  frame = 0,
+  logoUrl?: string | null
+): Promise<RenderedPost> {
   const { width, height } = pixelsFor(spec);
-  // The picture takes the upper two-thirds; the words get the rest to
-  // themselves. Stories are taller, so they can spare a little more.
-  const bandTop = Math.round(height * (height > width ? 0.66 : 0.62));
+  const { bandTop, content } = frameLayout(spec, frame, width, height);
 
   let base: Buffer | null = null;
   let note = "";
@@ -216,12 +293,14 @@ Absolutely no text, no letters, no numbers, no logos, no watermarks, no people, 
 
   if (!base) base = await canvas(spec, width, height);
 
+  const logo = await logoLayer(logoUrl, width, height);
+
   const composed = await sharp(base)
-    .composite([{ input: textLayer(spec, width, height, bandTop), top: 0, left: 0 }])
+    .composite([...logo, { input: textLayer(content, width, height, bandTop), top: 0, left: 0 }])
     .jpeg({ quality: 92 })
     .toBuffer();
 
-  return { buffer: composed, note };
+  return { buffer: composed, note, content };
 }
 
 export interface Verdict {
@@ -316,8 +395,8 @@ export async function generatePlanPosts(
 
     for (let frame = 0; frame < spec.frames; frame++) {
       try {
-        const { buffer, note } = await renderFrame(spec, photos[frame] || photos[0] || null);
-        const verdict = await critique(buffer, spec);
+        const { buffer, note, content } = await renderFrame(spec, photos[frame] || photos[0] || null, frame, client?.logo_url);
+        const verdict = await critique(buffer, content);
 
         // Generated creatives go to Drive or nowhere. Supabase has no room for
         // them, and a quiet fallback would hide a Drive problem behind a
