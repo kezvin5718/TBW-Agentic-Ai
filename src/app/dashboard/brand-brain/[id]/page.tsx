@@ -20,7 +20,9 @@ import {
   ShieldAlert,
   X,
   AlertTriangle,
-  CheckCircle
+  CheckCircle,
+  Pencil,
+  Check
 } from "lucide-react";
 
 interface ClientProfile {
@@ -57,7 +59,7 @@ interface BrandBrainProfile {
   colors: string[];
   fonts: string[];
   caption_tone?: string;
-  design_preferences: Record<string, string>;
+  design_preferences: unknown[] | Record<string, string>;
   addresses: Record<string, unknown>[];
   past_creatives: CreativeAsset[];
   feedback_log: FeedbackComment[];
@@ -83,6 +85,41 @@ export default function ClientBrandBrainPage({
   // Active Tab
   const [activeTab, setActiveTab] = useState<"brief" | "styling" | "creatives" | "feedback">("brief");
 
+  // Renaming the client — its own small control, separate from the full
+  // guidelines form, since a name typo shouldn't require opening that.
+  const [renaming, setRenaming] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+  const [renameSaving, setRenameSaving] = useState(false);
+  const [renameError, setRenameError] = useState("");
+
+  const startRename = () => {
+    setNameInput(client?.name || "");
+    setRenameError("");
+    setRenaming(true);
+  };
+
+  const saveRename = async () => {
+    const name = nameInput.trim();
+    if (!name || !client) return;
+    setRenameSaving(true);
+    setRenameError("");
+    try {
+      const res = await fetch(`/api/clients/${client.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "rename", name }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not rename.");
+      setClient({ ...client, name });
+      setRenaming(false);
+    } catch (err: unknown) {
+      setRenameError(err instanceof Error ? err.message : "Could not rename.");
+    } finally {
+      setRenameSaving(false);
+    }
+  };
+
   // Brief Generation State
   const [generatingBrief, setGeneratingBrief] = useState(false);
 
@@ -99,9 +136,13 @@ export default function ClientBrandBrainPage({
   // artwork without it being the wrong brand.
   const [sisterBrands, setSisterBrands] = useState("");
   
-  // Design Preferences JSON key-values
-  const [prefKeys, setPrefKeys] = useState<string[]>([]);
-  const [prefVals, setPrefVals] = useState<string[]>([]);
+  // design_preferences is a JSONB array mixing free-text notes with structured
+  // correction objects (imported from client chat-memory files) — e.g.
+  // {avoid: [...], grid_order_6: ..., youtube_title: ...}. Only the plain-text
+  // notes are edited here; the structured rules are shown but pass through
+  // save untouched, so an edit here can never silently corrupt them.
+  const [prefNotes, setPrefNotes] = useState<string[]>([]);
+  const [prefRules, setPrefRules] = useState<Record<string, unknown>[]>([]);
 
   // Add Feedback States
   const [feedbackComment, setFeedbackComment] = useState("");
@@ -167,10 +208,24 @@ export default function ClientBrandBrainPage({
         setContactNumber("");
       }
 
-      // Preferences map
-      const prefs = data.brandBrain?.design_preferences || {};
-      setPrefKeys(Object.keys(prefs));
-      setPrefVals(Object.values(prefs));
+      // Preferences: array of strings + structured rule objects (see state
+      // comment above). Old data saved before the chat-memory import was a
+      // plain {key: value} object — Object.values() on that still yields
+      // plain strings, so this reads both shapes correctly.
+      const rawPrefs = data.brandBrain?.design_preferences;
+      const prefsArr: unknown[] = Array.isArray(rawPrefs)
+        ? rawPrefs
+        : rawPrefs && typeof rawPrefs === "object"
+          ? Object.values(rawPrefs)
+          : [];
+      const notes: string[] = [];
+      const rules: Record<string, unknown>[] = [];
+      for (const p of prefsArr) {
+        if (typeof p === "string") notes.push(p);
+        else if (p && typeof p === "object") rules.push(p as Record<string, unknown>);
+      }
+      setPrefNotes(notes);
+      setPrefRules(rules);
 
       // Fetch all onboarding clients for global import classification reviews
       const clientsRes = await fetch("/api/onboarding");
@@ -203,27 +258,20 @@ export default function ClientBrandBrainPage({
     setColors(colors.filter((_, i) => i !== idx));
   };
 
-  // Preference list builders
+  // Preference list builders — plain-text notes only. The structured rule
+  // objects in prefRules are shown read-only and re-attached untouched on save.
   const handleAddPreference = () => {
-    setPrefKeys([...prefKeys, ""]);
-    setPrefVals([...prefVals, ""]);
+    setPrefNotes([...prefNotes, ""]);
   };
 
   const handleRemovePreference = (index: number) => {
-    setPrefKeys(prefKeys.filter((_, i) => i !== index));
-    setPrefVals(prefVals.filter((_, i) => i !== index));
+    setPrefNotes(prefNotes.filter((_, i) => i !== index));
   };
 
-  const handlePrefKeyChange = (index: number, val: string) => {
-    const updated = [...prefKeys];
+  const handlePrefChange = (index: number, val: string) => {
+    const updated = [...prefNotes];
     updated[index] = val;
-    setPrefKeys(updated);
-  };
-
-  const handlePrefValChange = (index: number, val: string) => {
-    const updated = [...prefVals];
-    updated[index] = val;
-    setPrefVals(updated);
+    setPrefNotes(updated);
   };
 
   // Save Guidelines PUT Action
@@ -231,12 +279,12 @@ export default function ClientBrandBrainPage({
     e.preventDefault();
     setLoading(true);
 
-    const designPreferences: Record<string, string> = {};
-    prefKeys.forEach((k, i) => {
-      if (k.trim()) {
-        designPreferences[k.trim()] = prefVals[i].trim();
-      }
-    });
+    // Rebuild the same array shape it was read as — edited notes plus the
+    // untouched imported rules, never the other way round.
+    const designPreferences: unknown[] = [
+      ...prefNotes.map((n) => n.trim()).filter(Boolean),
+      ...prefRules,
+    ];
 
     try {
       const response = await fetch(`/api/brand-brain/${clientId}`, {
@@ -564,7 +612,46 @@ export default function ClientBrandBrainPage({
             {client.name.substring(0, 2)}
           </div>
           <div>
-            <h2 className="text-xl font-bold text-white leading-tight">{client.name}</h2>
+            {renaming ? (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <input
+                    autoFocus
+                    value={nameInput}
+                    onChange={(e) => setNameInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") saveRename(); if (e.key === "Escape") setRenaming(false); }}
+                    className="bg-slate-900/60 border border-indigo-700/60 rounded-lg px-3 py-1.5 text-lg font-bold text-white focus:outline-none"
+                  />
+                  <button
+                    onClick={saveRename}
+                    disabled={renameSaving || !nameInput.trim()}
+                    className="p-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-50 cursor-pointer"
+                    title="Save"
+                  >
+                    {renameSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                  </button>
+                  <button
+                    onClick={() => setRenaming(false)}
+                    className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white cursor-pointer"
+                    title="Cancel"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                {renameError && <p className="text-[11px] text-red-400">{renameError}</p>}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 group/name">
+                <h2 className="text-xl font-bold text-white leading-tight">{client.name}</h2>
+                <button
+                  onClick={startRename}
+                  title="Rename this client"
+                  className="p-1 rounded-lg text-slate-600 hover:text-indigo-400 opacity-0 group-hover/name:opacity-100 transition-opacity cursor-pointer"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
             <p className="text-xs text-slate-400 mt-1">
               Ad Budget: <span className="text-slate-300 font-semibold">INR {client.ad_budget?.toLocaleString("en-IN")}</span> / month
             </p>
@@ -753,21 +840,31 @@ export default function ClientBrandBrainPage({
                   </p>
                 </div>
 
-                {/* Design Preferences Key-Values */}
+                {/* Design Preferences */}
                 <div className="space-y-2.5 border-t border-slate-900 pt-5">
                   <span className="text-[10px] font-bold text-slate-500 uppercase block">Visual Design Preferences</span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                    {prefKeys.length > 0 ? (
-                      prefKeys.map((key, idx) => (
-                        <div key={idx} className="bg-slate-900/20 border border-slate-900 rounded-xl p-3.5 text-xs">
-                          <span className="block font-bold text-indigo-400 uppercase text-[9px] mb-1 tracking-wider">{key}</span>
-                          <span className="text-slate-300 leading-tight block">{prefVals[idx]}</span>
+                  {prefNotes.length === 0 && prefRules.length === 0 ? (
+                    <span className="text-xs text-slate-600">No preferences configured</span>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                      {prefNotes.map((note, idx) => (
+                        <div key={`note-${idx}`} className="bg-slate-900/20 border border-slate-900 rounded-xl p-3.5 text-xs">
+                          <span className="text-slate-300 leading-tight block">{note}</span>
                         </div>
-                      ))
-                    ) : (
-                      <span className="text-xs text-slate-600">No preferences configured</span>
-                    )}
-                  </div>
+                      ))}
+                      {prefRules.map((rule, idx) => (
+                        <div key={`rule-${idx}`} className="bg-slate-900/20 border border-slate-900 rounded-xl p-3.5 text-xs space-y-1">
+                          <span className="block font-bold text-indigo-400 uppercase text-[9px] mb-1 tracking-wider">Imported rule</span>
+                          {Object.entries(rule).map(([k, v]) => (
+                            <p key={k} className="text-slate-300 leading-tight">
+                              <span className="text-slate-500">{k}: </span>
+                              {Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v)}
+                            </p>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -919,20 +1016,13 @@ export default function ClientBrandBrainPage({
                   </div>
 
                   <div className="space-y-2.5 max-h-[200px] overflow-y-auto pr-1">
-                    {prefKeys.map((key, idx) => (
+                    {prefNotes.map((note, idx) => (
                       <div key={idx} className="flex items-center space-x-3">
                         <input
                           type="text"
-                          placeholder="Key (e.g. imagery)"
-                          value={key}
-                          onChange={(e) => handlePrefKeyChange(idx, e.target.value)}
-                          className="w-[120px] bg-slate-900/40 border border-slate-800 rounded-xl py-2 px-3 text-xs text-white placeholder-slate-600 focus:outline-none"
-                        />
-                        <input
-                          type="text"
-                          placeholder="Value (e.g. warm close-ups)"
-                          value={prefVals[idx]}
-                          onChange={(e) => handlePrefValChange(idx, e.target.value)}
+                          placeholder="e.g. warm close-ups, gold foil accents"
+                          value={note}
+                          onChange={(e) => handlePrefChange(idx, e.target.value)}
                           className="flex-1 bg-slate-900/40 border border-slate-800 rounded-xl py-2 px-3 text-xs text-white placeholder-slate-600 focus:outline-none"
                         />
                         <button
@@ -945,6 +1035,24 @@ export default function ClientBrandBrainPage({
                       </div>
                     ))}
                   </div>
+
+                  {prefRules.length > 0 && (
+                    <div className="space-y-2 pt-1">
+                      <p className="text-[10px] text-slate-600">
+                        {prefRules.length} imported rule{prefRules.length === 1 ? "" : "s"} (from a chat-memory import) — shown here read-only, kept as-is when you save.
+                      </p>
+                      {prefRules.map((rule, idx) => (
+                        <div key={idx} className="bg-slate-900/20 border border-slate-900 rounded-xl p-3 text-[11px] text-slate-400 space-y-0.5">
+                          {Object.entries(rule).map(([k, v]) => (
+                            <p key={k}>
+                              <span className="text-slate-600">{k}: </span>
+                              {Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v)}
+                            </p>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </form>
             )}

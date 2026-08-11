@@ -92,7 +92,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   }
 }
 
-/** PATCH { action: "archive" | "restore" } — the reversible pair. */
+/** PATCH { action: "archive" | "restore" | "rename" } */
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const guard = await requireRole(["founder", "employee"]);
@@ -100,13 +100,21 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   const body = await request.json().catch(() => ({}));
   const action = body.action;
-  if (!["archive", "restore"].includes(action)) {
-    return NextResponse.json({ error: "action must be 'archive' or 'restore'" }, { status: 400 });
+  if (!["archive", "restore", "rename"].includes(action)) {
+    return NextResponse.json({ error: "action must be 'archive', 'restore', or 'rename'" }, { status: 400 });
   }
 
   const admin = createServiceRoleClient();
   const { data: client } = await admin.from("clients").select("id, name").eq("id", id).maybeSingle();
   if (!client) return NextResponse.json({ error: "Client not found" }, { status: 404 });
+
+  if (action === "rename") {
+    const name = String(body.name || "").trim();
+    if (!name) return NextResponse.json({ error: "Give the client a name." }, { status: 400 });
+    const { error } = await admin.from("clients").update({ name }).eq("id", id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, message: `Renamed to ${name}.`, name });
+  }
 
   const { error } = await admin
     .from("clients")
