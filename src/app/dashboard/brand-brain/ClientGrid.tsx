@@ -102,6 +102,34 @@ export default function ClientGrid({
     }
   };
 
+  /**
+   * A client with data attached can only be permanently deleted once archived
+   * — that guardrail stays. But making the founder archive it, then find it
+   * again in a separate collapsed section, is how "delete this" turns into a
+   * five-minute hunt. One click here does both: archive, then go straight to
+   * the same impact-preview + type-to-confirm dialog.
+   */
+  const startDelete = async (client: ClientRow) => {
+    if (isEmpty(client.id)) return deleteEmpty(client);
+    setBusy(client.id);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/clients/${client.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "archive" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed");
+      router.refresh();
+      await openDelete({ ...client, archived_at: new Date().toISOString() });
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Failed" });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const confirmDelete = async () => {
     if (!victim) return;
     setBusy(victim.id);
@@ -249,6 +277,17 @@ export default function ClientGrid({
                   className="inline-flex items-center gap-1.5 text-[10px] text-slate-600 hover:text-red-300 transition-colors cursor-pointer disabled:opacity-50"
                 >
                   <Trash2 className="w-3 h-3" />
+                  <span>Delete</span>
+                </button>
+              )}
+              {isFounder && !isEmpty(client.id) && (
+                <button
+                  onClick={() => startDelete(client)}
+                  disabled={busy === client.id}
+                  title="Archives this client, then opens the permanent-delete confirmation — review what's attached before it's gone."
+                  className="inline-flex items-center gap-1.5 text-[10px] text-slate-600 hover:text-red-300 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {busy === client.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
                   <span>Delete</span>
                 </button>
               )}
