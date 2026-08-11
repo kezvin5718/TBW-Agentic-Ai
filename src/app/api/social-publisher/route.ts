@@ -99,11 +99,16 @@ export async function POST(request: NextRequest) {
     }
     if (isVideo) params.video_url = retryUrl;
     else params.image_url = [retryUrl];
-    if (post.platform === "facebook" && post.content_type !== "post") params.fb_post_type = post.content_type;
+    if (post.platform === "facebook") {
+      if (post.content_type !== "post") params.fb_post_type = post.content_type;
+      if (isVideo && post.thumbnail_url) params.fb_thumb = post.thumbnail_url;
+    }
     if (post.platform === "instagram") {
       if (post.content_type !== "post") params.in_post_type = post.content_type;
       if (post.content_type === "reel") params.in_reel_share_in_feed = "yes";
+      if (isVideo && post.thumbnail_url) params.in_thumb = post.thumbnail_url;
     }
+    if (post.platform === "linkedin" && isVideo && post.thumbnail_url) params.ln_thumb = post.thumbnail_url;
     if (post.platform === "youtube") {
       if (post.title) params.yt_title = post.title;
       // RecurPost calls this yt_thumb. We sent yt_thumbnail for months and it
@@ -227,11 +232,18 @@ export async function POST(request: NextRequest) {
         if (scheduledFor) params.schedule_date_time = utcToIstWallClock(istWallClockToUtc(scheduledFor));
         if (mediaIsVideo) params.video_url = publishUrl;
         else params.image_url = [publishUrl];
-        if (platform === "facebook" && contentType !== "post") params.fb_post_type = contentType;
+        // fb_thumb / in_thumb / ln_thumb only apply to video posts — RecurPost
+        // ignores them on an image post since there's nothing to override.
+        if (platform === "facebook") {
+          if (contentType !== "post") params.fb_post_type = contentType;
+          if (mediaIsVideo && thumbnailUrl) params.fb_thumb = thumbnailUrl;
+        }
         if (platform === "instagram") {
           if (contentType !== "post") params.in_post_type = contentType;
           if (contentType === "reel") params.in_reel_share_in_feed = "yes";
+          if (mediaIsVideo && thumbnailUrl) params.in_thumb = thumbnailUrl;
         }
+        if (platform === "linkedin" && mediaIsVideo && thumbnailUrl) params.ln_thumb = thumbnailUrl;
         if (platform === "youtube") {
           if (title) params.yt_title = title;
           // yt_thumb, not yt_thumbnail — the wrong name was accepted with a 200

@@ -356,7 +356,10 @@ export default function SocialPublisherPage() {
     try {
       const res = await fetch("/api/social-publisher/generate-caption", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, platform: platforms[0], contentType: contentTypes[0], brief: captionBrief, model: aiModel }),
+        body: JSON.stringify({
+          clientId, platform: platforms[0], contentType: contentTypes[0], brief: captionBrief, model: aiModel,
+          mediaUrl: mediaUrl || undefined, mediaIsVideo, thumbnailUrl: thumbUrl || undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Generation failed");
@@ -1090,7 +1093,7 @@ export default function SocialPublisherPage() {
             {mediaUrl && !mediaIsVideo && <img src={mediaUrl} alt="preview" className="mt-2 h-24 rounded-lg object-cover border border-slate-800" />}
           </div>
           <div>
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Thumbnail (YouTube only)</label>
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Thumbnail (video posts only)</label>
             <div onClick={() => thumbRef.current?.click()} className="border border-dashed border-slate-800 hover:border-indigo-500 rounded-xl p-4 text-center cursor-pointer transition-colors">
               {uploading === "thumb" ? <Loader2 className="w-5 h-5 animate-spin mx-auto text-[var(--yellow)]" /> :
                 thumbUrl ? (
@@ -1101,12 +1104,11 @@ export default function SocialPublisherPage() {
             </div>
             <input ref={thumbRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload("thumb", f); e.target.value = ""; }} />
             {thumbUrl && <img src={thumbUrl} alt="thumb" className="mt-2 h-24 rounded-lg object-cover border border-slate-800" />}
-            {/* Saying this plainly beats letting people keep uploading covers
-                that Instagram and Facebook were never going to receive. */}
-            {thumbUrl && !platforms.includes("youtube") && (
+            {/* RecurPost only applies a thumbnail to video posts — an image
+                post has nothing for it to override. */}
+            {thumbUrl && !mediaIsVideo && (
               <p className="mt-2 text-[10px] text-amber-400 leading-relaxed">
-                RecurPost only accepts a thumbnail for YouTube — Instagram and Facebook have no cover parameter in their API.
-                For a reel cover on Meta, set it in RecurPost&apos;s own composer, or make the video&apos;s first frame the cover.
+                This media is an image, not a video — RecurPost only applies a thumbnail to video posts (Reels/YouTube), so this won&apos;t be used.
               </p>
             )}
           </div>
