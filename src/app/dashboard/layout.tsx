@@ -34,7 +34,8 @@ import {
   Send,
   ListTodo,
   Wand2,
-  Phone
+  Phone,
+  IndianRupee
 } from "lucide-react";
 
 export default async function DashboardLayout({
@@ -91,6 +92,7 @@ export default async function DashboardLayout({
     { name: "Agents Console", href: "/dashboard/connections", icon: Share2, roles: ["founder", "employee"], section: "Assistant & System" },
     { name: "Integrations", href: "/dashboard/settings/integrations", icon: Settings, roles: ["founder"], section: "Assistant & System" },
 
+    { name: "Accounting", href: "/dashboard/founder-zone/accounting", icon: IndianRupee, roles: ["founder"], section: "Founder Zone" },
   ];
 
   const filteredNavItems = allNavItems.filter((item) => {
