@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Avatar from "../Avatar";
 import { fmtIST, fmtISTDate, istToday, istWallClockToUtc, IST_TZ } from "@/lib/time";
-import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2, Pencil, X, FolderOpen, Film, Plus, Layers, Wand2 } from "lucide-react";
+import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2, Pencil, X, FolderOpen, Film, Plus, Layers, Wand2, Copy } from "lucide-react";
 import PlatformIcon, { postLabel, PLATFORM_LABEL } from "./PlatformIcon";
 import { uploadDirect } from "@/lib/direct-upload";
 
@@ -402,6 +402,73 @@ export default function SocialPublisherPage() {
     setStorySlots((rows) =>
       rows.map((r) => ({ ...r, mediaUrl: src.mediaUrl, mediaName: src.mediaName, mediaIsVideo: src.mediaIsVideo, uploadId: undefined }))
     );
+
+  /** Clone a slot in place, so re-posting the same story later doesn't mean
+   *  hunting for the creative again. The copy is pushed one gap later on the
+   *  clock: an exact same-creative-same-minute twin is treated as a duplicate
+   *  on send and silently skipped, which looks like the button did nothing. */
+  const duplicateSlot = (key: string) =>
+    setStorySlots((rows) => {
+      if (rows.length >= STORY_MAX) return rows;
+      const i = rows.findIndex((r) => r.key === key);
+      if (i < 0) return rows;
+      const src = rows[i];
+      let { date, time } = src;
+      if (src.date && src.time) {
+        const [hh, mm] = src.time.split(":").map(Number);
+        const at = new Date(`${src.date}T00:00:00`);
+        at.setHours(hh || 0, (mm || 0) + Math.max(1, spreadGap), 0, 0);
+        date = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
+        time = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+      }
+      const copy: StorySlot = { ...src, key: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, date, time };
+      return [...rows.slice(0, i + 1), copy, ...rows.slice(i + 1)];
+    });
+
+  // Uploading the day's stories one dropdown at a time was the slow part —
+  // designers hand over a folder, so take the whole folder at once.
+  const [storyBatch, setStoryBatch] = useState<{ done: number; total: number } | null>(null);
+  const storyBatchRef = useRef<HTMLInputElement>(null);
+
+  /** Upload many files at once, filling empty slots first, then appending. */
+  const uploadStoryBatch = async (files: File[]) => {
+    const list = files.slice(0, STORY_MAX);
+    if (list.length === 0) return;
+    setNotice(null);
+    setStoryBatch({ done: 0, total: list.length });
+    const done: Array<{ url: string; name: string; isVideo: boolean }> = [];
+    const failed: string[] = [];
+    for (let i = 0; i < list.length; i++) {
+      try {
+        const data = await uploadDirect(list[i], "social", setUploadPct);
+        done.push({ url: data.url, name: data.fileName, isVideo: data.mediaType === "video" });
+      } catch {
+        failed.push(list[i].name);
+      }
+      setStoryBatch({ done: i + 1, total: list.length });
+    }
+    setStoryBatch(null);
+    setUploadPct(0);
+
+    if (done.length > 0) {
+      setStorySlots((rows) => {
+        const next = [...rows];
+        for (const u of done) {
+          const empty = next.findIndex((r) => !r.mediaUrl);
+          const filled = { mediaUrl: u.url, mediaName: u.name, mediaIsVideo: u.isVideo, uploadId: undefined };
+          if (empty >= 0) next[empty] = { ...next[empty], ...filled };
+          else if (next.length < STORY_MAX) next.push({ ...newSlot(), ...filled });
+        }
+        return next;
+      });
+    }
+    setNotice({
+      ok: failed.length === 0,
+      text: failed.length === 0
+        ? `${done.length} file(s) uploaded into story slots. Set the times, or use "Fill all times automatically".`
+        : `${done.length} uploaded, ${failed.length} failed: ${failed.join(", ")}`,
+    });
+  };
 
   // Content Hub items this client has waiting, as the per-slot dropdown options.
   const storyHubOptions = hubUploads.filter(
@@ -1750,10 +1817,53 @@ export default function SocialPublisherPage() {
                     <option value={storyOne.url}>{storyOne.name || "uploaded file"}</option>
                   )}
                   {storyHubOptions.map((u) => <option key={u.id} value={u.file_url}>{u.file_name || "file"}</option>)}
-                  <option value="__upload__">⬆ Upload a file…</option>
                 </select>
+                <button onClick={() => { setStoryUploadTarget("one"); storyFileRef.current?.click(); }} disabled={uploading === "media"}
+                  className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer disabled:opacity-50 shrink-0">
+                  <UploadCloud className="w-3.5 h-3.5" /><span>Upload</span>
+                </button>
               </div>
+              {storyOne.url && <p className="text-[10px] text-emerald-400 font-bold truncate">Using: {storyOne.name || "uploaded file"}</p>}
               {!storyClientId && <p className="text-[10px] text-slate-600">Select a client to see their Content Hub creatives.</p>}
+            </div>
+          )}
+
+          {/* Upload straight in. Content Hub only covers what designers have
+              already delivered — anything shot or exported today isn't there. */}
+          {storyMode === "many" && (
+            <div className="border border-dashed border-slate-800 hover:border-indigo-500 rounded-xl p-4 bg-slate-950/60 transition-colors space-y-2">
+              <div
+                onClick={() => !storyBatch && storyBatchRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const files = Array.from(e.dataTransfer.files || []);
+                  if (files.length > 0 && !storyBatch) uploadStoryBatch(files);
+                }}
+                className="text-center cursor-pointer"
+              >
+                {storyBatch ? (
+                  <div className="space-y-2">
+                    <Loader2 className="w-5 h-5 animate-spin mx-auto text-[var(--yellow)]" />
+                    <p className="text-[11px] font-bold text-white">Uploading {storyBatch.done} of {storyBatch.total}…</p>
+                    <div className="h-1 bg-slate-900 rounded-full overflow-hidden max-w-[220px] mx-auto">
+                      <div className="h-full bg-[var(--yellow)] transition-all duration-200" style={{ width: `${uploadPct}%` }} />
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <UploadCloud className="w-6 h-6 mx-auto mb-1.5 text-[var(--yellow)]" />
+                    <p className="text-xs font-bold text-white">Upload story files — drop them here, or click to browse</p>
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Pick many at once: each file fills the next empty slot, and new slots are added as needed (up to {STORY_MAX}).
+                    </p>
+                  </>
+                )}
+              </div>
+              <input
+                ref={storyBatchRef} type="file" multiple accept="image/*,video/mp4,video/quicktime" className="hidden"
+                onChange={(e) => { const f = Array.from(e.target.files || []); if (f.length) uploadStoryBatch(f); e.target.value = ""; }}
+              />
             </div>
           )}
 
@@ -1823,18 +1933,21 @@ export default function SocialPublisherPage() {
                       value={r.mediaUrl}
                       onChange={(e) => {
                         const v = e.target.value;
-                        if (v === "__upload__") { setStoryUploadTarget(r.key); storyFileRef.current?.click(); return; }
                         const u = storyHubOptions.find((o) => o.file_url === v);
                         patchSlot(r.key, { mediaUrl: v, mediaName: u?.file_name || "", mediaIsVideo: u?.media_type === "video", uploadId: u?.id });
                       }}
-                      className="flex-1 min-w-[180px] bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 cursor-pointer">
-                      <option value="">— pick a creative —</option>
+                      className="flex-1 min-w-[160px] bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 cursor-pointer">
+                      <option value="">— pick from Content Hub —</option>
                       {r.mediaUrl && !storyHubOptions.some((o) => o.file_url === r.mediaUrl) && (
                         <option value={r.mediaUrl}>{r.mediaName || "uploaded file"}</option>
                       )}
                       {storyHubOptions.map((u) => <option key={u.id} value={u.file_url}>{u.file_name || "file"}</option>)}
-                      <option value="__upload__">⬆ Upload a file…</option>
                     </select>
+                    <button onClick={() => { setStoryUploadTarget(r.key); storyFileRef.current?.click(); }}
+                      disabled={uploading === "media" || !!storyBatch} title="Upload a file into this slot"
+                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-slate-400 hover:text-white cursor-pointer disabled:opacity-40">
+                      <UploadCloud className="w-3.5 h-3.5" />
+                    </button>
                   </>
                 )}
 
@@ -1843,6 +1956,11 @@ export default function SocialPublisherPage() {
                 <input type="time" value={r.time} onClick={openPicker} onChange={(e) => patchSlot(r.key, { time: e.target.value })}
                   className="w-[110px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-xs text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
 
+                <button onClick={() => duplicateSlot(r.key)} disabled={storySlots.length >= STORY_MAX}
+                  title={`Duplicate this slot — same creative, ${spreadGap} min later`}
+                  className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-slate-400 hover:text-white cursor-pointer disabled:opacity-30">
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
                 {storyMode === "many" && r.mediaUrl && (
                   <button onClick={() => fillAllFrom(r)} title="Use this creative in every slot"
                     className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">
