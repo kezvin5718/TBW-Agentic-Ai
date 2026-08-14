@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Avatar from "../Avatar";
 import { fmtIST, fmtISTDate, istToday, istWallClockToUtc, IST_TZ } from "@/lib/time";
-import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2, Pencil } from "lucide-react";
+import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2, Pencil, X, FolderOpen, Film, Plus, Layers, Wand2 } from "lucide-react";
 import PlatformIcon, { postLabel, PLATFORM_LABEL } from "./PlatformIcon";
 import { uploadDirect } from "@/lib/direct-upload";
 
@@ -55,6 +55,9 @@ export default function SocialPublisherPage() {
   // Content Hub tray
   const [hubUploads, setHubUploads] = useState<HubUpload[]>([]);
   const [hubFilter, setHubFilter] = useState<string>("all");
+  // The tray is the widest column. Once a creative is picked it has done its job
+  // and is just squeezing the composer and preview, so it folds away.
+  const [hubCollapsed, setHubCollapsed] = useState(false);
   const [selectedUpload, setSelectedUpload] = useState<{ id: string; name: string } | null>(null);
   // Thumbnail chosen from the Content Hub's Thumbnail section (its own upload row).
   const [selectedThumb, setSelectedThumb] = useState<{ id: string; name: string } | null>(null);
@@ -158,6 +161,26 @@ export default function SocialPublisherPage() {
   const [selFrame, setSelFrame] = useState<number | null>(null);
   const [videoDims, setVideoDims] = useState<{ w: number; h: number } | null>(null);
 
+  // --- Manual scrubbing -------------------------------------------------------
+  // The evenly-spaced strip lands wherever it lands, and on a moving shot every
+  // one of those moments is motion-blurred. This lets the team hunt for a sharp
+  // frame themselves, shown big enough that softness is actually visible.
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [scrubT, setScrubT] = useState(0);
+  const [scrubPreview, setScrubPreview] = useState("");
+  const [scrubBusy, setScrubBusy] = useState(false);
+  // Drive-hosted and HEVC files won't decode in the browser — that is the whole
+  // reason frames went server-side. Those fall back to ffmpeg-rendered stills.
+  const [videoPlayable, setVideoPlayable] = useState(true);
+  const scrubRef = useRef<HTMLVideoElement>(null);
+
+  const seekTo = (t: number) => {
+    const clamped = Math.max(0, Math.min(videoDuration || 0, t));
+    setScrubT(clamped);
+    const v = scrubRef.current;
+    if (v && videoPlayable) { try { v.currentTime = clamped; } catch { /* not seekable yet */ } }
+  };
+
   // Frames are extracted SERVER-side with ffmpeg — the browser can't read many
   // videos (Drive-hosted, HEVC/.mov, or hosts without CORS headers).
   const extractFrames = useCallback(async (src: string) => {
@@ -173,6 +196,9 @@ export default function SocialPublisherPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Frame extraction failed");
       if (data.width && data.height) setVideoDims({ w: data.width, h: data.height });
+      // ffprobe's duration is the one to trust — the <video> element reports
+      // Infinity for some fragmented MP4s until it has buffered the whole file.
+      if (data.duration) setVideoDuration(Number(data.duration) || 0);
       setFrames((data.frames || []).map((f: { t: number; preview: string }) => ({ t: f.t, url: f.preview })));
     } catch (err: unknown) {
       setNotice({ ok: false, text: `${err instanceof Error ? err.message : "Frame extraction failed"} — you can still upload a thumbnail file manually.` });
@@ -182,9 +208,46 @@ export default function SocialPublisherPage() {
   }, []);
 
   useEffect(() => {
+    // A new video means the old scrub position, duration and playability verdict
+    // are all meaningless — reset before probing.
+    setScrubT(0);
+    setScrubPreview("");
+    setVideoDuration(0);
+    setVideoPlayable(true);
     if (mediaIsVideo && mediaUrl) extractFrames(mediaUrl);
     else { setFrames([]); setSelFrame(null); setVideoDims(null); }
   }, [mediaIsVideo, mediaUrl, extractFrames]);
+
+  // Fallback scrubbing: when the browser can't decode the video, ask ffmpeg for
+  // the frame at this instant. Debounced, so dragging the slider costs one
+  // request per pause rather than one per pixel.
+  useEffect(() => {
+    if (videoPlayable || !mediaIsVideo || !mediaUrl) return;
+    let cancelled = false;
+    const id = setTimeout(async () => {
+      setScrubBusy(true);
+      try {
+        const res = await fetch("/api/social-publisher/frames", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mediaUrl, t: scrubT, preview: true }),
+        });
+        const data = await res.json();
+        if (!cancelled && res.ok && data.dataUrl) setScrubPreview(data.dataUrl);
+      } catch { /* keep showing the last good frame */ }
+      finally { if (!cancelled) setScrubBusy(false); }
+    }, 350);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [scrubT, videoPlayable, mediaIsVideo, mediaUrl]);
+
+  // YouTube is auto-selected from the client's platform mapping, so silently
+  // keeping it ticked on an image post causes a predictable failure. Drop it
+  // automatically when an image loads; the team can re-tick if they mean video.
+  useEffect(() => {
+    if (mediaUrl && !mediaIsVideo) {
+      setPlatforms((prev) => prev.filter((p) => p !== "youtube"));
+    }
+  }, [mediaIsVideo, mediaUrl]);
 
   // Click a frame → fetch it full-resolution from the server → set as thumbnail.
   const chooseFrame = async (t: number) => {
@@ -269,8 +332,156 @@ export default function SocialPublisherPage() {
       setSelectedThumb(null);
     }
 
+    // Fold the tray away so the composer and preview get the full width — this
+    // is what makes the frame big enough to judge.
+    setHubCollapsed(true);
     setNotice({ ok: true, text: `Loaded "${u.file_name}" for ${u.clients?.name || "client"} — type auto-set to ${u.content_type}${thumbNote}.` });
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  // --- Multi-Story batch ------------------------------------------------------
+  // Stories are ephemeral, so clients get many a day. Sending them one at a time
+  // through the composer meant re-picking client and platforms for every slot.
+  // Meta-only by construction: no other platform has a Story.
+  const STORY_MAX = 30;
+  interface StorySlot {
+    key: string;
+    mediaUrl: string; mediaName: string; mediaIsVideo: boolean;
+    uploadId?: string;
+    date: string; time: string;
+  }
+  const newSlot = (): StorySlot => ({
+    key: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    mediaUrl: "", mediaName: "", mediaIsVideo: false, date: istToday(), time: "",
+  });
+
+  // "many" = a different creative per slot. "one" = a single creative repeated
+  // across every slot. Both collapse to the same list of {media, time} on send.
+  const [storyMode, setStoryMode] = useState<"many" | "one">("many");
+  const [storyClientId, setStoryClientId] = useState("");
+  const [storyPlatforms, setStoryPlatforms] = useState<string[]>(["instagram", "facebook"]);
+  const [storySlots, setStorySlots] = useState<StorySlot[]>(() => [newSlot(), newSlot(), newSlot()]);
+  const [storyOne, setStoryOne] = useState<{ url: string; name: string; isVideo: boolean; uploadId?: string }>({ url: "", name: "", isVideo: false });
+  const [storySending, setStorySending] = useState(false);
+  const [storyUploadTarget, setStoryUploadTarget] = useState<string | null>(null);
+  const storyFileRef = useRef<HTMLInputElement>(null);
+  // Spread helper — start time plus a fixed gap is how the team actually plans
+  // a story day ("first at 9, then every 45 minutes").
+  const [spreadDate, setSpreadDate] = useState(istToday());
+  const [spreadStart, setSpreadStart] = useState("09:00");
+  const [spreadGap, setSpreadGap] = useState(45);
+
+  const patchSlot = (key: string, patch: Partial<StorySlot>) =>
+    setStorySlots((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+
+  const addSlot = () => setStorySlots((rows) => (rows.length >= STORY_MAX ? rows : [...rows, newSlot()]));
+  const removeSlot = (key: string) =>
+    setStorySlots((rows) => (rows.length <= 1 ? rows : rows.filter((r) => r.key !== key)));
+
+  /** Fill every slot's date+time from a start point and a fixed gap, rolling
+   *  past midnight onto the following day rather than wrapping to 00:xx. */
+  const spreadEvenly = () => {
+    const [h, m] = (spreadStart || "09:00").split(":").map(Number);
+    const base = new Date(`${spreadDate}T00:00:00`);
+    base.setHours(h || 0, m || 0, 0, 0);
+    setStorySlots((rows) =>
+      rows.map((r, i) => {
+        const at = new Date(base.getTime() + i * Math.max(1, spreadGap) * 60000);
+        return {
+          ...r,
+          date: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`,
+          time: `${pad(at.getHours())}:${pad(at.getMinutes())}`,
+        };
+      })
+    );
+  };
+
+  /** Copy one slot's creative into every slot — the shortcut for "same story,
+   *  many times" when you'd rather stay in the per-slot table. */
+  const fillAllFrom = (src: StorySlot) =>
+    setStorySlots((rows) =>
+      rows.map((r) => ({ ...r, mediaUrl: src.mediaUrl, mediaName: src.mediaName, mediaIsVideo: src.mediaIsVideo, uploadId: undefined }))
+    );
+
+  // Content Hub items this client has waiting, as the per-slot dropdown options.
+  const storyHubOptions = hubUploads.filter(
+    (u) => u.content_type !== "thumbnail" && (!storyClientId || u.client_id === storyClientId)
+  );
+
+  const storyPlatformsMapped = storyClientId
+    ? Array.from(new Set(Object.values(rpMapping).filter((m) => m?.client_id === storyClientId).map((m) => m.platform)))
+    : [];
+
+  /** Upload a file straight to Storage and drop it into whichever slot asked. */
+  const uploadForStory = async (target: string, file: File) => {
+    setUploading("media");
+    setUploadPct(0);
+    try {
+      const data = await uploadDirect(file, "social", setUploadPct);
+      if (target === "one") setStoryOne({ url: data.url, name: data.fileName, isVideo: data.mediaType === "video" });
+      else patchSlot(target, { mediaUrl: data.url, mediaName: data.fileName, mediaIsVideo: data.mediaType === "video", uploadId: undefined });
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Upload failed" });
+    } finally { setUploading(null); setUploadPct(0); }
+  };
+
+  // Slots that are actually sendable — a creative and a time. Incomplete rows
+  // are ignored rather than blocking the whole batch.
+  const storyReady = storySlots.filter(
+    (r) => r.date && r.time && (storyMode === "one" ? !!storyOne.url : !!r.mediaUrl)
+  );
+  const storyCanSend =
+    !!storyClientId && storyPlatforms.length > 0 && storyReady.length > 0 && !storySending;
+
+  const sendStories = async () => {
+    setStorySending(true);
+    setNotice(null);
+    try {
+      const items = storyReady.map((r) => ({
+        mediaUrl: storyMode === "one" ? storyOne.url : r.mediaUrl,
+        mediaIsVideo: storyMode === "one" ? storyOne.isVideo : r.mediaIsVideo,
+        scheduledFor: `${r.date}T${r.time}`,
+        uploadId: storyMode === "one" ? storyOne.uploadId : r.uploadId,
+      }));
+      const res = await fetch("/api/social-publisher/bulk-stories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: storyClientId, platforms: storyPlatforms, items }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not schedule the stories");
+      const skipNote = (data.skipped || []).length > 0 ? ` Skipped: ${(data.skipped as string[]).join(" ")}` : "";
+      setNotice({
+        ok: data.failed === 0,
+        text:
+          (data.failed === 0
+            ? `${data.sent} story post(s) scheduled ✅`
+            : `${data.sent} scheduled, ${data.failed} failed. Do NOT send again — the ones that worked are already queued. Retry the failed ones from the Library.`) + skipNote,
+      });
+      if (data.failed === 0) {
+        setStorySlots([newSlot(), newSlot(), newSlot()]);
+        setStoryOne({ url: "", name: "", isVideo: false });
+      }
+      await loadHistory();
+      await loadHubUploads();
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not schedule the stories" });
+    } finally { setStorySending(false); }
+  };
+
+  /** Drop the loaded creative entirely and go back to an empty composer. */
+  const clearSelection = () => {
+    setSelectedUpload(null);
+    setSelectedThumb(null);
+    setMediaUrl("");
+    setMediaName("");
+    setMediaIsVideo(false);
+    setThumbUrl("");
+    setMediaAspect(null);
+    setFrames([]);
+    setSelFrame(null);
+    setVideoDims(null);
+    setNotice(null);
   };
 
   // Pick a cover from the Thumbnail section.
@@ -441,7 +652,7 @@ export default function SocialPublisherPage() {
   });
 
   // --- Library (queue / history) ---------------------------------------------
-  const [view, setView] = useState<"compose" | "library">("compose");
+  const [view, setView] = useState<"compose" | "library" | "stories">("compose");
   const [libFilter, setLibFilter] = useState<"all" | "scheduled" | "posted" | "failed">("all");
   const [libClient, setLibClient] = useState("all");
   const [libSel, setLibSel] = useState<PostRow | null>(null);
@@ -793,7 +1004,7 @@ export default function SocialPublisherPage() {
   };
 
   return (
-    <div className={`${view === "library" ? "max-w-7xl" : "max-w-[1700px]"} mx-auto space-y-6`}>
+    <div className={`${view === "library" ? "max-w-7xl" : view === "stories" ? "max-w-5xl" : "max-w-[1700px]"} mx-auto space-y-6`}>
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
@@ -803,6 +1014,9 @@ export default function SocialPublisherPage() {
         </div>
         <div className="flex bg-slate-950 border border-slate-900 rounded-xl p-1 text-[10px] font-bold uppercase tracking-wider">
           <button onClick={() => setView("compose")} className={`px-4 py-2 rounded-lg cursor-pointer transition-all ${view === "compose" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>Compose</button>
+          <button onClick={() => setView("stories")} className={`px-4 py-2 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "stories" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
+            <Layers className="w-3.5 h-3.5" /><span>Multi-Story</span>
+          </button>
           <button onClick={() => setView("library")} className={`px-4 py-2 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "library" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
             <Eye className="w-3.5 h-3.5" /><span>Library ({posts.length})</span>
           </button>
@@ -930,10 +1144,39 @@ export default function SocialPublisherPage() {
       )}
 
       {view === "compose" && (
-      /* Three columns: what the designers delivered, what you're composing, and
-         how it will look — so picking a creative never scrolls the form away. */
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)_330px] gap-5 items-start">
+      <>
+      {/* What is loaded, and the way back to the tray. Only shown once the tray
+          is folded or something is selected — otherwise it is noise. */}
+      {(hubCollapsed || selectedUpload || mediaUrl) && (
+        <div className="flex items-center gap-2 flex-wrap bg-slate-950/40 border border-slate-900 rounded-xl px-3 py-2">
+          {hubCollapsed && (
+            <button onClick={() => setHubCollapsed(false)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer transition-all">
+              <FolderOpen className="w-3.5 h-3.5" />
+              <span>Show Content Hub{hubMedia.length > 0 ? ` (${hubMedia.length} waiting)` : ""}</span>
+            </button>
+          )}
+          {(selectedUpload || mediaUrl) && (
+            <>
+              <span className="text-[11px] text-slate-500 truncate">
+                Loaded: <b className="text-white">{selectedUpload?.name || mediaName || "uploaded file"}</b>
+                {selectedThumb && <span className="text-emerald-400"> · thumb {selectedThumb.name}</span>}
+              </span>
+              <button onClick={clearSelection}
+                className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-700 text-[11px] font-bold text-slate-400 hover:text-rose-400 cursor-pointer transition-all">
+                <X className="w-3.5 h-3.5" /><span>Deselect</span>
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Three columns: what the designers delivered, what you're composing, and
+         how it will look — so picking a creative never scrolls the form away.
+         With the tray folded it drops to two, and everything gets bigger. */}
+      <div className={`grid grid-cols-1 gap-5 items-start ${hubCollapsed ? "xl:grid-cols-[minmax(0,1fr)_400px]" : "xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)_330px]"}`}>
       {/* Received from Content Hub — what designers have delivered, per client */}
+      {!hubCollapsed && (
       <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto">
         <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
           <h3 className="text-sm font-bold text-white flex items-center space-x-2">
@@ -942,6 +1185,10 @@ export default function SocialPublisherPage() {
             {hubMedia.length > 0 && <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-950/40 border border-indigo-900 text-indigo-400">{hubMedia.length} waiting</span>}
             {hubThumbs.length > 0 && <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-950/40 border border-emerald-900 text-emerald-400">{hubThumbs.length} thumbnails</span>}
           </h3>
+          <button onClick={() => setHubCollapsed(true)} title="Hide this panel — the composer and preview get the full width"
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">
+            <X className="w-3 h-3" /><span>Hide</span>
+          </button>
           {hubMedia.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               <button onClick={() => setHubFilter("all")} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border cursor-pointer ${hubFilter === "all" ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>All</button>
@@ -992,6 +1239,7 @@ export default function SocialPublisherPage() {
           </div>
         )}
       </div>
+      )}
 
       {/* Composer — the middle column */}
       <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-5">
@@ -1158,7 +1406,7 @@ export default function SocialPublisherPage() {
             <div className="space-y-3">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                <span>Thumbnail <span className="text-slate-600 normal-case font-medium">— click a frame, or upload your own above</span></span>
+                <span>Thumbnail <span className="text-slate-600 normal-case font-medium">— scrub to any frame below, use a quick frame, or upload your own above</span></span>
                 {videoDims && (
                   <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400 normal-case">
                     {videoDims.h > videoDims.w ? `Story/Reel ${videoDims.w}×${videoDims.h}` : `Landscape ${videoDims.w}×${videoDims.h}`}
@@ -1178,6 +1426,85 @@ export default function SocialPublisherPage() {
                 <span className="text-[10px] text-emerald-400 font-bold">Current thumbnail ✓</span>
               </div>
             )}
+
+            {/* Manual scrub. The strip only ever offers 10 fixed moments, and on
+                a moving shot every one of them can be motion-blurred — so the
+                frame is shown big enough here to actually judge sharpness. */}
+            <div className="rounded-xl border border-slate-800 bg-black/50 p-3 space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-[10px] font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                  <Film className="w-3.5 h-3.5 text-[var(--yellow)]" /><span>Scrub to the exact frame</span>
+                </span>
+                <span className="text-[10px] font-mono text-slate-500">
+                  {scrubT.toFixed(2)}s{videoDuration > 0 ? ` / ${videoDuration.toFixed(2)}s` : ""}
+                </span>
+              </div>
+
+              <div className="flex justify-center">
+                <div
+                  className="relative bg-black rounded-lg overflow-hidden border border-slate-800"
+                  style={{ aspectRatio: videoDims ? `${videoDims.w} / ${videoDims.h}` : "16 / 9", height: 420, maxWidth: "100%" }}
+                >
+                  {videoPlayable ? (
+                    <video
+                      ref={scrubRef}
+                      src={mediaUrl}
+                      preload="metadata"
+                      playsInline
+                      muted
+                      onLoadedMetadata={(e) => {
+                        const d = e.currentTarget.duration;
+                        if (Number.isFinite(d) && d > 0) setVideoDuration(d);
+                      }}
+                      onError={() => setVideoPlayable(false)}
+                      className="w-full h-full object-contain"
+                    />
+                  ) : scrubPreview ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={scrubPreview} alt={`frame at ${scrubT.toFixed(2)}s`} className="w-full h-full object-contain" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-[11px] text-slate-500 px-4 text-center">
+                      {scrubBusy ? "Rendering frame…" : "Move the slider to load a frame"}
+                    </div>
+                  )}
+                  {scrubBusy && (
+                    <span className="absolute top-2 right-2 bg-black/70 rounded-full p-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <input
+                type="range" min={0} max={videoDuration || 0} step={0.05} value={scrubT}
+                onChange={(e) => seekTo(Number(e.target.value))}
+                disabled={!videoDuration}
+                className="w-full accent-[var(--yellow)] cursor-pointer disabled:opacity-40"
+              />
+
+              {/* Nudging past a blurred moment is the whole point — a slider
+                  alone can't reliably land on a single frame. */}
+              <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                {[-1, -0.25, -0.05, 0.05, 0.25, 1].map((d) => (
+                  <button key={d} type="button" onClick={() => seekTo(scrubT + d)} disabled={!videoDuration}
+                    className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[10px] font-mono font-bold text-slate-300 hover:text-white cursor-pointer disabled:opacity-40">
+                    {d > 0 ? `+${d}` : d}s
+                  </button>
+                ))}
+              </div>
+
+              <button type="button" onClick={() => chooseFrame(scrubT)} disabled={uploading === "thumb" || !videoDuration}
+                className="w-full py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-[11px] font-bold uppercase tracking-wider cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
+                {uploading === "thumb" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
+                <span>{uploading === "thumb" ? "Capturing…" : `Use this frame (${scrubT.toFixed(2)}s)`}</span>
+              </button>
+
+              {!videoPlayable && (
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  This video can&apos;t be decoded by the browser (Drive-hosted, or a codec it doesn&apos;t support), so each frame is rendered on the server — expect a short pause after you move the slider.
+                </p>
+              )}
+            </div>
             {frames.length === 0 && !framesBusy ? (
               <p className="text-[11px] text-slate-600">No frames could be read from this video — upload a thumbnail file manually instead.</p>
             ) : (
@@ -1325,6 +1652,241 @@ export default function SocialPublisherPage() {
         <p className="text-[10px] text-slate-600">Approximate preview — final look can differ slightly per platform.</p>
       </div>
       </div>
+      </>
+      )}
+
+      {/* ----------------------------- MULTI-STORY ----------------------------- */}
+      {view === "stories" && (
+        <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-5">
+          <div>
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <Layers className="w-4 h-4 text-[var(--yellow)]" /><span>Multi-Story — schedule up to {STORY_MAX} Stories in one go</span>
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Instagram and Facebook only — no other platform has Stories. Captions are left out on purpose: both platforms drop the text on a Story, so put any wording onto the creative itself.
+            </p>
+          </div>
+
+          {/* Client + mode */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Client / Brand</label>
+              <select value={storyClientId} onChange={(e) => setStoryClientId(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 cursor-pointer">
+                <option value="">— Select client —</option>
+                {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Batch type</label>
+              <div className="flex bg-slate-950 border border-slate-800 rounded-xl p-1">
+                <button onClick={() => setStoryMode("many")}
+                  className={`flex-1 px-3 py-2 rounded-lg text-[11px] font-bold cursor-pointer transition-all ${storyMode === "many" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
+                  Many creatives
+                </button>
+                <button onClick={() => setStoryMode("one")}
+                  className={`flex-1 px-3 py-2 rounded-lg text-[11px] font-bold cursor-pointer transition-all ${storyMode === "one" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
+                  One creative, many times
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-600 mt-1.5">
+                {storyMode === "many"
+                  ? "Each slot below carries its own creative and its own time."
+                  : "Pick one creative, then give it as many times as you want."}
+              </p>
+            </div>
+          </div>
+
+          {/* Platforms — Meta only, by construction */}
+          <div>
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Platforms</label>
+            <div className="flex flex-wrap gap-2">
+              {["instagram", "facebook"].map((p) => {
+                const mapped = !storyClientId || storyPlatformsMapped.length === 0 || storyPlatformsMapped.includes(p);
+                return (
+                  <button key={p} onClick={() => setStoryPlatforms((prev) => prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p])}
+                    title={mapped ? "" : `${clients.find((c) => c.id === storyClientId)?.name || "This client"} has no ${p} account connected in RecurPost — posting here will fail.`}
+                    className={`px-4 py-2 rounded-full text-xs font-bold border capitalize cursor-pointer transition-all ${
+                      storyPlatforms.includes(p) ? "bg-indigo-500 border-indigo-500 text-black"
+                      : mapped ? "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"
+                      : "bg-slate-950 border-slate-900 text-slate-700 opacity-50"}`}>
+                    {p}{!mapped ? " ⚠" : ""}
+                  </button>
+                );
+              })}
+            </div>
+            {storyClientId && rpAccounts.length > 0 && storyPlatformsMapped.length === 0 && (
+              <div className="mt-2 bg-amber-950/20 border border-amber-900/50 rounded-xl p-2.5 text-[11px] text-amber-300 flex items-start gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span><b>{clients.find((c) => c.id === storyClientId)?.name}</b> has no social accounts mapped in RecurPost — every slot will fail.</span>
+              </div>
+            )}
+          </div>
+
+          {/* One-creative mode: the single creative everything reuses */}
+          {storyMode === "one" && (
+            <div className="border border-emerald-900/50 rounded-xl p-4 bg-emerald-950/10 space-y-2">
+              <label className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">The creative</label>
+              <div className="flex items-center gap-3 flex-wrap">
+                {storyOne.url && (
+                  <div className="w-12 rounded-lg overflow-hidden border border-slate-800 bg-slate-900 shrink-0" style={{ aspectRatio: "9 / 16" }}>
+                    {storyOne.isVideo
+                      ? <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs">▶</div>
+                      // eslint-disable-next-line @next/next/no-img-element
+                      : <img src={storyOne.url} alt="" className="w-full h-full object-cover" />}
+                  </div>
+                )}
+                <select
+                  value={storyOne.url}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "__upload__") { setStoryUploadTarget("one"); storyFileRef.current?.click(); return; }
+                    const u = storyHubOptions.find((o) => o.file_url === v);
+                    setStoryOne({ url: v, name: u?.file_name || "", isVideo: u?.media_type === "video", uploadId: u?.id });
+                  }}
+                  className="flex-1 min-w-[220px] bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 cursor-pointer">
+                  <option value="">— pick a creative —</option>
+                  {storyOne.url && !storyHubOptions.some((o) => o.file_url === storyOne.url) && (
+                    <option value={storyOne.url}>{storyOne.name || "uploaded file"}</option>
+                  )}
+                  {storyHubOptions.map((u) => <option key={u.id} value={u.file_url}>{u.file_name || "file"}</option>)}
+                  <option value="__upload__">⬆ Upload a file…</option>
+                </select>
+              </div>
+              {!storyClientId && <p className="text-[10px] text-slate-600">Select a client to see their Content Hub creatives.</p>}
+            </div>
+          )}
+
+          {/* Spread helper — how a story day is actually planned */}
+          <div className="border border-slate-900 rounded-xl p-4 bg-slate-950/60 space-y-2">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+              <Wand2 className="w-3.5 h-3.5 text-[var(--yellow)]" /><span>Fill all times automatically</span>
+            </label>
+            <div className="flex items-end gap-2 flex-wrap">
+              <div>
+                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Start date</span>
+                <input type="date" value={spreadDate} min={istToday()} onClick={openPicker} onChange={(e) => setSpreadDate(e.target.value)}
+                  className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
+              </div>
+              <div>
+                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">First story at</span>
+                <input type="time" value={spreadStart} onClick={openPicker} onChange={(e) => setSpreadStart(e.target.value)}
+                  className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
+              </div>
+              <div>
+                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Gap (minutes)</span>
+                <input type="number" min={1} value={spreadGap} onChange={(e) => setSpreadGap(Number(e.target.value) || 1)}
+                  className="w-24 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500" />
+              </div>
+              <button onClick={spreadEvenly}
+                className="px-4 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer">
+                Apply to all {storySlots.length} slots
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-600">Times run past midnight onto the next day rather than wrapping back to the morning.</p>
+          </div>
+
+          {/* The slots */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                Story slots <span className="text-slate-600 normal-case font-medium">({storySlots.length} of {STORY_MAX} · {storyReady.length} ready to send)</span>
+              </label>
+              <div className="flex gap-2">
+                <button onClick={addSlot} disabled={storySlots.length >= STORY_MAX}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer disabled:opacity-40">
+                  <Plus className="w-3.5 h-3.5" /><span>Add slot</span>
+                </button>
+                <button onClick={() => setStorySlots((rows) => { const need = Math.min(STORY_MAX, 10) - rows.length; return need > 0 ? [...rows, ...Array.from({ length: need }, newSlot)] : rows; })}
+                  disabled={storySlots.length >= 10}
+                  className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer disabled:opacity-40">
+                  Make it 10
+                </button>
+              </div>
+            </div>
+
+            {storySlots.map((r, i) => (
+              <div key={r.key} className="flex items-center gap-2 flex-wrap bg-slate-950/60 border border-slate-900 rounded-lg p-2">
+                <span className="w-6 h-6 rounded-full bg-[var(--yellow)] text-black text-[10px] font-black flex items-center justify-center shrink-0">{i + 1}</span>
+
+                {storyMode === "many" && (
+                  <>
+                    {r.mediaUrl && (
+                      <div className="w-8 rounded overflow-hidden border border-slate-800 bg-slate-900 shrink-0" style={{ aspectRatio: "9 / 16" }}>
+                        {r.mediaIsVideo
+                          ? <div className="w-full h-full flex items-center justify-center text-slate-500 text-[10px]">▶</div>
+                          // eslint-disable-next-line @next/next/no-img-element
+                          : <img src={r.mediaUrl} alt="" className="w-full h-full object-cover" />}
+                      </div>
+                    )}
+                    <select
+                      value={r.mediaUrl}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === "__upload__") { setStoryUploadTarget(r.key); storyFileRef.current?.click(); return; }
+                        const u = storyHubOptions.find((o) => o.file_url === v);
+                        patchSlot(r.key, { mediaUrl: v, mediaName: u?.file_name || "", mediaIsVideo: u?.media_type === "video", uploadId: u?.id });
+                      }}
+                      className="flex-1 min-w-[180px] bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 cursor-pointer">
+                      <option value="">— pick a creative —</option>
+                      {r.mediaUrl && !storyHubOptions.some((o) => o.file_url === r.mediaUrl) && (
+                        <option value={r.mediaUrl}>{r.mediaName || "uploaded file"}</option>
+                      )}
+                      {storyHubOptions.map((u) => <option key={u.id} value={u.file_url}>{u.file_name || "file"}</option>)}
+                      <option value="__upload__">⬆ Upload a file…</option>
+                    </select>
+                  </>
+                )}
+
+                <input type="date" value={r.date} min={istToday()} onClick={openPicker} onChange={(e) => patchSlot(r.key, { date: e.target.value })}
+                  className="w-[140px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-xs text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
+                <input type="time" value={r.time} onClick={openPicker} onChange={(e) => patchSlot(r.key, { time: e.target.value })}
+                  className="w-[110px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-xs text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
+
+                {storyMode === "many" && r.mediaUrl && (
+                  <button onClick={() => fillAllFrom(r)} title="Use this creative in every slot"
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">
+                    Fill all
+                  </button>
+                )}
+                <button onClick={() => removeSlot(r.key)} disabled={storySlots.length <= 1} title="Remove this slot"
+                  className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-700 text-slate-400 hover:text-rose-400 cursor-pointer disabled:opacity-30">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <input ref={storyFileRef} type="file" accept="image/*,video/mp4,video/quicktime" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f && storyUploadTarget) uploadForStory(storyUploadTarget, f); e.target.value = ""; }} />
+
+          {uploading === "media" && (
+            <div className="flex items-center gap-2 text-[11px] text-slate-400">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--yellow)]" />
+              <span>Uploading… {uploadPct}%</span>
+            </div>
+          )}
+
+          {/* Send */}
+          <div className="border-t border-slate-900 pt-4 space-y-2">
+            <p className="text-[11px] text-slate-500">
+              {storyReady.length === 0
+                ? "Nothing ready yet — each slot needs a creative and a time. Incomplete slots are ignored."
+                : <>Will schedule <span className="signal">{storyReady.length * storyPlatforms.length}</span> story post(s) — {storyReady.length} slot(s) × {storyPlatforms.length} platform(s).</>}
+            </p>
+            <button onClick={sendStories} disabled={!storyCanSend}
+              className={`w-full px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 transition-all ${
+                storyCanSend ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>
+              {storySending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              <span>{storySending ? "Scheduling — this can take a minute…" : `Schedule ${storyReady.length * storyPlatforms.length} story post(s)`}</span>
+            </button>
+            {storySending && (
+              <p className="text-[10px] text-amber-400 text-center">
+                Each post is a separate RecurPost call — don&apos;t close this tab or press the button again.
+              </p>
+            )}
+          </div>
+        </div>
       )}
 
       {/* ------------------------------- LIBRARY ------------------------------- */}

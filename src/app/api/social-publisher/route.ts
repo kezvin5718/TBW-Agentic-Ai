@@ -220,6 +220,13 @@ export async function POST(request: NextRequest) {
         skipped.push(`${platform} ${contentType} — already posted.`);
         continue;
       }
+      // YouTube only accepts video. Platforms are auto-selected from the client
+      // mapping, so an image post riding along isn't a conscious choice — skip
+      // it cleanly rather than letting RecurPost reject it and log a failure.
+      if (platform === "youtube" && !mediaIsVideo) {
+        skipped.push("youtube — YouTube only accepts video. Upload a video to include YouTube.");
+        continue;
+      }
       if (!accountId) {
         detail = `No RecurPost account mapped for ${client?.name || "this client"} on ${platform} — map it in Social Publisher → RecurPost Accounts.`;
       } else {
