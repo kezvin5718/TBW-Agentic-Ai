@@ -82,6 +82,7 @@ export default async function DashboardLayout({
     { name: "9 · Social Publisher", href: "/dashboard/social-publisher", icon: Send, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "10 · Ad Publishing", href: "/dashboard/publishing", icon: UploadCloud, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "11 · Meta Ads Manager", href: "/dashboard/ads", icon: Megaphone, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "11b · Catalogue Ad Copy", href: "/dashboard/ad-copy", icon: Sparkles, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "12 · Reporting & Analytics", href: "/dashboard/reporting", icon: LineChart, roles: ["founder", "employee", "client"], section: "Client Workflow" },
     { name: "13 · Agency Brain", href: "/dashboard/agency-brain", icon: Layers, roles: ["founder"], section: "Client Workflow" },
 
