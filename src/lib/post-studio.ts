@@ -77,7 +77,7 @@ function fitText(text: string, availPx: number, startPx: number, maxLines: numbe
  * a scrim made it legible, but legible-on-top-of-the-jewellery is still the
  * wrong look for a jewellery brand.
  */
-function textLayer(spec: PostSpec, width: number, height: number, bandTop: number): Buffer {
+function textLayer(spec: PostSpec, width: number, height: number, bandTop: number, centerBlock = false): Buffer {
   const marginX = Math.round(width * 0.08);
   const avail = width - marginX * 2;
   const portrait = height > width;
@@ -117,8 +117,12 @@ function textLayer(spec: PostSpec, width: number, height: number, bandTop: numbe
   const { head, subLines, ctaSize, headLead, subLead, blockH } = laid;
 
   // Sit the block above the bottom edge rather than growing down past it, and
-  // never above the band it belongs to.
-  let y = Math.max(bandTop + head.size, height - bottomPad - blockH + head.size);
+  // never above the band it belongs to. When the type owns the whole frame
+  // there is nothing above it to sit under, so centre it instead of leaving it
+  // stranded at the foot of an empty picture.
+  let y = centerBlock
+    ? bandTop + Math.round((bandH - blockH) / 2) + head.size
+    : Math.max(bandTop + head.size, height - bottomPad - blockH + head.size);
 
   const parts: string[] = [];
   for (const line of head.lines) {
@@ -243,20 +247,50 @@ async function logoLayer(logoUrl: string | null | undefined, width: number, heig
  */
 function frameLayout(spec: PostSpec, frame: number, width: number, height: number): { bandTop: number; content: PostSpec } {
   const standardBand = Math.round(height * (height > width ? 0.66 : 0.62));
-  if (spec.frames <= 1) return { bandTop: standardBand, content: spec };
+
+  // Nothing is going above the band on this post — no product photograph, and
+  // no scene to generate. Reserving the top for one leaves a dead area with the
+  // type crushed underneath it, which is what a purely typographic slide came
+  // out looking like. Give the words the whole frame instead.
+  const noImagery = spec.kind === "generated" && !spec.scenePrompt.trim();
+  const band = noImagery ? Math.round(height * 0.14) : standardBand;
+
+  if (spec.frames <= 1) return { bandTop: band, content: spec };
 
   const isCover = frame === 0;
   const isLast = frame === spec.frames - 1;
+  const slides = spec.slideCopy || [];
+
+  // When the plan wrote its own slides, each frame carries its own line. Before
+  // this the cover's headline was repeated and the author's numbered slides
+  // were never drawn at all.
+  if (slides.length >= 2) {
+    const line = slides[Math.min(frame, slides.length - 1)];
+    return {
+      bandTop: band,
+      content: {
+        ...spec,
+        headline: line,
+        // The supporting line belongs on the cover; the slides speak for
+        // themselves and a repeated subtitle just crowds them.
+        subtext: isCover ? spec.subtext : "",
+        cta: isLast ? spec.cta : "",
+      },
+    };
+  }
 
   if (isCover) {
     // Makes the case; no CTA competing for attention before anyone has swiped.
-    return { bandTop: standardBand, content: { ...spec, cta: "" } };
+    return { bandTop: band, content: { ...spec, cta: "" } };
   }
   if (isLast) {
     // The close — full headline, subtext and the call to action together.
-    return { bandTop: standardBand, content: spec };
+    return { bandTop: band, content: spec };
   }
-  // Middle frames: almost full-bleed product, just a slim brand strip at the foot.
+  // Middle frames: almost full-bleed product, just a slim brand strip at the
+  // foot. Only meaningful when there IS a photograph — with no imagery this
+  // would be a blank frame, so those keep the type instead.
+  if (noImagery) return { bandTop: band, content: { ...spec, cta: "" } };
   return { bandTop: Math.round(height * 0.94), content: { ...spec, headline: "", subtext: "", cta: "" } };
 }
 
@@ -283,10 +317,15 @@ export async function renderFrame(
 
   let base: Buffer | null = null;
   let note = "";
+  // Whether anything is actually sitting above the type. A failed photo or a
+  // failed generation falls back to a flat colour, and in that case the words
+  // should own the frame rather than hang below an empty rectangle.
+  let hasImagery = false;
 
   if (spec.kind === "product" && photoUrl) {
     const photo = await productBase(photoUrl, width, bandTop);
     if (photo) {
+      hasImagery = true;
       base = await sharp(await canvas(spec, width, height))
         .composite([{ input: photo, top: 0, left: 0 }])
         .png()
@@ -301,6 +340,7 @@ Style: premium Indian advertising background for a jewellery brand. Rich but unc
 Absolutely no text, no letters, no numbers, no logos, no watermarks, no people, and no jewellery or products of any kind. Background scene only.`;
     const { buffer, error } = await generateBrandImage(prompt, shapeFor(spec));
     if (buffer) {
+      hasImagery = true;
       base = await sharp(buffer).resize({ width, height, fit: "cover" }).png().toBuffer();
     } else {
       note = `Image generation failed (${error}) — used a plain brand background.`;
@@ -312,7 +352,10 @@ Absolutely no text, no letters, no numbers, no logos, no watermarks, no people, 
   const logo = await logoLayer(logoUrl, width, height);
 
   const composed = await sharp(base)
-    .composite([...logo, { input: textLayer(content, width, height, bandTop), top: 0, left: 0 }])
+    .composite([
+      ...logo,
+      { input: textLayer(content, width, height, bandTop, !hasImagery), top: 0, left: 0 },
+    ])
     .jpeg({ quality: 92 })
     .toBuffer();
 

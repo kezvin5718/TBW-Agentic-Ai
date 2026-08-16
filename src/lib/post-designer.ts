@@ -52,6 +52,12 @@ export interface PostSpec {
   textHex: string;
   /** For generated posts only — the scene, never containing a real product. */
   scenePrompt: string;
+  /**
+   * One line per carousel frame, in order, taken from the plan's own slide copy.
+   * Without this a carousel repeated the cover's headline and the author's
+   * numbered slides were never drawn at all.
+   */
+  slideCopy?: string[];
   /** Why this was classed as it was, shown to the reviewer. */
   reason: string;
 }
@@ -206,7 +212,14 @@ Return STRICTLY:
   for (const { item, i } of usable) {
     const got = (parsed.posts || []).find((p) => Number(p.item) === i);
     const contentType = normaliseType(String(got?.contentType || item.format), item.platform);
-    const frames = contentType === "carousel" ? Math.min(5, Math.max(3, Number(got?.frames) || 3)) : 1;
+    // The author's own slides decide how many frames there are. Asking the model
+    // for a count while five numbered slides sat in the plan produced three
+    // frames and quietly dropped two of them.
+    const slideCopy = (item.slideCopy || []).map((s) => String(s).trim()).filter(Boolean).slice(0, 5);
+    const frames =
+      contentType !== "carousel" ? 1
+      : slideCopy.length >= 2 ? slideCopy.length
+      : Math.min(5, Math.max(3, Number(got?.frames) || 3));
     specs.push({
       item: i,
       date: item.date || null,
@@ -223,6 +236,7 @@ Return STRICTLY:
       accentHex: hexOr(got?.accentHex, colors[1] || "#d4af37"),
       textHex: hexOr(got?.textHex, "#ffffff"),
       scenePrompt: String(got?.scenePrompt || ""),
+      slideCopy,
       reason: String(got?.reason || ""),
     });
   }
