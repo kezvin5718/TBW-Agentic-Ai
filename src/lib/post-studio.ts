@@ -350,7 +350,9 @@ export async function renderFrame(
   let hasImagery = false;
 
   if (spec.kind === "product" && photoUrl) {
+    console.log(`      · fetching product photo: ${photoUrl.slice(0, 90)}`);
     const photo = await productBase(photoUrl, width, bandTop);
+    console.log(`      · product photo ${photo ? "read" : "UNREADABLE"}.`);
     if (photo) {
       hasImagery = true;
       base = await sharp(await canvas(spec, width, height))
@@ -365,7 +367,9 @@ export async function renderFrame(
 
 Style: premium Indian advertising background for a jewellery brand. Rich but uncluttered, with clear empty space across the lower half where text will be placed afterwards.
 Absolutely no text, no letters, no numbers, no logos, no watermarks, no people, and no jewellery or products of any kind. Background scene only.`;
+    console.log(`      · generating background scene (this is the slow one)…`);
     const { buffer, error } = await generateBrandImage(prompt, shapeFor(spec));
+    console.log(`      · background scene ${buffer ? "generated" : `FAILED: ${error}`}.`);
     if (buffer) {
       hasImagery = true;
       base = await sharp(buffer).resize({ width, height, fit: "cover" }).png().toBuffer();
@@ -453,7 +457,16 @@ export async function generatePlanPosts(
     };
   }
 
+  // This whole path used to run silently, so a batch that stalled was
+  // indistinguishable in the logs from one that was never started. Each step
+  // announces itself with its elapsed time; the last line printed is the step
+  // that hung.
+  const t0 = Date.now();
+  const since = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
+  console.log(`🎨 Studio: analysing plan ${planId}…`);
+
   const plan = await analysePlan(planId);
+  console.log(`🎨 Studio: plan analysed at ${since()} — ${plan.specs.length} post(s) designed.`);
   const limit = options.limit ?? 30;
   // Building one or two posts at a time is the sane way to judge whether the
   // templates are any good — and it keeps the bill small while doing it.
@@ -479,9 +492,13 @@ export async function generatePlanPosts(
       continue;
     }
 
+    console.log(`🎨 Studio: post ${spec.item + 1} (${spec.kind}, ${spec.frames} frame(s)) starting at ${since()}.`);
+
     for (let frame = 0; frame < spec.frames; frame++) {
       try {
+        console.log(`   ↳ post ${spec.item + 1} frame ${frame + 1}/${spec.frames}: rendering… (${since()})`);
         const { buffer, note, content } = await renderFrame(spec, photos[frame] || photos[0] || null, frame, client?.logo_url);
+        console.log(`   ↳ post ${spec.item + 1} frame ${frame + 1}: rendered, checking and filing… (${since()})`);
 
         // Judge the frame and file it at the same time. Both only need the
         // finished buffer and neither depends on the other, but running them in
@@ -541,13 +558,17 @@ export async function generatePlanPosts(
         }
 
         created++;
+        console.log(`   ✅ post ${spec.item + 1} frame ${frame + 1} saved (${since()}).`);
         if (!verdict.ok) notes.push(`Post ${spec.item + 1} needs a look: ${verdict.issues.join("; ")}`);
       } catch (err: unknown) {
         failed++;
-        notes.push(`Post ${spec.item + 1}: ${err instanceof Error ? err.message : String(err)}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`   ❌ post ${spec.item + 1} frame ${frame + 1} failed after ${since()}: ${msg}`);
+        notes.push(`Post ${spec.item + 1}: ${msg}`);
       }
     }
   }
 
+  console.log(`🎨 Studio: finished in ${since()} — ${created} created, ${failed} failed.`);
   return { created, failed, notes };
 }
