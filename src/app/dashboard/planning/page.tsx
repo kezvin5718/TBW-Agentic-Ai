@@ -193,6 +193,17 @@ export default function PlanningIndexPage() {
 
   // Step 2 Trigger: Generate Content calendar slots
   const triggerGenerateCalendar = async () => {
+    // Generating does not read the uploaded file — it only gets the strategy
+    // summary and a count, so it returns invented rows. Losing a real imported
+    // calendar to it is silent and unrecoverable, hence the stop.
+    const authored = calendarSlots.filter((s) => (s.productionNote || s.caption || "").trim()).length;
+    if (calendarSlots.length > 0) {
+      const detail = authored > 0
+        ? `${authored} of them carry your own production direction from the imported plan, which cannot be recovered.`
+        : "These will be replaced by AI-written slots.";
+      if (!window.confirm(`This replaces all ${calendarSlots.length} calendar slots with newly generated ones.\n\n${detail}\n\nIf you imported a plan, press Cancel and use "Keep my slots" instead.\n\nReplace them?`)) return;
+    }
+
     setGenerating(true);
     setLoaderMessage("AI Production Bot: Formulating hooks, body concepts, CTAs and distributing dates...");
     setError(null);
@@ -732,14 +743,34 @@ export default function PlanningIndexPage() {
                       <ChevronLeft className="w-4 h-4" />
                       <span>Back</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={triggerGenerateCalendar}
-                      className="flex items-center space-x-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-4 rounded-xl cursor-pointer"
-                    >
-                      <span>Generate Calendar</span>
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center space-x-2">
+                      {/* An imported calendar is the author's own work. Generating
+                          replaces every row with invented ones, and this used to
+                          be the only way forward from this step — so a plan read
+                          correctly from a file was overwritten on the way past. */}
+                      {calendarSlots.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setWizardStep(2)}
+                          className="flex items-center space-x-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 px-4 rounded-xl cursor-pointer"
+                        >
+                          <span>Keep my {calendarSlots.length} slots</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={triggerGenerateCalendar}
+                        className={`flex items-center space-x-1 font-bold py-2 px-4 rounded-xl cursor-pointer ${
+                          calendarSlots.length > 0
+                            ? "border border-slate-800 text-slate-400 hover:text-white"
+                            : "bg-indigo-600 hover:bg-indigo-500 text-white"
+                        }`}
+                      >
+                        <span>{calendarSlots.length > 0 ? "Replace with AI slots" : "Generate Calendar"}</span>
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
