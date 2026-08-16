@@ -20,6 +20,14 @@ export interface PlanItem {
   concept?: string;
   hook?: string;
   CTA?: string;
+  /** Everything below is the plan author's own words, carried from import. */
+  time?: string;
+  caption?: string;
+  slideCopy?: string[];
+  /** The author's art direction for this post. Binding, not advisory. */
+  productionNote?: string;
+  hashtags?: string;
+  complianceNote?: string;
 }
 
 export type PostKind = "product" | "generated";
@@ -101,7 +109,11 @@ export async function analysePlan(planId: string): Promise<{
 
   const { data: brain } = await admin
     .from("brand_brain")
-    .select("colors, fonts, caption_tone, design_preferences")
+    // brand_brief and feedback_log were missing here while the caption writer
+    // read both. That is why captions sounded like the brand and creative did
+    // not, and why rejecting a creative changed nothing: the only record of the
+    // founder's corrections never reached the pipeline that keeps repeating them.
+    .select("colors, fonts, caption_tone, design_preferences, brand_brief, feedback_log")
     .eq("client_id", plan.client_id)
     .maybeSingle();
 
@@ -113,12 +125,29 @@ export async function analysePlan(planId: string): Promise<{
     .filter(({ item }) => normaliseType(item.format, item.platform) !== "reel");
   const skippedReels = calendar.length - usable.length;
 
+  // The founder's last corrections, in their own words. These are the whole
+  // reason a rejection is worth making.
+  const corrections = Array.isArray(brain?.feedback_log)
+    ? (brain!.feedback_log as unknown[])
+        .slice(-8)
+        .map((f) => (typeof f === "string" ? f : JSON.stringify(f)))
+        .join("\n")
+    : "";
+
   const system = `You are an art director at an Indian advertising agency, briefing a designer for "${clientName}".
 
 For each row of the content calendar, produce a brief. You are deciding how a post should be built, not writing it.
 
+Who this brand is:
+${String(brain?.brand_brief || "Not recorded.").slice(0, 1500)}
+
 Brand colours available: ${colors.length ? colors.join(", ") : "none recorded — use tasteful neutrals"}.
 Caption tone: ${brain?.caption_tone || "warm, premium, plain-spoken"}.
+
+Corrections the founder has already given on this brand's work. These outrank your own taste — if one of them contradicts what you were about to do, they win:
+${corrections || "None recorded yet."}
+
+THE MOST IMPORTANT RULE. Some rows carry a "productionNote" — the art direction the plan's author already wrote. Where it exists it is a brief you are executing, not a suggestion you are weighing. If it says "pure black frame, one point of light, no logo, no product", then the headline sits on black, there is no logo, and there is no product. Do not replace the author's idea with a nicer one of your own. Where a row has a "hook", those are the author's words for the big line — keep them unless they physically cannot fit.
 
 Classify each post as one of:
 - "product" — the post shows the client's actual merchandise. Anything described as a product showcase, a collection, a new arrival, a piece of jewellery.
@@ -127,9 +156,10 @@ Classify each post as one of:
 Be conservative: if a post could plausibly need a real product photograph, call it "product". Inventing jewellery that the client does not sell is the one unacceptable outcome.
 
 Rules:
-- headline: 3-7 words, the words that go large on the image. No hashtags, no emoji.
-- subtext: one short supporting line, or an empty string.
+- headline: 3-7 words, the words that go large on the image. No hashtags, no emoji. If the row has a "hook", that IS the headline — trim it to fit rather than rewriting it into something blander.
+- subtext: one short supporting line, or an empty string. Draw it from the row's caption or slide copy where there is one; do not invent a new claim.
 - cta: short, from the row's CTA if it has one.
+- scenePrompt must follow the row's productionNote wherever one exists, including its prohibitions ("no logo", "no product", "no faces").
 - backgroundHex / accentHex / textHex: real hex codes. Use the brand colours where given; make sure text contrasts strongly with the background.
 - scenePrompt: only for "generated" posts — describe the background scene, patterns, lighting and mood. Never describe jewellery, products, people wearing products, or any text. Empty string for "product" posts.
 - frames: 1, except a carousel which is 3 to 5.`;
@@ -138,8 +168,22 @@ Rules:
 Plan month: ${plan.month}
 Strategy: ${plan.strategy_summary || "not recorded"}
 
-Calendar rows (index, then the row):
-${usable.map(({ item, i }) => `${i}. ${JSON.stringify(item)}`).join("\n")}
+Calendar rows:
+${usable
+  .map(({ item, i }) => {
+    const lines = [
+      `--- Row ${i} · ${item.date || "no date"} · ${item.format || "static"} · ${item.platform || "instagram"}`,
+      `Concept: ${item.concept || "(none)"}`,
+    ];
+    if (item.hook) lines.push(`Author's line (use this as the headline): ${item.hook}`);
+    if (item.productionNote) lines.push(`ART DIRECTION — FOLLOW THIS: ${item.productionNote}`);
+    if (item.slideCopy?.length) lines.push(`Slide copy: ${item.slideCopy.join(" | ")}`);
+    if (item.caption) lines.push(`Caption: ${item.caption.replace(/\s+/g, " ").slice(0, 400)}`);
+    if (item.CTA) lines.push(`CTA: ${item.CTA}`);
+    if (item.complianceNote) lines.push(`COMPLIANCE — do not contradict: ${item.complianceNote.slice(0, 300)}`);
+    return lines.join("\n");
+  })
+  .join("\n")}
 
 Return STRICTLY:
 { "posts": [ { "item": <the index number given above>, "kind": "product" | "generated", "contentType": "post" | "story" | "carousel", "frames": 1, "headline": "...", "subtext": "...", "cta": "...", "backgroundHex": "#RRGGBB", "accentHex": "#RRGGBB", "textHex": "#RRGGBB", "scenePrompt": "...", "reason": "one short line" } ] }`;
@@ -149,7 +193,9 @@ Return STRICTLY:
     system,
     messages: [{ role: "user", content: prompt }],
     jsonSchema: true,
-    maxTokens: 4000,
+    // A full month of rows now carries far more per post than it used to;
+    // 4000 clipped the JSON mid-array on a long calendar.
+    maxTokens: 12000,
   });
 
   let clean = raw.trim();

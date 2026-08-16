@@ -33,6 +33,10 @@ export default function PlanningIndexPage() {
     clients: { name: string } | null;
   }
 
+  // The last six fields are carried through the wizard but not edited here —
+  // they are the author's own caption and art direction, and the creative
+  // pipeline reads them. Rebuilding a row without them is what used to strip
+  // the plan back to a bare concept between import and save.
   interface CalendarSlot {
     date: string;
     platform: string;
@@ -40,6 +44,12 @@ export default function PlanningIndexPage() {
     concept: string;
     hook: string;
     CTA: string;
+    time?: string;
+    caption?: string;
+    slideCopy?: string[];
+    productionNote?: string;
+    hashtags?: string;
+    complianceNote?: string;
   }
 
   interface BudgetAllocation {
@@ -71,6 +81,8 @@ export default function PlanningIndexPage() {
 
   // Step 2 states (Calendar)
   const [calendarSlots, setCalendarSlots] = useState<CalendarSlot[]>([]);
+  // What the importer actually managed to read, said out loud.
+  const [importNote, setImportNote] = useState<{ ok: boolean; text: string } | null>(null);
   const [qtyStatic, setQtyStatic] = useState(0);
   const [qtyReel, setQtyReel] = useState(0);
   const [qtyCarousel, setQtyCarousel] = useState(0);
@@ -290,7 +302,10 @@ export default function PlanningIndexPage() {
   interface IncomingPlan {
     strategySummary?: string;
     contentPillars?: string[];
-    contentCalendar?: Array<{ date?: string; platform?: string; format?: string; concept?: string; hook?: string; CTA?: string; cta?: string }>;
+    contentCalendar?: Array<{
+      date?: string; platform?: string; format?: string; concept?: string; hook?: string; CTA?: string; cta?: string;
+      time?: string; caption?: string; slideCopy?: string[]; productionNote?: string; hashtags?: string; complianceNote?: string;
+    }>;
     budgetSummary?: { allocations?: BudgetAllocation[] };
   }
 
@@ -304,6 +319,14 @@ export default function PlanningIndexPage() {
       concept: s.concept || "",
       hook: s.hook || "",
       CTA: s.CTA || s.cta || "",
+      // Not shown in the editor, but carried to the save so the designer sees
+      // the author's actual brief rather than a bare concept line.
+      time: s.time || "",
+      caption: s.caption || "",
+      slideCopy: Array.isArray(s.slideCopy) ? s.slideCopy : [],
+      productionNote: s.productionNote || "",
+      hashtags: s.hashtags || "",
+      complianceNote: s.complianceNote || "",
     }));
     setCalendarSlots(slots);
     setQtyStatic(slots.filter((s) => s.format === "static").length);
@@ -354,6 +377,15 @@ export default function PlanningIndexPage() {
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || "Failed to import plan");
       applyPlan(data.plan);
+      const rows = (data.plan?.contentCalendar || []).length;
+      setImportNote({
+        // Truncation used to be invisible: the tail of the file was cut and the
+        // plan simply arrived short, with nothing to say why.
+        ok: !data.truncated,
+        text: data.truncated
+          ? `Read ${rows} rows, but the file was too long — ${data.truncatedChars} characters at the end were not read. Split the plan into two files, or trim it, and import again.`
+          : `Read ${rows} rows, ${data.rowsWithDirection} of them with your production direction attached.`,
+      });
       setWizardStep(1);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to import plan");
@@ -427,6 +459,12 @@ export default function PlanningIndexPage() {
       {error && (
         <div className="p-4 rounded-xl bg-red-950/20 border border-red-900/50 text-red-200 text-xs flex items-start space-x-2">
           <span>{error}</span>
+        </div>
+      )}
+
+      {importNote && (
+        <div className={`p-4 rounded-xl border text-xs flex items-start space-x-2 ${importNote.ok ? "bg-emerald-950/20 border-emerald-900/50 text-emerald-200" : "bg-amber-950/20 border-amber-900/50 text-amber-200"}`}>
+          <span>{importNote.text}</span>
         </div>
       )}
 
