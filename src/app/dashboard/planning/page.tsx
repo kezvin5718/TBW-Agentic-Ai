@@ -331,6 +331,17 @@ export default function PlanningIndexPage() {
 
   // Step 3 Trigger: Generate Budget Splits
   const triggerGenerateBudget = async () => {
+    // The step numbers along the top are clickable, so this step is reachable
+    // before a strategy exists. Say what is missing here rather than letting the
+    // server reject it with a list of four field names.
+    if (!selectedClient || !selectedMonth) {
+      setError("Pick a client and a month before generating the budget.");
+      return;
+    }
+    if (!strategySummary.trim()) {
+      setError("There's no strategy summary yet — go back to step 1 (or import a plan) before generating the budget.");
+      return;
+    }
     setGenerating(true);
     setLoaderMessage("AI Media Planner: Optimizing ad budget allocation across conversion, leads and engagement objectives...");
     setError(null);
@@ -357,6 +368,9 @@ export default function PlanningIndexPage() {
       }
 
       setBudgetAllocations(data.allocations || []);
+      // A client with no ad budget gets an empty split rather than an error —
+      // say why, or the step looks like it silently did nothing.
+      if (data.note) setImportNote({ ok: true, text: data.note });
       setWizardStep(3);
     } catch (err: unknown) {
       console.error(err);

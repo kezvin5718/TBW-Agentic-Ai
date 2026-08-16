@@ -20,8 +20,26 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { clientId, month, adBudget, strategySummary, contentCalendar } = body;
 
-    if (!clientId || !month || !adBudget || !strategySummary) {
-      return NextResponse.json({ error: "clientId, month, adBudget, and strategySummary are required" }, { status: 400 });
+    // Name the field that is actually missing. Listing all four told the user
+    // nothing about which one to go and fill in.
+    const missing: string[] = [];
+    if (!clientId) missing.push("a client");
+    if (!month) missing.push("a month");
+    if (!String(strategySummary || "").trim()) missing.push("a strategy summary (finish step 1 first)");
+    if (missing.length > 0) {
+      return NextResponse.json({ error: `Budget planning needs ${missing.join(", ")}.` }, { status: 400 });
+    }
+
+    // A zero budget is a real answer, not a missing one — most clients here run
+    // organic only. It used to fail this check because 0 is falsy, so the whole
+    // step dead-ended with a message about required fields.
+    const budget = Number(adBudget) || 0;
+    if (budget <= 0) {
+      return NextResponse.json({
+        success: true,
+        allocations: [],
+        note: "This client has no ad budget on file, so there is nothing to allocate. Set one on the client record if they are running paid.",
+      });
     }
 
     // 1. Fetch client details
@@ -52,7 +70,7 @@ export async function POST(request: Request) {
 
     const userMessage = `Client Name: ${client.name}
 Month: ${month}
-Total Ad Budget: INR ${adBudget}
+Total Ad Budget: INR ${budget}
 
 Strategy Summary:
 ${strategySummary}
@@ -66,8 +84,8 @@ ${agencyBrainDigest}
 Content Calendar Slots:
 ${JSON.stringify(contentCalendar || [])}
 
-Generate a JSON object allocating the total budget of ${adBudget} across 2 to 4 advertising objectives (e.g., Conversion, Lead Generation, Brand Awareness).
-The sum of percentages must equal 100%. The sum of amounts must equal the total budget of ${adBudget}.
+Generate a JSON object allocating the total budget of ${budget} across 2 to 4 advertising objectives (e.g., Conversion, Lead Generation, Brand Awareness).
+The sum of percentages must equal 100%. The sum of amounts must equal the total budget of ${budget}.
 For each objective, provide:
 - objective: The platform objective name (e.g., Conversion/Sales, Lead Generation, Engagement, Awareness).
 - percentage: The percentage of the budget allocated (e.g. 50).
@@ -107,8 +125,8 @@ For each objective, provide:
 
     const parsed = safeJsonParse(aiResponse, {
       allocations: [
-        { objective: "Conversion/Sales", percentage: 60, amount: Math.round(Number(adBudget) * 0.6), rationale: "Focus on driving conversion and direct purchases." },
-        { objective: "Awareness & Engagement", percentage: 40, amount: Math.round(Number(adBudget) * 0.4), rationale: "Establish visual presence and community engagement." }
+        { objective: "Conversion/Sales", percentage: 60, amount: Math.round(budget * 0.6), rationale: "Focus on driving conversion and direct purchases." },
+        { objective: "Awareness & Engagement", percentage: 40, amount: Math.round(budget * 0.4), rationale: "Establish visual presence and community engagement." }
       ]
     });
 
