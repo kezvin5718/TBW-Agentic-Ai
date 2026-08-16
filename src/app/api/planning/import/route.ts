@@ -46,6 +46,41 @@ interface FullPlan {
   contentPillars: string[];
   contentCalendar: CalendarSlot[];
   budgetSummary: { allocations: Allocation[] };
+  /** Anything the author flagged as still missing, unconfirmed or blocking. */
+  openQuestions: string[];
+}
+
+/**
+ * A gap in the plan the author left for themselves — "[STORE ADDRESS — insert]".
+ *
+ * Left alone these quietly become literal text on a post, or vanish into a
+ * generated headline. Surfacing them turns a silent defect into a question.
+ */
+interface Placeholder {
+  token: string;
+  dates: string[];
+}
+
+/** Bracketed fill-me-in markers, e.g. [STORE ADDRESS — insert] or [X] pieces. */
+function findPlaceholders(rows: CalendarSlot[]): Placeholder[] {
+  const hits = new Map<string, Set<string>>();
+  for (const r of rows) {
+    const text = [r.hook, r.caption, r.productionNote, r.CTA, r.concept, ...(r.slideCopy || [])]
+      .filter(Boolean)
+      .join("\n");
+    // One character is enough — "[X] pieces" is a real blank, and a missed one
+    // is printed onto a post verbatim. A spurious question costs nothing.
+    const re = /\[([^[\]]{1,60})\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      // Keep the brackets — the whole token is what gets substituted later.
+      if (!hits.has(m[0])) hits.set(m[0], new Set());
+      if (r.date) hits.get(m[0])!.add(r.date);
+    }
+  }
+  return Array.from(hits.entries())
+    .map(([token, dates]) => ({ token, dates: Array.from(dates).sort() }))
+    .sort((a, b) => b.dates.length - a.dates.length);
 }
 
 /**
@@ -173,10 +208,12 @@ export async function POST(request: NextRequest) {
 - "hashtags" is the hashtag line exactly as written. "time" is the posting time as written ("7:30 PM").
 - "complianceNote" is any legal, compliance or "read before publishing" warning attached to that day. Empty string if none.
 - Normalize every date to "YYYY-MM-DD" within ${monthLabel}. If an item has no explicit date, spread it sensibly across the month.
-- Map format to one of: "static", "reel", "carousel" — treat any video, film or reel as "reel". Map platform to "instagram", "facebook", or "youtube".`;
+- Map format to one of: "static", "reel", "carousel" — treat any video, film or reel as "reel". Map platform to "instagram", "facebook", or "youtube".
 
-    const fallback: FullPlan = { strategySummary: "", contentPillars: [], contentCalendar: [], budgetSummary: { allocations: [] } };
-    const merged: FullPlan = { strategySummary: "", contentPillars: [], contentCalendar: [], budgetSummary: { allocations: [] } };
+Also return "openQuestions": everything the author says is still missing, unconfirmed, awaited or blocking — the things they wrote down for themselves to chase. Copy each as a short phrase in their own words. Empty array if there are none. Never invent one.`;
+
+    const fallback: FullPlan = { strategySummary: "", contentPillars: [], contentCalendar: [], budgetSummary: { allocations: [] }, openQuestions: [] };
+    const merged: FullPlan = { strategySummary: "", contentPillars: [], contentCalendar: [], budgetSummary: { allocations: [] }, openQuestions: [] };
 
     // Each chunk is parsed on its own and the calendars are concatenated. Only
     // the first pass is asked for strategy and budget — those are stated once,
@@ -193,7 +230,8 @@ Return JSON with EXACTLY this shape:
   "strategySummary": "string",
   "contentPillars": ["..."],
   "contentCalendar": [ ${shape} ],
-  "budgetSummary": { "allocations": [ { "objective": "...", "percentage": 0, "amount": 0, "rationale": "..." } ] }
+  "budgetSummary": { "allocations": [ { "objective": "...", "percentage": 0, "amount": 0, "rationale": "..." } ] },
+  "openQuestions": ["..."]
 }
 
 PLAN CONTENT:
@@ -221,7 +259,9 @@ Return ONLY valid JSON.`;
           part.budgetSummary && Array.isArray(part.budgetSummary.allocations) ? part.budgetSummary : { allocations: [] };
       }
       if (Array.isArray(part.contentCalendar)) merged.contentCalendar.push(...part.contentCalendar.filter((s) => s && s.date));
+      if (Array.isArray(part.openQuestions)) merged.openQuestions.push(...part.openQuestions.map(String).filter(Boolean));
     }
+    merged.openQuestions = Array.from(new Set(merged.openQuestions)).slice(0, 12);
 
     // A day split across two chunks can come back twice — keep the richer copy.
     const byDate = new Map<string, CalendarSlot>();
@@ -235,6 +275,20 @@ Return ONLY valid JSON.`;
 
     const withDirection = merged.contentCalendar.filter((s) => (s.productionNote || "").trim()).length;
 
+    // What the creative pipeline will be missing when it builds these posts.
+    // Colours in particular are silently substituted with "tasteful neutrals"
+    // when absent, so the gap never surfaces — it just produces off-brand work.
+    const { data: brain } = await supabase
+      .from("brand_brain")
+      .select("colors, fonts, brand_brief")
+      .eq("client_id", clientId)
+      .maybeSingle();
+    const brandGaps = {
+      colors: !Array.isArray(brain?.colors) || (brain!.colors as unknown[]).length === 0,
+      fonts: !Array.isArray(brain?.fonts) || (brain!.fonts as unknown[]).length === 0,
+      brandBrief: !String(brain?.brand_brief || "").trim(),
+    };
+
     return NextResponse.json({
       success: true,
       plan: merged,
@@ -245,6 +299,12 @@ Return ONLY valid JSON.`;
       truncatedChars: readWholeFile ? 0 : Math.max(0, text.length - coveredChars),
       chunks: chunks.length,
       rowsWithDirection: withDirection,
+      // Everything the wizard should ask about before this plan is produced.
+      needs: {
+        placeholders: findPlaceholders(merged.contentCalendar),
+        openQuestions: merged.openQuestions,
+        brandGaps,
+      },
       fileName: file.name,
     });
   } catch (err: unknown) {

@@ -83,6 +83,72 @@ export default function PlanningIndexPage() {
   const [calendarSlots, setCalendarSlots] = useState<CalendarSlot[]>([]);
   // What the importer actually managed to read, said out loud.
   const [importNote, setImportNote] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // --- What the plan still needs before it can be produced --------------------
+  // Colours absent from the brand brain are silently replaced with "tasteful
+  // neutrals" downstream, and an unfilled [STORE ADDRESS] becomes literal text
+  // on a post. Both are invisible failures, so they are asked about instead.
+  interface PlanNeeds {
+    placeholders: Array<{ token: string; dates: string[] }>;
+    openQuestions: string[];
+    brandGaps: { colors: boolean; fonts: boolean; brandBrief: boolean };
+  }
+  const [needs, setNeeds] = useState<PlanNeeds | null>(null);
+  const [fills, setFills] = useState<Record<string, string>>({});
+  const [colorDraft, setColorDraft] = useState<string[]>([]);
+  const [fontDraft, setFontDraft] = useState("");
+  const [savingNeeds, setSavingNeeds] = useState(false);
+
+  const needsAnything = (n: PlanNeeds | null) =>
+    !!n && (n.placeholders.length > 0 || n.openQuestions.length > 0 || n.brandGaps.colors || n.brandGaps.fonts);
+
+  /** Put the answers into the rows and the brand brain, then close the panel. */
+  const resolveNeeds = async () => {
+    setSavingNeeds(true);
+    setError(null);
+    try {
+      const colors = colorDraft.filter((c) => /^#[0-9a-fA-F]{6}$/.test(c));
+      const fonts = fontDraft.split(",").map((f) => f.trim()).filter(Boolean);
+      if (colors.length || fonts.length) {
+        await fetch("/api/planning/brand-gaps", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientId: selectedClient, colors, fonts }),
+        });
+      }
+
+      // Substitute answered placeholders everywhere they appear. Unanswered
+      // ones are left in place on purpose — a visible [STORE ADDRESS] in the
+      // draft is far safer than an address quietly invented to fill the hole.
+      const answered = Object.entries(fills).filter(([, v]) => v.trim());
+      if (answered.length) {
+        const swap = (s?: string) =>
+          answered.reduce((acc, [token, value]) => acc.split(token).join(value.trim()), s || "");
+        setCalendarSlots((rows) =>
+          rows.map((r) => ({
+            ...r,
+            hook: swap(r.hook),
+            concept: swap(r.concept),
+            CTA: swap(r.CTA),
+            caption: swap(r.caption),
+            productionNote: swap(r.productionNote),
+            slideCopy: Array.isArray(r.slideCopy) ? r.slideCopy.map((s) => swap(s)) : r.slideCopy,
+          }))
+        );
+      }
+
+      const left = (needs?.placeholders.length || 0) - answered.length;
+      setImportNote({
+        ok: left === 0,
+        text: left === 0
+          ? "All blanks filled. Brand details saved — you won't be asked again for this client."
+          : `${answered.length} filled, ${left} still blank. Those stay visible in the rows rather than being guessed at.`,
+      });
+      setNeeds(null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not save those details");
+    } finally { setSavingNeeds(false); }
+  };
   const [qtyStatic, setQtyStatic] = useState(0);
   const [qtyReel, setQtyReel] = useState(0);
   const [qtyCarousel, setQtyCarousel] = useState(0);
@@ -389,6 +455,12 @@ export default function PlanningIndexPage() {
       if (!res.ok || !data.success) throw new Error(data.error || "Failed to import plan");
       applyPlan(data.plan);
       const rows = (data.plan?.contentCalendar || []).length;
+      if (needsAnything(data.needs)) {
+        setNeeds(data.needs);
+        setFills({});
+        setColorDraft(data.needs.brandGaps.colors ? ["#000000"] : []);
+        setFontDraft("");
+      }
       setImportNote({
         // Truncation used to be invisible: the tail of the file was cut and the
         // plan simply arrived short, with nothing to say why.
@@ -476,6 +548,110 @@ export default function PlanningIndexPage() {
       {importNote && (
         <div className={`p-4 rounded-xl border text-xs flex items-start space-x-2 ${importNote.ok ? "bg-emerald-950/20 border-emerald-900/50 text-emerald-200" : "bg-amber-950/20 border-amber-900/50 text-amber-200"}`}>
           <span>{importNote.text}</span>
+        </div>
+      )}
+
+      {/* Everything here was found in the plan or is missing from the brand
+          brain — nothing on this panel is invented. */}
+      {needs && (
+        <div className="rounded-2xl border border-indigo-900/60 bg-indigo-950/20 p-5 space-y-5">
+          <div>
+            <h3 className="text-sm font-bold text-white">What I still need</h3>
+            <p className="text-[11px] text-slate-400 mt-1">
+              Answer what you can and skip the rest. Anything you skip stays visible in the plan rather than being filled in with a guess.
+            </p>
+          </div>
+
+          {(needs.brandGaps.colors || needs.brandGaps.fonts) && (
+            <div className="space-y-3">
+              <p className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider">
+                Brand — nothing on file, and every post for this client needs it
+              </p>
+              {needs.brandGaps.colors && (
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">
+                    Brand colours <span className="normal-case font-medium text-slate-600">— without these the designer falls back to plain neutrals</span>
+                  </label>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {colorDraft.map((c, i) => (
+                      <div key={i} className="flex items-center gap-1">
+                        <input type="color" value={c}
+                          onChange={(e) => setColorDraft((p) => p.map((x, j) => (j === i ? e.target.value : x)))}
+                          className="w-9 h-9 rounded-lg bg-transparent border border-slate-800 cursor-pointer" />
+                        <button type="button" onClick={() => setColorDraft((p) => p.filter((_, j) => j !== i))}
+                          className="text-slate-600 hover:text-rose-400 text-xs cursor-pointer">✕</button>
+                      </div>
+                    ))}
+                    {colorDraft.length < 6 && (
+                      <button type="button" onClick={() => setColorDraft((p) => [...p, "#A8792C"])}
+                        className="px-3 py-2 rounded-lg border border-slate-800 text-[11px] font-bold text-slate-400 hover:text-white cursor-pointer">
+                        + Add colour
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+              {needs.brandGaps.fonts && (
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Fonts <span className="normal-case font-medium text-slate-600">— comma separated</span></label>
+                  <input value={fontDraft} onChange={(e) => setFontDraft(e.target.value)}
+                    placeholder="e.g. Bodoni Moda, IBM Plex Sans"
+                    className="w-full bg-slate-900/40 border border-slate-800 rounded-xl py-2.5 px-3.5 text-xs text-white placeholder-slate-600 focus:outline-none" />
+                </div>
+              )}
+            </div>
+          )}
+
+          {needs.placeholders.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider">
+                Blanks in your plan ({needs.placeholders.length})
+              </p>
+              {needs.placeholders.map((p) => (
+                <div key={p.token} className="flex items-center gap-3 flex-wrap">
+                  <div className="min-w-[210px]">
+                    <code className="text-[11px] text-amber-300">{p.token}</code>
+                    <p className="text-[10px] text-slate-600">
+                      {p.dates.length > 0 ? `used on ${p.dates.join(", ")}` : "used in the plan"}
+                    </p>
+                  </div>
+                  <input
+                    value={fills[p.token] || ""}
+                    onChange={(e) => setFills((f) => ({ ...f, [p.token]: e.target.value }))}
+                    placeholder="leave empty to keep it blank"
+                    className="flex-1 min-w-[220px] bg-slate-900/40 border border-slate-800 rounded-xl py-2 px-3 text-xs text-white placeholder-slate-600 focus:outline-none"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {needs.openQuestions.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider">
+                Your plan flagged these as still needed
+              </p>
+              <ul className="space-y-1">
+                {needs.openQuestions.map((q, i) => (
+                  <li key={i} className="text-[11px] text-slate-300 flex items-start gap-2">
+                    <span className="text-amber-400 mt-0.5">•</span><span>{q}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[10px] text-slate-600">These are for you to chase — they aren&apos;t saved anywhere yet.</p>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 pt-1">
+            <button type="button" onClick={resolveNeeds} disabled={savingNeeds}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-4 rounded-xl text-xs cursor-pointer disabled:opacity-50">
+              {savingNeeds ? "Saving…" : "Save & continue"}
+            </button>
+            <button type="button" onClick={() => setNeeds(null)}
+              className="py-2 px-4 rounded-xl border border-slate-800 text-slate-400 hover:text-white text-xs cursor-pointer">
+              Skip for now
+            </button>
+          </div>
         </div>
       )}
 
