@@ -83,25 +83,41 @@ function textLayer(spec: PostSpec, width: number, height: number, bandTop: numbe
   const portrait = height > width;
   const bandH = height - bandTop;
 
-  // Start from what the band can hold rather than from the frame width, so a
-  // long headline shrinks instead of spilling out of its own area.
-  const head = fitText(spec.headline.toUpperCase(), avail, Math.round(Math.min(width * 0.10, bandH * 0.26)), 3, BOLD_ADVANCE);
-  const subSize = Math.max(18, Math.round(head.size * 0.38));
-  const subLines = spec.subtext ? fitText(spec.subtext, avail, subSize, 2, REG_ADVANCE) : { size: subSize, lines: [] };
-  const ctaSize = Math.max(16, Math.round(head.size * 0.30));
+  /** One candidate layout at a given headline size. */
+  const layoutAt = (startPx: number) => {
+    const head = fitText(spec.headline.toUpperCase(), avail, startPx, 3, BOLD_ADVANCE);
+    const subSize = Math.max(18, Math.round(head.size * 0.38));
+    const subLines = spec.subtext
+      ? fitText(spec.subtext, avail, subSize, 2, REG_ADVANCE)
+      : { size: subSize, lines: [] as string[] };
+    const ctaSize = Math.max(16, Math.round(head.size * 0.30));
+    const headLead = Math.round(head.size * 1.14);
+    const subLead = Math.round(subLines.size * 1.32);
+    const ctaH = spec.cta ? Math.round(ctaSize * 2.2) : 0;
+    const blockH =
+      head.lines.length * headLead +
+      (subLines.lines.length ? Math.round(subLines.size * 0.6) + subLines.lines.length * subLead : 0) +
+      (ctaH ? Math.round(ctaSize * 0.8) + ctaH : 0);
+    return { head, subLines, ctaSize, headLead, subLead, ctaH, blockH };
+  };
 
-  const headLead = Math.round(head.size * 1.14);
-  const subLead = Math.round(subLines.size * 1.32);
-  const ctaH = spec.cta ? Math.round(ctaSize * 2.2) : 0;
+  const bottomPad = Math.round(height * (portrait ? 0.07 : 0.06));
 
-  const blockH =
-    head.lines.length * headLead +
-    (subLines.lines.length ? Math.round(subLines.size * 0.6) + subLines.lines.length * subLead : 0) +
-    (ctaH ? Math.round(ctaSize * 0.8) + ctaH : 0);
+  // Fit the type to the band's HEIGHT as well as its width. fitText only ever
+  // checked width, so a two-line headline over a two-line subline could build a
+  // block taller than the band — and since the block is anchored to bandTop
+  // when it doesn't fit, the surplus grew straight off the bottom of the frame
+  // and was cut by the edge. That is what sliced "crafted for you" in half.
+  let start = Math.round(Math.min(width * 0.10, bandH * 0.26));
+  let laid = layoutAt(start);
+  while (laid.blockH > bandH - bottomPad && start > 20) {
+    start = Math.round(start * 0.88);
+    laid = layoutAt(start);
+  }
+  const { head, subLines, ctaSize, headLead, subLead, blockH } = laid;
 
   // Sit the block above the bottom edge rather than growing down past it, and
   // never above the band it belongs to.
-  const bottomPad = Math.round(height * (portrait ? 0.07 : 0.06));
   let y = Math.max(bandTop + head.size, height - bottomPad - blockH + head.size);
 
   const parts: string[] = [];
