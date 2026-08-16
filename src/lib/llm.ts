@@ -121,6 +121,10 @@ export async function complete({
 
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      // Generous — a chunked plan import asks for 16k tokens in one pass — but
+      // not unbounded. Without a ceiling a single stalled completion hangs the
+      // whole request until the route budget expires.
+      signal: AbortSignal.timeout(180_000),
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,

@@ -455,19 +455,28 @@ export async function generatePlanPosts(
     for (let frame = 0; frame < spec.frames; frame++) {
       try {
         const { buffer, note, content } = await renderFrame(spec, photos[frame] || photos[0] || null, frame, client?.logo_url);
-        const verdict = await critique(buffer, content);
 
+        // Judge the frame and file it at the same time. Both only need the
+        // finished buffer and neither depends on the other, but running them in
+        // series added the critic's round trip to every frame — across a
+        // multi-frame carousel that is minutes of the route's budget spent
+        // waiting rather than working.
+        //
         // Generated creatives go to Drive or nowhere. Supabase has no room for
         // them, and a quiet fallback would hide a Drive problem behind a
         // filling bucket.
-        const { url, error: storeErr } = await storeToDriveStrict(
-          buffer,
-          `${(client?.name || "client").replace(/[^a-zA-Z0-9]/g, "-")}-${monthLabel}-post-${spec.item + 1}${spec.frames > 1 ? `-${frame + 1}` : ""}.jpg`,
-          "image/jpeg",
-          client?.name || undefined,
-          monthLabel,
-          "TBW Generated Posts"
-        );
+        const [verdict, stored] = await Promise.all([
+          critique(buffer, content),
+          storeToDriveStrict(
+            buffer,
+            `${(client?.name || "client").replace(/[^a-zA-Z0-9]/g, "-")}-${monthLabel}-post-${spec.item + 1}${spec.frames > 1 ? `-${frame + 1}` : ""}.jpg`,
+            "image/jpeg",
+            client?.name || undefined,
+            monthLabel,
+            "TBW Generated Posts"
+          ),
+        ]);
+        const { url, error: storeErr } = stored;
         if (!url) {
           failed++;
           notes.push(`Post ${spec.item + 1}: not saved — ${storeErr || "Google Drive refused the upload."}`);

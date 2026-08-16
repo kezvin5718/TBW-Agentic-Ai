@@ -1,3 +1,14 @@
+/**
+ * Ceilings on how long a provider may take before the call is abandoned.
+ *
+ * There were none. A plan batch renders every frame in sequence inside a single
+ * 600-second route budget, so one stalled request took the whole run down with
+ * it and the screen simply sat there spinning. Generation is genuinely slow, so
+ * the limit is generous; describing an image is not, so it is tighter.
+ */
+const IMAGE_TIMEOUT_MS = 120_000;
+const VISION_TIMEOUT_MS = 45_000;
+
 export interface OpenAIImageGenerationOptions {
   model?: string;
   ratio?: string;
@@ -35,6 +46,11 @@ export async function describeImageViaVision(imageUrl: string, instruction: stri
   try {
     const res = await fetch(endpoint, {
       method: "POST",
+      // A batch renders frames one after another inside a 600s route budget, so
+      // one provider stall used to swallow the whole run and every later frame
+      // with it. Failing this call fast costs one description; hanging costs
+      // the batch.
+      signal: AbortSignal.timeout(VISION_TIMEOUT_MS),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
@@ -113,6 +129,7 @@ export async function generateBrandImage(
   try {
     const res = await fetch(endpoint, {
       method: "POST",
+      signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS),
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(body),
     });
@@ -191,6 +208,7 @@ export async function generateOpenAIImage(
 
     const response = await fetch("https://api.openai.com/v1/images/generations", {
       method: "POST",
+      signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
