@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { downloadDriveFileByUrl } from "@/lib/google-drive";
 import { spawn } from "child_process";
-import { writeFile, readFile, rm, stat, readdir } from "fs/promises";
+import { writeFile, readFile, rm, stat, readdir, rename } from "fs/promises";
 import { createHash } from "crypto";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -75,8 +75,23 @@ async function localVideoPath(url: string): Promise<string> {
   } catch { /* not cached yet */ }
   const buf = await fetchMedia(url);
   if (buf.length > MAX_BYTES) throw new TooLarge(buf.length);
-  await writeFile(p, buf);
-  return p;
+
+  // Write to a private name and swap it in with rename, which is atomic on the
+  // same filesystem: a reader sees either no file or the whole file, never a
+  // prefix of one. Writing straight to `p` let a second request stat a
+  // half-downloaded video, hand ffmpeg a truncated file, and get back a smeared
+  // frame — and the overlap is the normal case, not an edge one, because the
+  // frame strip and the scrub preview both fire on the same URL a moment apart.
+  const partPath = `${p}.${process.pid}-${Math.random().toString(36).slice(2, 8)}.part`;
+  await writeFile(partPath, buf);
+  try {
+    await rename(partPath, p);
+    return p;
+  } catch {
+    // Rename failed — use the copy we know is complete. It still carries the
+    // cache prefix, so the sweep will clear it on schedule.
+    return partPath;
+  }
 }
 
 /**
