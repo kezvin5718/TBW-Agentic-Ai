@@ -7,11 +7,26 @@ import {
   runPublishingScheduler
 } from "@/lib/cron-jobs";
 
-export const cronSchedulerStatus = {
-  running: false,
-  lastRun: {} as Record<string, string>,
-  jobsScheduledCount: 0
-};
+interface CronStatus {
+  running: boolean;
+  lastRun: Record<string, string>;
+  jobsScheduledCount: number;
+}
+
+/**
+ * Held on globalThis so every bundle sees the same object.
+ *
+ * instrumentation.ts and the route handlers are compiled separately, so a
+ * plain module-level constant gave them one copy each: the scheduler started
+ * and set running=true in its own copy, while /api/health read an untouched
+ * one and reported the scheduler dead with zero jobs. It had in fact been
+ * running the whole time — a health check that cries wolf hides the real
+ * outage when it comes.
+ */
+const STATUS_KEY = Symbol.for("tbw.cronSchedulerStatus");
+const globalStore = globalThis as unknown as Record<symbol, CronStatus | undefined>;
+globalStore[STATUS_KEY] ??= { running: false, lastRun: {}, jobsScheduledCount: 0 };
+export const cronSchedulerStatus: CronStatus = globalStore[STATUS_KEY]!;
 
 export function startCronScheduler() {
   if (cronSchedulerStatus.running) {
