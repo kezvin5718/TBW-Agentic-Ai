@@ -3,7 +3,10 @@ import { createServiceRoleClient } from "@/lib/supabase/server";
 import { completeVision } from "@/lib/llm-vision";
 import { safeJsonParse } from "@/lib/llm";
 import { generateBrandImage } from "@/lib/integrations/openai-images";
-import { storeToDriveStrict, isDriveConnected } from "@/lib/google-drive";
+import { storeToDriveStrict, isDriveConnected, downloadDriveFileByUrl } from "@/lib/google-drive";
+
+/** How long any single supporting asset may take before the render gives up. */
+const ASSET_TIMEOUT_MS = 30_000;
 import { analysePlan, pixelsFor, shapeFor, type PostSpec } from "@/lib/post-designer";
 
 /**
@@ -180,12 +183,37 @@ async function canvas(spec: PostSpec, width: number, height: number): Promise<Bu
   return sharp({ create: { width, height, channels: 3, background: rgb } }).png().toBuffer();
 }
 
+/**
+ * Fetch an image the pipeline needs, without trusting the host to answer.
+ *
+ * Product photos and logos live on Google Drive, and Google's CDN does not
+ * reliably serve those bytes to a third party — it can simply never respond.
+ * A plain untimed fetch therefore hung the render, and because frames are built
+ * in sequence the whole batch sat there until the route budget expired. Drive
+ * URLs go through the API that is allowed to read them; everything else gets a
+ * hard ceiling.
+ */
+async function fetchImageBytes(url: string): Promise<Buffer | null> {
+  if (/googleusercontent\.com|drive\.google\.com/.test(url)) {
+    try {
+      const viaApi = await downloadDriveFileByUrl(url);
+      if (viaApi && viaApi.length > 0) return viaApi;
+    } catch { /* fall through to a plain, bounded fetch */ }
+  }
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(ASSET_TIMEOUT_MS) });
+    if (!res.ok) return null;
+    return Buffer.from(await res.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
 /** The client's own photograph, filling the area above the type band. Never redrawn. */
 async function productBase(photoUrl: string, width: number, areaH: number): Promise<Buffer | null> {
   try {
-    const res = await fetch(photoUrl);
-    if (!res.ok) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
+    const buf = await fetchImageBytes(photoUrl);
+    if (!buf) return null;
     // "attention" keeps the jewellery in frame rather than centre-cropping it away.
     return await sharp(buf).resize({ width, height: areaH, fit: "cover", position: "attention" }).png().toBuffer();
   } catch {
@@ -204,9 +232,8 @@ async function productBase(photoUrl: string, width: number, areaH: number): Prom
 async function logoLayer(logoUrl: string | null | undefined, width: number, height: number): Promise<OverlayOptions[]> {
   if (!logoUrl) return [];
   try {
-    const res = await fetch(logoUrl);
-    if (!res.ok) return [];
-    const buf = Buffer.from(await res.arrayBuffer());
+    const buf = await fetchImageBytes(logoUrl);
+    if (!buf) return [];
     const maxW = Math.round(width * 0.2);
     const maxH = Math.round(height * 0.07);
     const resized = await sharp(buf)

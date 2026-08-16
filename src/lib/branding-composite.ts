@@ -63,7 +63,9 @@ export async function applyClientBrandingOverlay(
   if (includeLogo && logoUrl) {
     try {
       console.log(`🎨 Server Branding: Fetching client logo from URL: ${logoUrl}`);
-      const logoRes = await fetch(logoUrl);
+      // Bounded: a client logo on Drive can leave this request open forever,
+      // and a missing logo is a far smaller problem than a stalled render.
+      const logoRes = await fetch(logoUrl, { signal: AbortSignal.timeout(30_000) });
       if (logoRes.ok) {
         const logoBuffer = Buffer.from(await logoRes.arrayBuffer());
         const logoMaxWidth = Math.round(imgWidth * (logoWidthPct / 100));
