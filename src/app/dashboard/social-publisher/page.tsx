@@ -752,6 +752,46 @@ export default function SocialPublisherPage() {
   // Gap between posts that land on the same day. Null means nobody is spaced
   // automatically and the times on the rows are the only source.
   const [gapMins, setGapMins] = useState<number | null>(5);
+  // Explicit running order. The list arrives in upload order, but that is rarely
+  // the order it should go out in — two reels then three stills is a lump, not a
+  // grid — so the sequence is the team's to arrange, and the dates follow it.
+  const [autoOrder, setAutoOrder] = useState<string[]>([]);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+  const [captionBusy, setCaptionBusy] = useState(false);
+
+  /** Move one row to sit where another currently is, keeping the rest in order. */
+  const reorder = (fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    setAutoOrder((prev) => {
+      const next = prev.filter((x) => x !== fromId);
+      const at = next.indexOf(toId);
+      if (at < 0) return prev;
+      next.splice(at, 0, fromId);
+      return next;
+    });
+  };
+
+  /** Fill in the captions that are missing, including ones that failed before. */
+  const fillCaptions = async () => {
+    setCaptionBusy(true);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/social-publisher/automation", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: autoClient, action: "captions" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not write the captions");
+      setNotice({
+        ok: (data.failed || 0) === 0,
+        text: data.message + (data.remaining > 0 ? ` ${data.remaining} still without one — run it again.` : ""),
+      });
+      await loadAutomation(autoClient);
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not write the captions" });
+    } finally { setCaptionBusy(false); }
+  };
   const [autoCaptions, setAutoCaptions] = useState<Record<string, string>>({});
   const [autoSkip, setAutoSkip] = useState<Set<string>>(new Set());
 
@@ -769,6 +809,7 @@ export default function SocialPublisherPage() {
       setAutoRejected(data.rejected || 0);
       setAutoAwaiting(data.awaitingCaption || 0);
       setAutoCaptions(Object.fromEntries(rows.map((r) => [r.id, r.caption || ""])));
+      setAutoOrder(rows.map((r) => r.id));
       setAutoDates({});
       setAutoTimes({});
       setAutoSkip(new Set());
@@ -809,12 +850,21 @@ export default function SocialPublisherPage() {
    * Two posts on one date cannot fire at the same instant, so each one after the
    * first moves five minutes later.
    */
+  const orderedRows = useMemo(() => {
+    if (autoOrder.length === 0) return autoRows;
+    const byId = new Map(autoRows.map((r) => [r.id, r]));
+    const known = autoOrder.map((id) => byId.get(id)).filter(Boolean) as AutoRow[];
+    // Anything that arrived after the order was set still has to appear.
+    const extras = autoRows.filter((r) => !autoOrder.includes(r.id));
+    return [...known, ...extras];
+  }, [autoRows, autoOrder]);
+
   const schedule = useMemo(() => {
     const out: Record<string, Slot> = {};
     const usedPerDay: Record<string, number> = {};
     let prev: Date | null = null;
 
-    for (const r of autoRows) {
+    for (const r of orderedRows) {
       if (autoSkip.has(r.id)) continue;
 
       let date = "";
@@ -856,9 +906,9 @@ export default function SocialPublisherPage() {
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRows, autoSkip, autoDates, autoTimes, autoStart, autoTime, cadence, cadenceStep, gapMins]);
+  }, [orderedRows, autoSkip, autoDates, autoTimes, autoStart, autoTime, cadence, cadenceStep, gapMins]);
 
-  const autoReady = autoRows.filter((r) => !!schedule[r.id]);
+  const autoReady = orderedRows.filter((r) => !!schedule[r.id]);
   const autoSameDay = Object.values(schedule).filter((s) => s.nthOfDay > 0).length;
   const autoOutOfOrder = Object.values(schedule).filter((s) => s.outOfOrder).length;
   const autoCollisions = Object.values(schedule).filter((s) => s.collides).length;
@@ -871,7 +921,7 @@ export default function SocialPublisherPage() {
     try {
       // The per-row time matters here, not the base one: two posts sharing a day
       // are five minutes apart and must be sent that way.
-      const items = autoRows
+      const items = orderedRows
         .filter((r) => !!schedule[r.id])
         .map((r) => ({
           uploadId: r.id,
@@ -2040,18 +2090,42 @@ export default function SocialPublisherPage() {
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                   Approved &amp; waiting <span className="text-slate-600 normal-case font-medium">({autoReady.length} of {autoRows.length} selected)</span>
                 </label>
-                {autoAwaiting > 0 && (
-                  <span className="text-[10px] text-amber-400 font-bold">{autoAwaiting} caption(s) still being written — reload in a moment.</span>
-                )}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="text-[10px] text-slate-600">Drag a row by ⠿ to reorder — the dates follow the sequence.</span>
+                  {autoAwaiting > 0 && (
+                    <button onClick={fillCaptions} disabled={captionBusy}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-[11px] font-bold text-black cursor-pointer disabled:opacity-50">
+                      {captionBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                      <span>{captionBusy ? "Writing…" : `Write ${autoAwaiting} missing caption(s)`}</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
-              {autoRows.map((r, i) => {
+              {orderedRows.map((r, i) => {
                 const slot = schedule[r.id];
                 const date = slot?.date || autoDates[r.id] || "";
                 const skipped = autoSkip.has(r.id);
                 return (
-                  <div key={r.id} className={`flex items-start gap-3 rounded-xl border p-3 ${skipped ? "border-slate-900 bg-slate-950/30 opacity-50" : "border-slate-900 bg-slate-950/70"}`}>
-                    <span className="w-6 h-6 rounded-full bg-[var(--yellow)] text-black text-[10px] font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
+                  <div
+                    key={r.id}
+                    draggable
+                    onDragStart={(e) => { setDragId(r.id); e.dataTransfer.effectAllowed = "move"; }}
+                    onDragEnd={() => { setDragId(null); setOverId(null); }}
+                    onDragOver={(e) => { e.preventDefault(); if (dragId && dragId !== r.id) setOverId(r.id); }}
+                    onDragLeave={() => setOverId((o) => (o === r.id ? null : o))}
+                    onDrop={(e) => { e.preventDefault(); if (dragId) reorder(dragId, r.id); setDragId(null); setOverId(null); }}
+                    className={`flex items-start gap-3 rounded-xl border p-3 transition-all ${
+                      overId === r.id ? "border-[var(--yellow)] bg-[var(--yellow)]/5"
+                      : dragId === r.id ? "border-indigo-600 opacity-40"
+                      : skipped ? "border-slate-900 bg-slate-950/30 opacity-50"
+                      : "border-slate-900 bg-slate-950/70"
+                    }`}
+                  >
+                    <div className="flex flex-col items-center gap-1 shrink-0 mt-0.5">
+                      <span className="w-6 h-6 rounded-full bg-[var(--yellow)] text-black text-[10px] font-black flex items-center justify-center">{i + 1}</span>
+                      <span className="text-slate-600 cursor-grab active:cursor-grabbing select-none leading-none" title="Drag to reorder — the dates follow the order">⠿</span>
+                    </div>
                     <div className={`w-12 shrink-0 rounded-lg overflow-hidden border border-slate-800 bg-slate-900 ${["reel", "story"].includes(r.content_type) ? "aspect-[9/16]" : "aspect-square"}`}>
                       {r.media_type === "video"
                         ? <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs">▶</div>

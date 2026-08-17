@@ -87,6 +87,66 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json();
   const { clientId } = body;
+
+  // Write the captions that are missing.
+  //
+  // Captions are normally written as QC passes, but that only ever runs over
+  // rows still marked pending — so anything approved before the feature existed,
+  // or whose caption failed once, was stuck with no way back. This is that way
+  // back, and it is deliberately a button rather than something the screen does
+  // on load: it is a vision read and a caption per creative, and fifty of them
+  // is not something to start by accident.
+  if (body.action === "captions") {
+    if (!clientId) return NextResponse.json({ error: "Select a client" }, { status: 400 });
+    const admin2 = createServiceRoleClient();
+    const { data: pending } = await admin2
+      .from("creative_uploads")
+      .select("id, caption, caption_status")
+      .eq("client_id", clientId)
+      .eq("status", "uploaded")
+      .eq("qc_status", "match")
+      .is("festival_id", null)
+      .neq("content_type", "thumbnail")
+      .neq("content_type", "story")
+      .order("created_at", { ascending: true })
+      .limit(Number(body.limit) || 15);
+
+    const todo = (pending || []).filter((r) => !String(r.caption || "").trim());
+    if (todo.length === 0) return NextResponse.json({ success: true, written: 0, remaining: 0, message: "Every creative already has a caption." });
+
+    const { writeCaptionFor } = await import("@/lib/upload-batch");
+    const origin = request.nextUrl.origin;
+    const cookie = request.headers.get("cookie") || "";
+    let written = 0;
+    const problems: string[] = [];
+    for (const r of todo) {
+      // A failed attempt has to be allowed another go, or the row stays empty
+      // for good.
+      if (r.caption_status === "failed" || r.caption_status === "no_contact") {
+        await admin2.from("creative_uploads").update({ caption_status: "none" }).eq("id", r.id);
+      }
+      if (await writeCaptionFor(r.id, origin, cookie)) written++;
+      else problems.push(r.id);
+    }
+
+    const { count: stillEmpty } = await admin2
+      .from("creative_uploads")
+      .select("id", { count: "exact", head: true })
+      .eq("client_id", clientId)
+      .eq("status", "uploaded")
+      .eq("qc_status", "match")
+      .is("festival_id", null)
+      .or("caption.is.null,caption.eq.");
+
+    return NextResponse.json({
+      success: true,
+      written,
+      failed: problems.length,
+      remaining: Math.max(0, (stillEmpty || 0)),
+      message: `${written} caption(s) written${problems.length ? `, ${problems.length} could not be` : ""}.`,
+    });
+  }
+
   const platforms: string[] = Array.isArray(body.platforms) ? body.platforms.filter(Boolean) : [];
   const items: Array<{ uploadId: string; caption?: string; scheduledFor: string }> = Array.isArray(body.items) ? body.items : [];
 
