@@ -71,6 +71,21 @@ export async function writeCaptionFor(uploadId: string, baseUrl: string, cookie:
   if (row.caption_status === "done") return false;
 
   try {
+    // Read the creative properly first — every part of a video, and the text
+    // printed on it word for word. Stored, so the caption writer is handed the
+    // reading instead of doing its own single-frame guess, and so a later
+    // regeneration costs nothing.
+    const { readCreative } = await import("@/lib/creative-reader");
+    const reading = await readCreative(row.file_url, row.media_type);
+    await admin
+      .from("creative_uploads")
+      .update({
+        vision_description: reading.description || null,
+        on_creative_text: reading.onCreativeText || null,
+        frames_read: reading.framesRead || null,
+      })
+      .eq("id", uploadId);
+
     const res = await fetch(`${baseUrl}/api/social-publisher/generate-caption`, {
       method: "POST",
       headers: { "Content-Type": "application/json", cookie },
@@ -81,6 +96,8 @@ export async function writeCaptionFor(uploadId: string, baseUrl: string, cookie:
         mediaUrl: row.file_url,
         mediaIsVideo: row.media_type === "video",
         thumbnailUrl: row.thumbnail_url || undefined,
+        visionDescription: reading.description,
+        onCreativeText: reading.onCreativeText,
       }),
     });
     const data = await res.json();

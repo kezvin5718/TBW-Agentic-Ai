@@ -746,6 +746,9 @@ export default function SocialPublisherPage() {
   // Per-row overrides. A row keeps its own date once touched, even when the
   // cadence is re-applied — that is the whole point of being able to change one.
   const [autoDates, setAutoDates] = useState<Record<string, string>>({});
+  // Per-row times. Several videos can share a day at hours the team chooses,
+  // rather than being forced onto one time plus automatic spacing.
+  const [autoTimes, setAutoTimes] = useState<Record<string, string>>({});
   const [autoCaptions, setAutoCaptions] = useState<Record<string, string>>({});
   const [autoSkip, setAutoSkip] = useState<Set<string>>(new Set());
 
@@ -764,6 +767,7 @@ export default function SocialPublisherPage() {
       setAutoAwaiting(data.awaitingCaption || 0);
       setAutoCaptions(Object.fromEntries(rows.map((r) => [r.id, r.caption || ""])));
       setAutoDates({});
+      setAutoTimes({});
       setAutoSkip(new Set());
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not load" });
@@ -786,7 +790,7 @@ export default function SocialPublisherPage() {
     return { time: `${pad2(Math.floor(total / 60))}:${pad2(total % 60)}`, clamped: false };
   };
 
-  interface Slot { date: string; time: string; nthOfDay: number; outOfOrder: boolean; clamped: boolean }
+  interface Slot { date: string; time: string; nthOfDay: number; outOfOrder: boolean; clamped: boolean; manualTime: boolean }
 
   /**
    * The whole schedule, worked out in one pass.
@@ -828,14 +832,19 @@ export default function SocialPublisherPage() {
 
       const nth = usedPerDay[date] || 0;
       usedPerDay[date] = nth + 1;
-      const { time, clamped } = timePlus(autoTime, nth * 5);
 
-      out[r.id] = { date, time, nthOfDay: nth, outOfOrder, clamped };
+      // A time set by hand is used as given. Automatic five-minute spacing is
+      // there to stop two posts firing at once, not to overrule someone putting
+      // eight videos out at the hours they actually want them at.
+      const ownTime = autoTimes[r.id];
+      const { time, clamped } = ownTime ? { time: ownTime, clamped: false } : timePlus(autoTime, nth * 5);
+
+      out[r.id] = { date, time, nthOfDay: nth, outOfOrder, clamped, manualTime: !!ownTime };
       prev = asDate;
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRows, autoSkip, autoDates, autoStart, autoTime, cadence, cadenceStep]);
+  }, [autoRows, autoSkip, autoDates, autoTimes, autoStart, autoTime, cadence, cadenceStep]);
 
   const autoReady = autoRows.filter((r) => !!schedule[r.id]);
   const autoSameDay = Object.values(schedule).filter((s) => s.nthOfDay > 0).length;
@@ -1959,14 +1968,14 @@ export default function SocialPublisherPage() {
             </div>
             <p className="text-[10px] text-slate-600">
               {cadence === "manual"
-                ? "Set each date yourself — nothing is filled in."
+                ? "Set each date and time yourself — nothing is filled in. Several posts can share a day at whatever hours you choose."
                 : `Dates run ${cadence === "alternate" ? "every other day" : "one per day"}. Change any row and everything below it re-flows from there — move post 2 to the 17th and post 3 becomes the 18th.`}
             </p>
             {(autoSameDay > 0 || autoOutOfOrder > 0) && (
               <div className="flex flex-wrap gap-3 text-[10px] pt-1">
                 {autoSameDay > 0 && (
                   <span className="text-[var(--yellow)] font-bold">
-                    {autoSameDay} post(s) share a day — spaced 5 minutes apart
+                    {autoSameDay} post(s) share a day — spaced 5 minutes apart unless you set the time yourself
                   </span>
                 )}
                 {autoOutOfOrder > 0 && (
@@ -2036,10 +2045,23 @@ export default function SocialPublisherPage() {
                           slot?.outOfOrder ? "border-amber-600" : autoDates[r.id] ? "border-indigo-600" : "border-slate-800"
                         }`} />
                       {slot && (
-                        <span className={`text-[10px] font-mono ${slot.nthOfDay > 0 ? "text-[var(--yellow)] font-bold" : "text-slate-500"}`}>
-                          {slot.time}
-                          {slot.nthOfDay > 0 && ` · +${slot.nthOfDay * 5}m`}
-                        </span>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="time"
+                            value={slot.time}
+                            onClick={openPicker}
+                            onChange={(e) => setAutoTimes((t) => ({ ...t, [r.id]: e.target.value }))}
+                            title="Set this post's own time"
+                            className={`w-[92px] bg-slate-950 border rounded-lg px-1.5 py-1 text-[11px] cursor-pointer [color-scheme:dark] focus:outline-none ${
+                              slot.manualTime ? "border-indigo-600 text-white"
+                              : slot.nthOfDay > 0 ? "border-slate-800 text-[var(--yellow)]"
+                              : "border-slate-800 text-slate-400"
+                            }`}
+                          />
+                          {slot.nthOfDay > 0 && !slot.manualTime && (
+                            <span className="text-[9px] font-bold text-[var(--yellow)]" title="Spaced so two posts don't fire at once">+{slot.nthOfDay * 5}m</span>
+                          )}
+                        </div>
                       )}
                       {slot?.outOfOrder && (
                         <span className="text-[9px] font-bold text-amber-400" title="This posts before the one above it">⚠ out of order</span>
@@ -2047,9 +2069,13 @@ export default function SocialPublisherPage() {
                       {slot?.clamped && (
                         <span className="text-[9px] font-bold text-rose-400" title="The 5-minute spacing would cross midnight">⚠ time capped</span>
                       )}
-                      {autoDates[r.id] && (
-                        <button onClick={() => setAutoDates((d) => { const n = { ...d }; delete n[r.id]; return n; })}
-                          className="text-[9px] font-bold text-slate-600 hover:text-white cursor-pointer">reset date</button>
+                      {(autoDates[r.id] || autoTimes[r.id]) && (
+                        <button
+                          onClick={() => {
+                            setAutoDates((d) => { const n = { ...d }; delete n[r.id]; return n; });
+                            setAutoTimes((t) => { const n = { ...t }; delete n[r.id]; return n; });
+                          }}
+                          className="text-[9px] font-bold text-slate-600 hover:text-white cursor-pointer">reset</button>
                       )}
                       <button onClick={() => setAutoSkip((s) => { const n = new Set(s); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; })}
                         className="text-[10px] font-bold text-slate-500 hover:text-white cursor-pointer">

@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { complete } from "@/lib/llm";
 import { MODEL_CHATGPT, MODEL_FAST } from "@/lib/llm-config";
 import { describeImageViaVision } from "@/lib/integrations/openai-images";
+import { readCreative } from "@/lib/creative-reader";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +34,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { clientId, platform, contentType, brief, model, mediaUrl, mediaIsVideo, thumbnailUrl } = await request.json();
+  const body = await request.json();
+  const { clientId, platform, contentType, brief, model, mediaUrl, mediaIsVideo, thumbnailUrl } = body;
   if (!clientId) return NextResponse.json({ error: "Select a client first" }, { status: 400 });
 
   const { data: client } = await supabase.from("clients").select("name, products, target_audience").eq("id", clientId).single();
@@ -44,17 +46,28 @@ export async function POST(request: NextRequest) {
     .eq("client_id", clientId)
     .maybeSingle();
 
-  // What's actually attached — a caption written blind to the creative reads
-  // generic. A still image gets described directly; a reel falls back to its
-  // thumbnail (a real video description isn't worth a transcription pass here).
-  let visual = "";
-  const stillToRead = !mediaIsVideo ? mediaUrl : thumbnailUrl;
-  if (stillToRead) {
+  // What's actually on the creative. A caption written blind reads generic, and
+  // worse, invents details — so the creative is read properly: every part of a
+  // video, not just its cover, and the text on it copied out word for word.
+  //
+  // The old path took the thumbnail for a video, and a Content Hub reel rarely
+  // has one, so this came back empty and the model wrote from the brand brief
+  // alone. A price shown on screen never reached the caption.
+  let visual = String(body.visionDescription || "").trim();
+  let onCreativeText = String(body.onCreativeText || "").trim();
+
+  if (!visual && !onCreativeText && mediaUrl) {
     try {
-      visual = await describeImageViaVision(
-        stillToRead,
-        "Describe exactly what is shown in this social media creative: the product, setting, colours, mood, and any text visible on it. Under 60 words, factual only."
-      );
+      const reading = await readCreative(mediaUrl, mediaIsVideo ? "video" : "image");
+      visual = reading.description;
+      onCreativeText = reading.onCreativeText;
+      // A video that could not be sampled still has its cover to fall back on.
+      if (!visual && mediaIsVideo && thumbnailUrl) {
+        visual = await describeImageViaVision(
+          thumbnailUrl,
+          "Describe exactly what is shown in this social media creative: the product, setting, colours, mood, and any text visible on it. Under 60 words, factual only."
+        );
+      }
     } catch { /* caption still works without it */ }
   }
 
@@ -77,6 +90,12 @@ export async function POST(request: NextRequest) {
       content: `Write a ${platform || "instagram"} ${contentType || "post"} caption for the brand "${client.name}".
 
 ${visual ? `What's actually in the attached ${mediaIsVideo ? "reel" : "creative"}: ${visual}` : mediaIsVideo ? "This is a video/reel — no still available to describe, write from the brief only." : "No creative attached yet — write from the brief only."}
+${onCreativeText ? `
+TEXT PRINTED ON THE CREATIVE, copied word for word:
+${onCreativeText}
+
+These are the facts the creative itself is making. Any price, weight, purity, carat, discount, scheme name, date or offer above must appear in the caption EXACTLY as written — same number, same currency, same spelling. Do not round "₹45,999" to "45,000", do not turn "22KT 916 Hallmark" into "22 carat", and do not add a figure that is not in that list. If the creative names a price, the caption must not read as though it has no price.` : `
+No text was readable on the creative, so state no price, weight, purity, discount or offer of any kind — there is nothing to take one from, and inventing one is the single worst thing this caption can do.`}
 
 Brand tone: ${brain?.caption_tone || "professional, warm"}
 Target audience: ${client.target_audience || "general"}
