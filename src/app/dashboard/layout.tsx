@@ -79,6 +79,7 @@ export default async function DashboardLayout({
     { name: "6 · Image Studio", href: "/dashboard/image-studio", icon: Image, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "7 · Creative Approvals", href: "/dashboard/creatives-review", icon: Shield, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "8 · Content Hub", href: "/dashboard/content-hub", icon: FolderUp, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "8b · Festivals", href: "/dashboard/festivals", icon: Sparkles, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "9 · Social Publisher", href: "/dashboard/social-publisher", icon: Send, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "10 · Ad Publishing", href: "/dashboard/publishing", icon: UploadCloud, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "11 · Meta Ads Manager", href: "/dashboard/ads", icon: Megaphone, roles: ["founder", "employee"], section: "Client Workflow" },

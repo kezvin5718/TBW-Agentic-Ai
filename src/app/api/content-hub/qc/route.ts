@@ -62,7 +62,7 @@ export async function POST() {
   const admin = createServiceRoleClient();
   const { data: rows } = await admin
     .from("creative_uploads")
-    .select("id, file_url, file_name, media_type, client_id, clients(name)")
+    .select("id, file_url, file_name, media_type, client_id, clients(name), festival_id, festivals(name)")
     .eq("qc_status", "pending")
     .order("created_at", { ascending: true })
     .limit(10);
@@ -76,9 +76,12 @@ export async function POST() {
 
   let checked = 0;
   let flagged = 0;
+  let autoScheduled = 0;
 
   for (const row of rows) {
     const uploadedFor = (row.clients as { name?: string } | null)?.name || "Unknown";
+    const festivalName = (row.festivals as { name?: string } | null)?.name || "";
+    let detectedFestival = "";
     // Sister concerns and parent companies share artwork, so their names on a
     // creative are expected rather than evidence of the wrong brand.
     const sisters = allowedFor.get(row.client_id) || [];
@@ -95,15 +98,23 @@ export async function POST() {
       const small = await sharp(buf).resize({ width: 768, withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer();
       const dataUrl = `data:image/jpeg;base64,${small.toString("base64")}`;
 
+      // A festival story is also checked against the festival it was filed
+      // under, because the expensive mistake there is a Diwali creative going
+      // out on Holi — the branding can be perfectly correct while the greeting
+      // is the wrong one entirely.
       const raw = await completeVision({
         system: "You are a brand-QC checker for an ad agency. Look at the creative and identify which brand it belongs to using visible logos, brand names, product labels and text. Output ONLY JSON.",
         prompt: `This creative was uploaded for the brand: "${uploadedFor}".
 Known agency brands: ${brandNames.join(", ")}.
 ${sisters.length > 0 ? `"${uploadedFor}" is related to: ${sisters.join(", ")}. Seeing those names on this creative is expected and correct.\n` : ""}
 Identify the brand visible in this creative. Return JSON exactly:
-{ "detected_brand": "<brand name you see, or 'unknown'>", "verdict": "match" | "mismatch" | "unsure", "reason": "<one short line>" }
+{ "detected_brand": "<brand name you see, or 'unknown'>", "verdict": "match" | "mismatch" | "unsure", "reason": "<one short line>"${festivalName ? `, "detected_festival": "<the festival or occasion this creative is for, or 'unknown'>", "festival_verdict": "match" | "mismatch" | "unsure"` : ""} }
 
-Rules: "match" if the visible branding belongs to "${uploadedFor}"${sisters.length > 0 ? ` or to any of its related brands (${sisters.join(", ")})` : ""}. "mismatch" if it clearly shows a DIFFERENT brand (especially one of the known brands). "unsure" if no clear branding is visible.`,
+Rules: "match" if the visible branding belongs to "${uploadedFor}"${sisters.length > 0 ? ` or to any of its related brands (${sisters.join(", ")})` : ""}. "mismatch" if it clearly shows a DIFFERENT brand (especially one of the known brands). "unsure" if no clear branding is visible.${
+  festivalName
+    ? `\n\nThis was filed as a festival story for: "${festivalName}". Judge the occasion from greetings, deities, symbols, colours and any festival wording on the creative. "match" if it is for ${festivalName}. "mismatch" if it is clearly for a DIFFERENT festival or occasion. "unsure" if the creative carries no festival cue at all.`
+    : ""
+}`,
         imageDataUrl: dataUrl,
       });
       const v = safeJsonParse<Verdict>(raw, { verdict: "unsure", detected_brand: "unknown", reason: "unparseable response" });
@@ -130,16 +141,47 @@ Rules: "match" if the visible branding belongs to "${uploadedFor}"${sisters.leng
           note = `Also shows "${other}" alongside ${uploadedFor}. ${note}`.trim();
         }
       }
+      // The festival verdict can fail a creative whose branding is perfect.
+      if (festivalName) {
+        const fv = v as unknown as { detected_festival?: string; festival_verdict?: string };
+        detectedFestival = String(fv.detected_festival || "");
+        if (fv.festival_verdict === "mismatch") {
+          status = "mismatch";
+          note = `Filed under "${festivalName}" but the creative looks like ${detectedFestival || "a different occasion"}. ${note}`.trim();
+        }
+      }
       if (row.media_type === "video") note = `${note} (judged from a video frame)`.trim();
     } catch (err: unknown) {
       status = "unsure";
       note = `Check failed: ${err instanceof Error ? err.message : String(err)}`;
     }
 
-    await admin.from("creative_uploads").update({ qc_status: status, qc_detected_brand: detected || null, qc_note: note || null }).eq("id", row.id);
+    await admin
+      .from("creative_uploads")
+      .update({
+        qc_status: status,
+        qc_detected_brand: detected || null,
+        qc_detected_festival: detectedFestival || null,
+        qc_note: note || null,
+      })
+      .eq("id", row.id);
     checked++;
     if (status === "mismatch") flagged++;
+
+    // A festival story schedules itself the moment it passes — that is the
+    // whole point of the section, that uploading is the only step. A failure
+    // schedules nothing and stays visible instead.
+    if (row.festival_id && status === "match") {
+      try {
+        const { scheduleFestivalStory } = await import("@/lib/festival-story");
+        const res = await scheduleFestivalStory(row.id);
+        if (res.scheduled > 0) autoScheduled += res.scheduled;
+        for (const n of res.notes) console.warn(`festival story ${row.id}: ${n}`);
+      } catch (err: unknown) {
+        console.error(`festival story ${row.id} could not be scheduled:`, err);
+      }
+    }
   }
 
-  return NextResponse.json({ success: true, checked, flagged });
+  return NextResponse.json({ success: true, checked, flagged, autoScheduled });
 }

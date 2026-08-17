@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Avatar from "../Avatar";
-import { UploadCloud, Image as ImageIcon, Film, Smartphone, Loader2, CheckCircle2, AlertTriangle, Trash2 } from "lucide-react";
+import { UploadCloud, Image as ImageIcon, Film, Smartphone, Loader2, CheckCircle2, AlertTriangle, Trash2, Sparkles } from "lucide-react";
+import { fmtIST } from "@/lib/time";
 
 interface ClientRow { id: string; name: string }
 interface UploadRow {
@@ -60,6 +61,49 @@ const driveOpen = (u: string) => {
 export default function ContentHubPage() {
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [selectedClient, setSelectedClient] = useState("");
+
+  // --- Festival Story ---------------------------------------------------------
+  const [festivals, setFestivals] = useState<Array<{ id: string; name: string; scheduled_at: string }>>([]);
+  const [festivalId, setFestivalId] = useState("");
+  const festivalRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/festivals");
+        if (res.ok) setFestivals((await res.json()).festivals || []);
+      } catch { /* the section explains itself when the list is empty */ }
+    })();
+  }, []);
+
+  /**
+   * A festival creative goes up as a story with its festival attached, and QC
+   * takes it from there — on a pass it schedules itself, on a failure it stays
+   * here flagged. Nobody composes it and nobody picks a time.
+   */
+  const uploadFestivalStory = async (file: File) => {
+    if (!selectedClient || !festivalId) return;
+    setError(null);
+    setSuccess(null);
+    setUploadingType("festival");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("clientId", selectedClient);
+      fd.append("contentType", "story");
+      fd.append("festivalId", festivalId);
+      const res = await fetch("/api/content-hub", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+      const fest = festivals.find((f) => f.id === festivalId)?.name || "the festival";
+      setSuccess(`"${file.name}" uploaded for ${fest}. QC is checking the brand and the festival now — it schedules itself if both are right.`);
+      setFestivalId("");
+      await fetchUploads();
+      runQc();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally { setUploadingType(null); }
+  };
   const [uploads, setUploads] = useState<UploadRow[]>([]);
   const [uploadingType, setUploadingType] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -278,6 +322,62 @@ export default function ContentHubPage() {
           <option value="">— Select Client / Brand —</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
+      </div>
+
+      {/* Festival Story — its own lane. Everything else in the hub is handed on
+          to someone to compose and post; this one schedules itself. */}
+      <div className="bg-gradient-to-br from-amber-950/20 to-slate-950/40 border border-amber-900/50 rounded-2xl p-5 space-y-4">
+        <div className="flex items-center space-x-2">
+          <Sparkles className="w-5 h-5 text-[var(--yellow)]" />
+          <div>
+            <h3 className="text-sm font-bold text-white">Festival Story</h3>
+            <p className="text-[11px] text-slate-500">
+              Pick the festival, upload the creative, done. It is QC-checked, then scheduled as a Story at that festival&apos;s own time and appears in the Library. No caption, and it never goes to Social Publisher.
+            </p>
+          </div>
+        </div>
+
+        {festivals.length === 0 ? (
+          <p className="text-[11px] text-amber-300/80">
+            No festivals on the list yet — add one under <b>8b · Festivals</b> in the sidebar first.
+          </p>
+        ) : (
+          <div className="flex items-end gap-2 flex-wrap">
+            <div className="flex-1 min-w-[220px]">
+              <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Festival</span>
+              <select value={festivalId} onChange={(e) => setFestivalId(e.target.value)}
+                className="w-full bg-slate-900/60 border border-slate-800 rounded-xl py-2.5 px-3.5 text-sm text-white focus:outline-none focus:border-amber-500 cursor-pointer">
+                <option value="">— Select festival —</option>
+                {festivals.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name} · {fmtIST(f.scheduled_at, { weekday: "short" })}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              onClick={() => festivalRef.current?.click()}
+              disabled={!selectedClient || !festivalId || uploadingType === "festival"}
+              title={!selectedClient ? "Select a client first" : !festivalId ? "Select a festival first" : ""}
+              className={`inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                selectedClient && festivalId && uploadingType !== "festival"
+                  ? "bg-[var(--yellow)] text-black hover:brightness-110 cursor-pointer"
+                  : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"
+              }`}>
+              {uploadingType === "festival" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
+              <span>{uploadingType === "festival" ? "Uploading…" : "Upload creative"}</span>
+            </button>
+            <input
+              ref={festivalRef} type="file" accept="image/*,video/mp4,video/quicktime,.mp4,.mov,.jpg,.jpeg,.png,.webp,.heic"
+              className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFestivalStory(f); e.target.value = ""; }}
+            />
+          </div>
+        )}
+
+        <p className="text-[10px] text-slate-600">
+          QC checks the brand <b>and</b> the festival. If either is wrong it is not scheduled — it stays here, flagged, for someone to fix.
+        </p>
       </div>
 
       {/* Step 2: Content type upload cards */}

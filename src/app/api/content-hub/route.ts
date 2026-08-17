@@ -43,11 +43,18 @@ export async function POST(request: NextRequest) {
   const clientId = form.get("clientId") as string | null;
   const contentType = (form.get("contentType") as string | null) || "post";
   const caption = (form.get("caption") as string | null) || "";
+  // Present only for a festival story. It makes the upload self-scheduling:
+  // QC checks it against this festival, and on a pass it is queued at the
+  // festival's own time without anyone visiting the composer.
+  const festivalId = (form.get("festivalId") as string | null) || null;
 
   if (!file) return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
   if (!clientId) return NextResponse.json({ error: "Please select a client" }, { status: 400 });
   if (!["post", "reel", "story", "thumbnail"].includes(contentType)) {
     return NextResponse.json({ error: "Invalid content type" }, { status: 400 });
+  }
+  if (festivalId && contentType !== "story") {
+    return NextResponse.json({ error: "A festival creative can only be uploaded as a story." }, { status: 400 });
   }
 
   const mime = file.type || "application/octet-stream";
@@ -96,9 +103,12 @@ export async function POST(request: NextRequest) {
       file_size: buffer.length,
       media_type: mediaType,
       content_type: contentType,
-      caption,
+      // A Story carries no caption on either platform — the creative is the
+      // whole message, which is why the festival section never asks for one.
+      caption: festivalId ? "" : caption,
       thumbnail_url: thumbnailUrl,
       thumbnail_name: thumbnailName,
+      festival_id: festivalId,
       status: "uploaded",
     })
     .select("*, clients(name), profiles:uploaded_by(name, avatar_url, designation)")
