@@ -819,7 +819,11 @@ export default function SocialPublisherPage() {
 
       let date = "";
       if (autoDates[r.id]) date = autoDates[r.id];
-      else if (cadence === "manual") date = "";
+      // Manual is the "several videos in one day" mode: everything lands on the
+      // chosen date and the gap spreads the times across it. It used to leave
+      // every date blank, so nothing was sendable until each row was typed out
+      // by hand — which is the work this screen exists to remove.
+      else if (cadence === "manual") date = autoStart;
       else if (!prev) date = autoStart;
       else {
         const d = new Date(prev);
@@ -1949,7 +1953,7 @@ export default function SocialPublisherPage() {
               {([
                 { k: "daily" as const, label: "Every day" },
                 { k: "alternate" as const, label: "Alternate day" },
-                { k: "manual" as const, label: "Manual" },
+                { k: "manual" as const, label: "Same day" },
               ]).map((m) => (
                 <button key={m.k} onClick={() => setCadence(m.k)}
                   className={`flex-1 px-3 py-2 rounded-lg text-[11px] font-bold cursor-pointer transition-all ${cadence === m.k ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
@@ -1958,15 +1962,15 @@ export default function SocialPublisherPage() {
               ))}
             </div>
             <div className="flex items-end gap-3 flex-wrap">
-              {cadence !== "manual" && (
+              {(
                 <div>
-                  <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">First post on</span>
+                  <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">{cadence === "manual" ? "All posts on" : "First post on"}</span>
                   <input type="date" value={autoStart} min={istToday()} onClick={openPicker} onChange={(e) => setAutoStart(e.target.value)}
                     className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
                 </div>
               )}
               <div>
-                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Post all at</span>
+                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">{gapMins === null ? "Post all at" : "First post at"}</span>
                 <input type="time" value={autoTime} onClick={openPicker} onChange={(e) => setAutoTime(e.target.value)}
                   className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
               </div>
@@ -1999,7 +2003,7 @@ export default function SocialPublisherPage() {
             </div>
             <p className="text-[10px] text-slate-600">
               {cadence === "manual"
-                ? `Set each date yourself. Posts sharing a day are spaced ${gapMins === null ? "only by the times you set" : gapLabel + " apart"}, and any row can be given its own time.`
+                ? `Every post goes out on the chosen date, spaced ${gapMins === null ? "only by the times you set" : gapLabel + " apart"} from the start time. Any row can still be given its own date or time.`
                 : `Dates run ${cadence === "alternate" ? "every other day" : "one per day"}. Change any row and everything below it re-flows from there — move post 2 to the 17th and post 3 becomes the 18th.`}
             </p>
             {(autoSameDay > 0 || autoOutOfOrder > 0 || autoCollisions > 0) && (
