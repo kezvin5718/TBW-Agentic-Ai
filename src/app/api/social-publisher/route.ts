@@ -378,9 +378,20 @@ export async function PATCH(request: NextRequest) {
   });
 }
 
-// DELETE — remove a post from the Library. Note: RecurPost's API has no cancel
-// endpoint, so this only clears our record; a future-scheduled post must also be
-// cancelled inside RecurPost itself.
+/**
+ * DELETE — remove a post from the Library.
+ *
+ * RecurPost's API can create a post but not cancel one (verified against their
+ * published API, which documents login, posting, libraries and history only).
+ * So deleting a future-scheduled row here does NOT stop it publishing — and
+ * removing the row is worse than keeping it, because it also removes the post
+ * id, which is the only handle for deleting it inside RecurPost's Queue.
+ *
+ * A row still queued there is therefore refused until the caller confirms the
+ * RecurPost side is done, and the refusal carries the ids to type in. That is
+ * what turned "deleted from the library but it posted anyway" from a surprise
+ * into a step.
+ */
 export async function DELETE(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -393,6 +404,36 @@ export async function DELETE(request: NextRequest) {
   if (ids.length === 0) return NextResponse.json({ error: "id or ids required" }, { status: 400 });
 
   const admin = createServiceRoleClient();
+
+  if (!body.confirmedRemoved) {
+    const { data: rows } = await admin
+      .from("social_posts")
+      .select("id, platform, content_type, scheduled_for, recurpost_post_id, status")
+      .in("id", ids);
+    const stillQueued = (rows || []).filter(
+      (p) =>
+        p.recurpost_post_id &&
+        p.scheduled_for &&
+        new Date(p.scheduled_for as string).getTime() > Date.now()
+    );
+    if (stillQueued.length > 0) {
+      return NextResponse.json(
+        {
+          error: "RecurPost is still going to publish these — deleting the library row does not cancel them, and their API has no way to.",
+          needsConfirmation: true,
+          stillQueued: stillQueued.map((p) => ({
+            id: p.id,
+            platform: p.platform,
+            contentType: p.content_type,
+            scheduledFor: p.scheduled_for,
+            recurpostPostId: p.recurpost_post_id,
+          })),
+        },
+        { status: 409 }
+      );
+    }
+  }
+
   const { error } = await admin.from("social_posts").delete().in("id", ids);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ success: true, deleted: ids.length });

@@ -1095,16 +1095,34 @@ export default function SocialPublisherPage() {
   };
 
   const deletePost = async (p: PostRow) => {
-    const warn = isFuture(p)
-      ? "Remove this from your library?\n\nNOTE: RecurPost has no cancel API — if it's still scheduled there, you must also delete it inside RecurPost or it will still go out."
-      : "Remove this post from your library?";
-    if (!window.confirm(warn)) return;
+    if (!window.confirm("Remove this post from your library?")) return;
     setLibBusy(p.id);
     try {
-      const res = await fetch("/api/social-publisher", {
+      let res = await fetch("/api/social-publisher", {
         method: "DELETE", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: p.id }),
       });
+
+      // Still queued at RecurPost. Deleting our row does not cancel it — their
+      // API has no way to — so the flow stops here and walks through the real
+      // cancellation, with the post id the Queue needs. The library row is only
+      // removed after the user says that side is done, because the row holds
+      // the id and deleting it first destroys the handle.
+      if (res.status === 409) {
+        const data = await res.json();
+        const list = ((data.stillQueued || []) as Array<{ platform: string; contentType: string; recurpostPostId: number }>)
+          .map((q) => `  • post ${q.recurpostPostId} (${postLabel(q.platform, q.contentType)})`)
+          .join("\n");
+        const go = window.confirm(
+          `⚠️ RECURPOST WILL STILL PUBLISH THIS.\n\nDeleting it here does NOT cancel it — RecurPost's API has no cancel, so it must be deleted in their dashboard:\n\n1. Open social.recurpost.com → Queue\n2. Delete:\n${list}\n\nPress OK ONLY once you have deleted it there — the library row will then be removed.\nPress Cancel to keep the row (it holds the post id you need).`
+        );
+        if (!go) { setNotice({ ok: false, text: `Kept in the library. Delete post ${((data.stillQueued || [])[0]?.recurpostPostId) ?? ""} in RecurPost → Queue first, then remove it here.` }); return; }
+        res = await fetch("/api/social-publisher", {
+          method: "DELETE", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: p.id, confirmedRemoved: true }),
+        });
+      }
+
       if (!res.ok) throw new Error((await res.json()).error || "Delete failed");
       if (libSel?.id === p.id) setLibSel(null);
       await loadHistory();
