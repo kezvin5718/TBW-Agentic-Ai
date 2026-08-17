@@ -243,6 +243,10 @@ export default function ContentHubPage() {
     setError(null);
     setSuccess(null);
     setUploadingType(contentType);
+    // One batch per upload: these files were delivered together and QC judges
+    // them together, so one bad creative sends the whole set back rather than
+    // letting half of it through.
+    const batchId = crypto.randomUUID();
     let ok = 0;
     const failed: string[] = [];
     const failedNames: string[] = [];
@@ -253,6 +257,7 @@ export default function ContentHubPage() {
         fd.append("file", files[i]);
         fd.append("clientId", selectedClient);
         fd.append("contentType", contentType);
+        fd.append("batchId", batchId);
         const res = await fetch("/api/content-hub", { method: "POST", body: fd });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Upload failed");

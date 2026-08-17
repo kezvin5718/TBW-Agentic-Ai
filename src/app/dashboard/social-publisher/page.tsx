@@ -719,7 +719,106 @@ export default function SocialPublisherPage() {
   });
 
   // --- Library (queue / history) ---------------------------------------------
-  const [view, setView] = useState<"compose" | "library" | "stories">("compose");
+  const [view, setView] = useState<"compose" | "library" | "stories" | "automation">("compose");
+
+  // --- Automation -------------------------------------------------------------
+  // Everything approved for a client, dated down the list in one move, captions
+  // already written. The team's job here is to look and press send.
+  interface AutoRow {
+    id: string; file_url: string; file_name: string | null;
+    media_type: string; content_type: string;
+    caption: string | null; caption_status: string;
+    thumbnail_url: string | null; created_at: string;
+  }
+  type Cadence = "daily" | "alternate" | "manual";
+
+  const [autoClient, setAutoClient] = useState("");
+  const [autoRows, setAutoRows] = useState<AutoRow[]>([]);
+  const [autoPlatforms, setAutoPlatforms] = useState<string[]>([]);
+  const [autoAvailable, setAutoAvailable] = useState<string[]>([]);
+  const [autoRejected, setAutoRejected] = useState(0);
+  const [autoAwaiting, setAutoAwaiting] = useState(0);
+  const [autoLoading, setAutoLoading] = useState(false);
+  const [autoSending, setAutoSending] = useState(false);
+  const [cadence, setCadence] = useState<Cadence>("daily");
+  const [autoStart, setAutoStart] = useState(istToday());
+  const [autoTime, setAutoTime] = useState("19:30");
+  // Per-row overrides. A row keeps its own date once touched, even when the
+  // cadence is re-applied — that is the whole point of being able to change one.
+  const [autoDates, setAutoDates] = useState<Record<string, string>>({});
+  const [autoCaptions, setAutoCaptions] = useState<Record<string, string>>({});
+  const [autoSkip, setAutoSkip] = useState<Set<string>>(new Set());
+
+  const loadAutomation = useCallback(async (clientId: string) => {
+    if (!clientId) { setAutoRows([]); return; }
+    setAutoLoading(true);
+    try {
+      const res = await fetch(`/api/social-publisher/automation?clientId=${clientId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load");
+      const rows = (data.uploads || []) as AutoRow[];
+      setAutoRows(rows);
+      setAutoAvailable(data.platforms || []);
+      setAutoPlatforms(data.platforms || []);
+      setAutoRejected(data.rejected || 0);
+      setAutoAwaiting(data.awaitingCaption || 0);
+      setAutoCaptions(Object.fromEntries(rows.map((r) => [r.id, r.caption || ""])));
+      setAutoDates({});
+      setAutoSkip(new Set());
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not load" });
+    } finally { setAutoLoading(false); }
+  }, []);
+
+  useEffect(() => { if (view === "automation" && autoClient) loadAutomation(autoClient); }, [view, autoClient, loadAutomation]);
+
+  /** Step in days between consecutive posts for the chosen cadence. */
+  const cadenceStep = cadence === "alternate" ? 2 : 1;
+
+  /** The date a row lands on: its override if it has one, else the cadence. */
+  const dateForRow = useCallback((index: number, id: string): string => {
+    if (autoDates[id]) return autoDates[id];
+    if (cadence === "manual") return "";
+    const d = new Date(`${autoStart}T00:00:00`);
+    d.setDate(d.getDate() + index * cadenceStep);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }, [autoDates, autoStart, cadence, cadenceStep]);
+
+  const autoReady = autoRows.filter((r) => !autoSkip.has(r.id) && dateForRow(autoRows.indexOf(r), r.id));
+
+  const sendAutomation = async () => {
+    setAutoSending(true);
+    setNotice(null);
+    try {
+      const items = autoRows
+        .map((r, i) => ({ r, date: dateForRow(i, r.id) }))
+        .filter(({ r, date }) => !autoSkip.has(r.id) && date)
+        .map(({ r, date }) => ({
+          uploadId: r.id,
+          caption: autoCaptions[r.id] ?? r.caption ?? "",
+          scheduledFor: `${date}T${autoTime}`,
+        }));
+
+      const res = await fetch("/api/social-publisher/automation", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: autoClient, platforms: autoPlatforms, items }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not schedule");
+      const skipNote = (data.skipped || []).length ? ` Skipped: ${(data.skipped as string[]).join(" ")}` : "";
+      setNotice({
+        ok: data.failed === 0,
+        text: (data.failed === 0
+          ? `${data.scheduled} creative(s) scheduled — ${data.posts} post(s) queued. They're in the Library now.`
+          : `${data.posts} queued, ${data.failed} failed. Do NOT send again — the ones that worked are already scheduled. Retry the failures from the Library.`) + skipNote,
+      });
+      await loadAutomation(autoClient);
+      await loadHistory();
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not schedule" });
+    } finally { setAutoSending(false); }
+  };
   const [libFilter, setLibFilter] = useState<"all" | "scheduled" | "posted" | "failed">("all");
   const [libClient, setLibClient] = useState("all");
   const [libSel, setLibSel] = useState<PostRow | null>(null);
@@ -1071,7 +1170,7 @@ export default function SocialPublisherPage() {
   };
 
   return (
-    <div className={`${view === "library" ? "max-w-7xl" : view === "stories" ? "max-w-5xl" : "max-w-[1700px]"} mx-auto space-y-6`}>
+    <div className={`${view === "library" ? "max-w-7xl" : view === "stories" || view === "automation" ? "max-w-5xl" : "max-w-[1700px]"} mx-auto space-y-6`}>
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
@@ -1083,6 +1182,9 @@ export default function SocialPublisherPage() {
           <button onClick={() => setView("compose")} className={`px-4 py-2 rounded-lg cursor-pointer transition-all ${view === "compose" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>Compose</button>
           <button onClick={() => setView("stories")} className={`px-4 py-2 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "stories" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
             <Layers className="w-3.5 h-3.5" /><span>Multi-Story</span>
+          </button>
+          <button onClick={() => setView("automation")} className={`px-4 py-2 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "automation" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
+            <Wand2 className="w-3.5 h-3.5" /><span>Automation</span>
           </button>
           <button onClick={() => setView("library")} className={`px-4 py-2 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "library" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
             <Eye className="w-3.5 h-3.5" /><span>Library ({posts.length})</span>
@@ -1720,6 +1822,174 @@ export default function SocialPublisherPage() {
       </div>
       </div>
       </>
+      )}
+
+      {/* ------------------------------ AUTOMATION ----------------------------- */}
+      {view === "automation" && (
+        <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-5">
+          <div>
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <Wand2 className="w-4 h-4 text-[var(--yellow)]" /><span>Automation</span>
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Pick a client and everything approved for them appears here with its caption already written. Choose the rhythm, the dates fill themselves in, and one press sends the lot.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Client / Brand</label>
+              <select value={autoClient} onChange={(e) => setAutoClient(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 cursor-pointer">
+                <option value="">— Select client —</option>
+                {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Platforms</label>
+              <div className="flex flex-wrap gap-2">
+                {autoAvailable.length === 0 ? (
+                  <span className="text-[11px] text-slate-600 py-2">{autoClient ? "None mapped in RecurPost for this client." : "Select a client first."}</span>
+                ) : autoAvailable.map((p) => (
+                  <button key={p} onClick={() => setAutoPlatforms((prev) => prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p])}
+                    className={`px-3.5 py-2 rounded-full text-xs font-bold border capitalize cursor-pointer transition-all ${autoPlatforms.includes(p) ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {autoRejected > 0 && (
+            <div className="bg-rose-950/20 border border-rose-900/50 rounded-xl p-2.5 text-[11px] text-rose-300 flex items-start gap-2">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span><b>{autoRejected}</b> creative(s) for this client were rejected at QC and are not shown here. Fix them in Content Hub and upload the set again.</span>
+            </div>
+          )}
+
+          {/* Rhythm */}
+          <div className="border border-slate-900 rounded-xl p-4 bg-slate-950/60 space-y-3">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Posting rhythm</label>
+            <div className="flex bg-slate-950 border border-slate-800 rounded-xl p-1 max-w-md">
+              {([
+                { k: "daily" as const, label: "Every day" },
+                { k: "alternate" as const, label: "Alternate day" },
+                { k: "manual" as const, label: "Manual" },
+              ]).map((m) => (
+                <button key={m.k} onClick={() => setCadence(m.k)}
+                  className={`flex-1 px-3 py-2 rounded-lg text-[11px] font-bold cursor-pointer transition-all ${cadence === m.k ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-end gap-3 flex-wrap">
+              {cadence !== "manual" && (
+                <div>
+                  <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">First post on</span>
+                  <input type="date" value={autoStart} min={istToday()} onClick={openPicker} onChange={(e) => setAutoStart(e.target.value)}
+                    className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
+                </div>
+              )}
+              <div>
+                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Post all at</span>
+                <input type="time" value={autoTime} onClick={openPicker} onChange={(e) => setAutoTime(e.target.value)}
+                  className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
+              </div>
+              {Object.keys(autoDates).length > 0 && (
+                <button onClick={() => setAutoDates({})}
+                  className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-bold text-slate-400 hover:text-white cursor-pointer">
+                  Reset {Object.keys(autoDates).length} changed date(s)
+                </button>
+              )}
+            </div>
+            <p className="text-[10px] text-slate-600">
+              {cadence === "manual"
+                ? "Set each date yourself — nothing is filled in."
+                : `Dates run ${cadence === "alternate" ? "every other day" : "one per day"} from the start date. Change any single row and it keeps your date.`}
+            </p>
+          </div>
+
+          {/* The list */}
+          {autoLoading ? (
+            <p className="text-xs text-slate-500 py-8 text-center"><Loader2 className="w-4 h-4 animate-spin inline mr-2" />Loading approved creatives…</p>
+          ) : !autoClient ? (
+            <p className="text-xs text-slate-600 py-8 text-center">Select a client to see what&apos;s waiting.</p>
+          ) : autoRows.length === 0 ? (
+            <p className="text-xs text-slate-600 py-8 text-center">Nothing approved and waiting for this client.</p>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  Approved &amp; waiting <span className="text-slate-600 normal-case font-medium">({autoReady.length} of {autoRows.length} selected)</span>
+                </label>
+                {autoAwaiting > 0 && (
+                  <span className="text-[10px] text-amber-400 font-bold">{autoAwaiting} caption(s) still being written — reload in a moment.</span>
+                )}
+              </div>
+
+              {autoRows.map((r, i) => {
+                const date = dateForRow(i, r.id);
+                const skipped = autoSkip.has(r.id);
+                return (
+                  <div key={r.id} className={`flex items-start gap-3 rounded-xl border p-3 ${skipped ? "border-slate-900 bg-slate-950/30 opacity-50" : "border-slate-900 bg-slate-950/70"}`}>
+                    <span className="w-6 h-6 rounded-full bg-[var(--yellow)] text-black text-[10px] font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
+                    <div className={`w-12 shrink-0 rounded-lg overflow-hidden border border-slate-800 bg-slate-900 ${["reel", "story"].includes(r.content_type) ? "aspect-[9/16]" : "aspect-square"}`}>
+                      {r.media_type === "video"
+                        ? <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs">▶</div>
+                        // eslint-disable-next-line @next/next/no-img-element
+                        : <img src={r.file_url} alt="" className="w-full h-full object-cover" />}
+                    </div>
+
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[11px] font-bold text-white truncate max-w-[220px]">{r.file_name || "creative"}</span>
+                        <span className="text-[9px] uppercase font-bold text-slate-500">{r.content_type}</span>
+                        {r.caption_status === "failed" && <span className="text-[9px] font-bold text-amber-400">caption failed — write one</span>}
+                      </div>
+                      {r.content_type === "story" ? (
+                        <p className="text-[10px] text-slate-600">Stories carry no caption — both platforms drop the text.</p>
+                      ) : (
+                        <textarea
+                          value={autoCaptions[r.id] ?? ""}
+                          onChange={(e) => setAutoCaptions((c) => ({ ...c, [r.id]: e.target.value }))}
+                          rows={3}
+                          placeholder="Caption is written automatically once QC passes…"
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500 resize-none leading-relaxed"
+                        />
+                      )}
+                    </div>
+
+                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                      <input type="date" value={date} onClick={openPicker}
+                        onChange={(e) => setAutoDates((d) => ({ ...d, [r.id]: e.target.value }))}
+                        className="w-[136px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-[11px] text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
+                      <button onClick={() => setAutoSkip((s) => { const n = new Set(s); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; })}
+                        className="text-[10px] font-bold text-slate-500 hover:text-white cursor-pointer">
+                        {skipped ? "include" : "skip"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Send */}
+          {autoRows.length > 0 && (
+            <div className="border-t border-slate-900 pt-4 space-y-2">
+              <p className="text-[11px] text-slate-500">
+                {autoReady.length === 0
+                  ? "Nothing selected — every row is skipped or has no date."
+                  : <>Will schedule <span className="signal">{autoReady.length * autoPlatforms.length}</span> post(s) — {autoReady.length} creative(s) × {autoPlatforms.length} platform(s), all at {autoTime}.</>}
+              </p>
+              <button onClick={sendAutomation} disabled={autoSending || autoReady.length === 0 || autoPlatforms.length === 0}
+                className={`w-full px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 transition-all ${!autoSending && autoReady.length > 0 && autoPlatforms.length > 0 ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>
+                {autoSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                <span>{autoSending ? "Scheduling — this can take a minute…" : `Post via RecurPost (${autoReady.length * autoPlatforms.length})`}</span>
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       {/* ----------------------------- MULTI-STORY ----------------------------- */}

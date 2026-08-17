@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { completeVision } from "@/lib/llm-vision";
 import { safeJsonParse } from "@/lib/llm";
@@ -51,7 +51,7 @@ interface Verdict { verdict: "match" | "mismatch" | "unsure"; detected_brand: st
  * client it was uploaded under; wrong-brand uploads get flagged "mismatch".
  * Videos are skipped (v1). Processes up to 10 per call.
  */
-export async function POST() {
+export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const role = (user?.user_metadata?.role as string) || "client";
@@ -62,7 +62,7 @@ export async function POST() {
   const admin = createServiceRoleClient();
   const { data: rows } = await admin
     .from("creative_uploads")
-    .select("id, file_url, file_name, media_type, client_id, clients(name), festival_id, festivals(name)")
+    .select("id, file_url, file_name, media_type, content_type, client_id, batch_id, clients(name), festival_id, festivals(name)")
     .eq("qc_status", "pending")
     .order("created_at", { ascending: true })
     .limit(10);
@@ -77,6 +77,8 @@ export async function POST() {
   let checked = 0;
   let flagged = 0;
   let autoScheduled = 0;
+  const touchedBatches = new Set<string>();
+  const captionable: string[] = [];
 
   for (const row of rows) {
     const uploadedFor = (row.clients as { name?: string } | null)?.name || "Unknown";
@@ -181,7 +183,40 @@ Rules: "match" if the visible branding belongs to "${uploadedFor}"${sisters.leng
         console.error(`festival story ${row.id} could not be scheduled:`, err);
       }
     }
+
+    if (row.batch_id) touchedBatches.add(row.batch_id);
+    if (!row.festival_id && status === "match") captionable.push(row.id);
   }
 
-  return NextResponse.json({ success: true, checked, flagged, autoScheduled });
+  // Batch verdicts come after every row in this sweep has a result, because a
+  // batch is only decided once all of its creatives have been judged.
+  const { applyBatchVerdict, writeCaptionFor } = await import("@/lib/upload-batch");
+  let rejectedByBatch = 0;
+  const rejectedBatches = new Set<string>();
+  for (const batchId of touchedBatches) {
+    const res = await applyBatchVerdict(batchId);
+    if (res.rejected > 0) {
+      rejectedByBatch += res.rejected;
+      rejectedBatches.add(batchId);
+      console.warn(`content hub: batch ${batchId} rejected — ${res.reason}`);
+    }
+  }
+
+  // Captions are written for approved work only, and never for a creative whose
+  // batch was just rejected — that one is going to be re-uploaded.
+  const { data: survivors } = await admin
+    .from("creative_uploads")
+    .select("id, batch_id")
+    .in("id", captionable.length ? captionable : ["00000000-0000-0000-0000-000000000000"])
+    .eq("status", "uploaded");
+
+  const origin = request.nextUrl.origin;
+  const cookie = request.headers.get("cookie") || "";
+  let captioned = 0;
+  for (const s of survivors || []) {
+    if (s.batch_id && rejectedBatches.has(s.batch_id)) continue;
+    if (await writeCaptionFor(s.id, origin, cookie)) captioned++;
+  }
+
+  return NextResponse.json({ success: true, checked, flagged, autoScheduled, rejectedByBatch, captioned });
 }

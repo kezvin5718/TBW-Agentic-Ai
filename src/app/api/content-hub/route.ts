@@ -47,6 +47,9 @@ export async function POST(request: NextRequest) {
   // QC checks it against this festival, and on a pass it is queued at the
   // festival's own time without anyone visiting the composer.
   const festivalId = (form.get("festivalId") as string | null) || null;
+  // Files chosen together share a batch, and a batch is approved or rejected as
+  // one — a set is corrected and resubmitted together, not file by file.
+  const batchId = (form.get("batchId") as string | null) || null;
 
   if (!file) return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
   if (!clientId) return NextResponse.json({ error: "Please select a client" }, { status: 400 });
@@ -109,6 +112,7 @@ export async function POST(request: NextRequest) {
       thumbnail_url: thumbnailUrl,
       thumbnail_name: thumbnailName,
       festival_id: festivalId,
+      batch_id: batchId,
       status: "uploaded",
     })
     .select("*, clients(name), profiles:uploaded_by(name, avatar_url, designation)")
