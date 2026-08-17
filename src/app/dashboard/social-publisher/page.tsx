@@ -749,6 +749,9 @@ export default function SocialPublisherPage() {
   // Per-row times. Several videos can share a day at hours the team chooses,
   // rather than being forced onto one time plus automatic spacing.
   const [autoTimes, setAutoTimes] = useState<Record<string, string>>({});
+  // Gap between posts that land on the same day. Null means nobody is spaced
+  // automatically and the times on the rows are the only source.
+  const [gapMins, setGapMins] = useState<number | null>(5);
   const [autoCaptions, setAutoCaptions] = useState<Record<string, string>>({});
   const [autoSkip, setAutoSkip] = useState<Set<string>>(new Set());
 
@@ -790,7 +793,7 @@ export default function SocialPublisherPage() {
     return { time: `${pad2(Math.floor(total / 60))}:${pad2(total % 60)}`, clamped: false };
   };
 
-  interface Slot { date: string; time: string; nthOfDay: number; outOfOrder: boolean; clamped: boolean; manualTime: boolean }
+  interface Slot { date: string; time: string; nthOfDay: number; outOfOrder: boolean; clamped: boolean; manualTime: boolean; collides: boolean }
 
   /**
    * The whole schedule, worked out in one pass.
@@ -837,18 +840,26 @@ export default function SocialPublisherPage() {
       // there to stop two posts firing at once, not to overrule someone putting
       // eight videos out at the hours they actually want them at.
       const ownTime = autoTimes[r.id];
-      const { time, clamped } = ownTime ? { time: ownTime, clamped: false } : timePlus(autoTime, nth * 5);
+      const { time, clamped } = ownTime
+        ? { time: ownTime, clamped: false }
+        : timePlus(autoTime, gapMins === null ? 0 : nth * gapMins);
+      // With spacing off and no time of its own, this shares an instant with the
+      // post above it — worth saying, since both would fire together.
+      const collides = !ownTime && gapMins === null && nth > 0;
 
-      out[r.id] = { date, time, nthOfDay: nth, outOfOrder, clamped, manualTime: !!ownTime };
+      out[r.id] = { date, time, nthOfDay: nth, outOfOrder, clamped, manualTime: !!ownTime, collides };
       prev = asDate;
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRows, autoSkip, autoDates, autoTimes, autoStart, autoTime, cadence, cadenceStep]);
+  }, [autoRows, autoSkip, autoDates, autoTimes, autoStart, autoTime, cadence, cadenceStep, gapMins]);
 
   const autoReady = autoRows.filter((r) => !!schedule[r.id]);
   const autoSameDay = Object.values(schedule).filter((s) => s.nthOfDay > 0).length;
   const autoOutOfOrder = Object.values(schedule).filter((s) => s.outOfOrder).length;
+  const autoCollisions = Object.values(schedule).filter((s) => s.collides).length;
+  const gapLabel = gapMins === null ? "set by hand"
+    : gapMins >= 60 ? `${gapMins / 60}h` : `${gapMins}m`;
 
   const sendAutomation = async () => {
     setAutoSending(true);
@@ -1959,23 +1970,48 @@ export default function SocialPublisherPage() {
                 <input type="time" value={autoTime} onClick={openPicker} onChange={(e) => setAutoTime(e.target.value)}
                   className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
               </div>
-              {Object.keys(autoDates).length > 0 && (
-                <button onClick={() => setAutoDates({})}
+              <div>
+                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Gap between posts on the same day</span>
+                <div className="flex bg-slate-950 border border-slate-800 rounded-lg p-0.5 flex-wrap">
+                  {([
+                    { v: 5, label: "5m" },
+                    { v: 10, label: "10m" },
+                    { v: 30, label: "30m" },
+                    { v: 60, label: "1h" },
+                    { v: 120, label: "2h" },
+                    { v: 180, label: "3h" },
+                    { v: null, label: "Manual" },
+                  ] as Array<{ v: number | null; label: string }>).map((g) => (
+                    <button key={g.label} onClick={() => setGapMins(g.v)}
+                      className={`px-2.5 py-1.5 rounded-md text-[10px] font-bold cursor-pointer transition-all ${gapMins === g.v ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
+                      {g.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {(Object.keys(autoDates).length > 0 || Object.keys(autoTimes).length > 0) && (
+                <button onClick={() => { setAutoDates({}); setAutoTimes({}); }}
                   className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-bold text-slate-400 hover:text-white cursor-pointer">
-                  Reset {Object.keys(autoDates).length} changed date(s)
+                  Reset {Object.keys(autoDates).length + Object.keys(autoTimes).length} change(s)
                 </button>
               )}
             </div>
             <p className="text-[10px] text-slate-600">
               {cadence === "manual"
-                ? "Set each date and time yourself — nothing is filled in. Several posts can share a day at whatever hours you choose."
+                ? `Set each date yourself. Posts sharing a day are spaced ${gapMins === null ? "only by the times you set" : gapLabel + " apart"}, and any row can be given its own time.`
                 : `Dates run ${cadence === "alternate" ? "every other day" : "one per day"}. Change any row and everything below it re-flows from there — move post 2 to the 17th and post 3 becomes the 18th.`}
             </p>
-            {(autoSameDay > 0 || autoOutOfOrder > 0) && (
+            {(autoSameDay > 0 || autoOutOfOrder > 0 || autoCollisions > 0) && (
               <div className="flex flex-wrap gap-3 text-[10px] pt-1">
                 {autoSameDay > 0 && (
                   <span className="text-[var(--yellow)] font-bold">
-                    {autoSameDay} post(s) share a day — spaced 5 minutes apart unless you set the time yourself
+                    {autoSameDay} post(s) share a day — {gapMins === null ? "spacing off, set each time yourself" : `spaced ${gapLabel} apart unless you set the time yourself`}
+                  </span>
+                )}
+                {autoCollisions > 0 && (
+                  <span className="text-rose-400 font-bold">
+                    {autoCollisions} post(s) would fire at the same moment — give them a time or pick a gap
                   </span>
                 )}
                 {autoOutOfOrder > 0 && (
@@ -2063,8 +2099,8 @@ export default function SocialPublisherPage() {
                               : "border-slate-800 text-slate-400"
                             }`}
                           />
-                          {slot.nthOfDay > 0 && !slot.manualTime && (
-                            <span className="text-[9px] font-bold text-[var(--yellow)]" title="Spaced so two posts don't fire at once">+{slot.nthOfDay * 5}m</span>
+                          {slot.nthOfDay > 0 && !slot.manualTime && gapMins !== null && (
+                            <span className="text-[9px] font-bold text-[var(--yellow)]" title="Spaced so two posts don't fire at once">+{slot.nthOfDay * gapMins >= 60 ? `${((slot.nthOfDay * gapMins) / 60).toFixed(1).replace(/\.0$/, "")}h` : `${slot.nthOfDay * gapMins}m`}</span>
                           )}
                         </div>
                       )}
@@ -2072,7 +2108,10 @@ export default function SocialPublisherPage() {
                         <span className="text-[9px] font-bold text-amber-400" title="This posts before the one above it">⚠ out of order</span>
                       )}
                       {slot?.clamped && (
-                        <span className="text-[9px] font-bold text-rose-400" title="The 5-minute spacing would cross midnight">⚠ time capped</span>
+                        <span className="text-[9px] font-bold text-rose-400" title="The spacing would have crossed midnight">⚠ time capped</span>
+                      )}
+                      {slot?.collides && (
+                        <span className="text-[9px] font-bold text-rose-400" title="Same instant as the post above — set a time or pick a gap">⚠ same time</span>
                       )}
                       {(autoDates[r.id] || autoTimes[r.id]) && (
                         <button
