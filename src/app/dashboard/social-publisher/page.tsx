@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Avatar from "../Avatar";
 import { fmtIST, fmtISTDate, istToday, istWallClockToUtc, IST_TZ } from "@/lib/time";
@@ -775,29 +775,84 @@ export default function SocialPublisherPage() {
   /** Step in days between consecutive posts for the chosen cadence. */
   const cadenceStep = cadence === "alternate" ? 2 : 1;
 
-  /** The date a row lands on: its override if it has one, else the cadence. */
-  const dateForRow = useCallback((index: number, id: string): string => {
-    if (autoDates[id]) return autoDates[id];
-    if (cadence === "manual") return "";
-    const d = new Date(`${autoStart}T00:00:00`);
-    d.setDate(d.getDate() + index * cadenceStep);
-    const p = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-  }, [autoDates, autoStart, cadence, cadenceStep]);
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+  const ymd = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
-  const autoReady = autoRows.filter((r) => !autoSkip.has(r.id) && dateForRow(autoRows.indexOf(r), r.id));
+  /** Base time plus n·5 minutes, never spilling past midnight onto another day. */
+  const timePlus = (hhmm: string, mins: number): { time: string; clamped: boolean } => {
+    const [h, m] = hhmm.split(":").map(Number);
+    const total = (h || 0) * 60 + (m || 0) + mins;
+    if (total >= 24 * 60) return { time: "23:59", clamped: true };
+    return { time: `${pad2(Math.floor(total / 60))}:${pad2(total % 60)}`, clamped: false };
+  };
+
+  interface Slot { date: string; time: string; nthOfDay: number; outOfOrder: boolean; clamped: boolean }
+
+  /**
+   * The whole schedule, worked out in one pass.
+   *
+   * Dates are a chain rather than start + index·step: each post follows the one
+   * before it, and a date set by hand becomes the new anchor that the rest
+   * continue from. That is what makes moving one post pull the others with it —
+   * dropping post 2 onto the 17th turns post 3 from the 19th into the 18th.
+   *
+   * A skipped row leaves the chain entirely rather than holding its slot open,
+   * so removing a post closes the gap instead of leaving a blank day.
+   *
+   * Two posts on one date cannot fire at the same instant, so each one after the
+   * first moves five minutes later.
+   */
+  const schedule = useMemo(() => {
+    const out: Record<string, Slot> = {};
+    const usedPerDay: Record<string, number> = {};
+    let prev: Date | null = null;
+
+    for (const r of autoRows) {
+      if (autoSkip.has(r.id)) continue;
+
+      let date = "";
+      if (autoDates[r.id]) date = autoDates[r.id];
+      else if (cadence === "manual") date = "";
+      else if (!prev) date = autoStart;
+      else {
+        const d = new Date(prev);
+        d.setDate(d.getDate() + cadenceStep);
+        date = ymd(d);
+      }
+      if (!date) continue;
+
+      const asDate = new Date(`${date}T00:00:00`);
+      // Moving a post before the one above it is allowed — sometimes you do
+      // want it out earlier — but it is called out, because it usually is a slip.
+      const outOfOrder = !!prev && asDate.getTime() < prev.getTime();
+
+      const nth = usedPerDay[date] || 0;
+      usedPerDay[date] = nth + 1;
+      const { time, clamped } = timePlus(autoTime, nth * 5);
+
+      out[r.id] = { date, time, nthOfDay: nth, outOfOrder, clamped };
+      prev = asDate;
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRows, autoSkip, autoDates, autoStart, autoTime, cadence, cadenceStep]);
+
+  const autoReady = autoRows.filter((r) => !!schedule[r.id]);
+  const autoSameDay = Object.values(schedule).filter((s) => s.nthOfDay > 0).length;
+  const autoOutOfOrder = Object.values(schedule).filter((s) => s.outOfOrder).length;
 
   const sendAutomation = async () => {
     setAutoSending(true);
     setNotice(null);
     try {
+      // The per-row time matters here, not the base one: two posts sharing a day
+      // are five minutes apart and must be sent that way.
       const items = autoRows
-        .map((r, i) => ({ r, date: dateForRow(i, r.id) }))
-        .filter(({ r, date }) => !autoSkip.has(r.id) && date)
-        .map(({ r, date }) => ({
+        .filter((r) => !!schedule[r.id])
+        .map((r) => ({
           uploadId: r.id,
           caption: autoCaptions[r.id] ?? r.caption ?? "",
-          scheduledFor: `${date}T${autoTime}`,
+          scheduledFor: `${schedule[r.id].date}T${schedule[r.id].time}`,
         }));
 
       const res = await fetch("/api/social-publisher/automation", {
@@ -1905,8 +1960,22 @@ export default function SocialPublisherPage() {
             <p className="text-[10px] text-slate-600">
               {cadence === "manual"
                 ? "Set each date yourself — nothing is filled in."
-                : `Dates run ${cadence === "alternate" ? "every other day" : "one per day"} from the start date. Change any single row and it keeps your date.`}
+                : `Dates run ${cadence === "alternate" ? "every other day" : "one per day"}. Change any row and everything below it re-flows from there — move post 2 to the 17th and post 3 becomes the 18th.`}
             </p>
+            {(autoSameDay > 0 || autoOutOfOrder > 0) && (
+              <div className="flex flex-wrap gap-3 text-[10px] pt-1">
+                {autoSameDay > 0 && (
+                  <span className="text-[var(--yellow)] font-bold">
+                    {autoSameDay} post(s) share a day — spaced 5 minutes apart
+                  </span>
+                )}
+                {autoOutOfOrder > 0 && (
+                  <span className="text-amber-400 font-bold">
+                    {autoOutOfOrder} post(s) publish before the row above them
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* The list */}
@@ -1928,7 +1997,8 @@ export default function SocialPublisherPage() {
               </div>
 
               {autoRows.map((r, i) => {
-                const date = dateForRow(i, r.id);
+                const slot = schedule[r.id];
+                const date = slot?.date || autoDates[r.id] || "";
                 const skipped = autoSkip.has(r.id);
                 return (
                   <div key={r.id} className={`flex items-start gap-3 rounded-xl border p-3 ${skipped ? "border-slate-900 bg-slate-950/30 opacity-50" : "border-slate-900 bg-slate-950/70"}`}>
@@ -1959,10 +2029,28 @@ export default function SocialPublisherPage() {
                       )}
                     </div>
 
-                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                    <div className="flex flex-col items-end gap-1 shrink-0">
                       <input type="date" value={date} onClick={openPicker}
                         onChange={(e) => setAutoDates((d) => ({ ...d, [r.id]: e.target.value }))}
-                        className="w-[136px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-[11px] text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
+                        className={`w-[136px] bg-slate-950 border rounded-lg px-2 py-1.5 text-[11px] text-white cursor-pointer [color-scheme:dark] focus:outline-none ${
+                          slot?.outOfOrder ? "border-amber-600" : autoDates[r.id] ? "border-indigo-600" : "border-slate-800"
+                        }`} />
+                      {slot && (
+                        <span className={`text-[10px] font-mono ${slot.nthOfDay > 0 ? "text-[var(--yellow)] font-bold" : "text-slate-500"}`}>
+                          {slot.time}
+                          {slot.nthOfDay > 0 && ` · +${slot.nthOfDay * 5}m`}
+                        </span>
+                      )}
+                      {slot?.outOfOrder && (
+                        <span className="text-[9px] font-bold text-amber-400" title="This posts before the one above it">⚠ out of order</span>
+                      )}
+                      {slot?.clamped && (
+                        <span className="text-[9px] font-bold text-rose-400" title="The 5-minute spacing would cross midnight">⚠ time capped</span>
+                      )}
+                      {autoDates[r.id] && (
+                        <button onClick={() => setAutoDates((d) => { const n = { ...d }; delete n[r.id]; return n; })}
+                          className="text-[9px] font-bold text-slate-600 hover:text-white cursor-pointer">reset date</button>
+                      )}
                       <button onClick={() => setAutoSkip((s) => { const n = new Set(s); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; })}
                         className="text-[10px] font-bold text-slate-500 hover:text-white cursor-pointer">
                         {skipped ? "include" : "skip"}
@@ -1980,7 +2068,7 @@ export default function SocialPublisherPage() {
               <p className="text-[11px] text-slate-500">
                 {autoReady.length === 0
                   ? "Nothing selected — every row is skipped or has no date."
-                  : <>Will schedule <span className="signal">{autoReady.length * autoPlatforms.length}</span> post(s) — {autoReady.length} creative(s) × {autoPlatforms.length} platform(s), all at {autoTime}.</>}
+                  : <>Will schedule <span className="signal">{autoReady.length * autoPlatforms.length}</span> post(s) — {autoReady.length} creative(s) × {autoPlatforms.length} platform(s){autoSameDay > 0 ? `, with ${autoSameDay} spaced 5 minutes apart on a shared day` : `, all at ${autoTime}`}.</>}
               </p>
               <button onClick={sendAutomation} disabled={autoSending || autoReady.length === 0 || autoPlatforms.length === 0}
                 className={`w-full px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 transition-all ${!autoSending && autoReady.length > 0 && autoPlatforms.length > 0 ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>
