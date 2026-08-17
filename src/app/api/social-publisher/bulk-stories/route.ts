@@ -144,8 +144,10 @@ export async function POST(request: NextRequest) {
       } else {
         const params: Record<string, unknown> = {
           id: accountId,
-          // Stories carry no caption on either platform — the text is dropped.
-          message: "",
+          // Both platforms drop the text on a Story, so this is never seen — but
+          // RecurPost rejects the call with "Bad Request" when message is empty,
+          // so it carries the client name rather than nothing.
+          message: client?.name || "Story",
           // RecurPost schedules in the account's own (IST) clock, so send IST
           // wall clock rather than the UTC instant.
           schedule_date_time: utcToIstWallClock(scheduledUtc),

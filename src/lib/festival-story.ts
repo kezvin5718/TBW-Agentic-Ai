@@ -120,8 +120,10 @@ export async function scheduleFestivalStory(uploadId: string): Promise<FestivalS
 
     const params: Record<string, unknown> = {
       id: accountFor(platform)!,
-      // Stories carry no caption on either platform; the creative is the message.
-      message: "",
+      // Both platforms drop the text on a Story, so this is never seen — but
+      // RecurPost rejects the call outright with "Bad Request" when message is
+      // empty, so it carries the festival name rather than nothing.
+      message: festival.name || "Festival story",
       schedule_date_time: utcToIstWallClock(when),
     };
     if (isVideo) params.video_url = publishUrl;
@@ -140,6 +142,14 @@ export async function scheduleFestivalStory(uploadId: string): Promise<FestivalS
       ok = rpId !== null || !(lower.includes('"error"') || lower.includes('"status":"failed"') || lower.includes("invalid"));
     } catch (err: unknown) {
       detail = err instanceof Error ? err.message : String(err);
+    }
+
+    if (!ok) {
+      // RecurPost answers HTTP 200 with a 400 in the body and no indication of
+      // which field it objected to. Record what was actually sent — minus the
+      // account id — so the next failure is readable instead of another guess.
+      const sent = { ...params, id: "<account>" };
+      console.error(`festival story ${uploadId} ${platform} rejected: ${detail} · sent ${JSON.stringify(sent).slice(0, 300)}`);
     }
 
     await admin.from("social_posts").insert({
