@@ -20,6 +20,12 @@ export const SECTIONS = [
   { key: "task-manager", num: 14, name: "Task Manager", path: "/dashboard/task-manager" },
   { key: "ad-copy", num: 15, name: "Catalogue Ad Copy", path: "/dashboard/ad-copy" },
   { key: "festivals", num: 16, name: "Festivals", path: "/dashboard/festivals" },
+  // These two were reachable by any employee no matter what their permission
+  // list said: with no section registered, sectionKeyForPath returned null and
+  // both the sidebar and the middleware fell back to a plain role check. A
+  // founder could not revoke them because there was nothing to revoke.
+  { key: "calls", num: 17, name: "Call Notes", path: "/dashboard/calls" },
+  { key: "connections", num: 18, name: "Agents Console", path: "/dashboard/connections" },
 ] as const;
 
 export type SectionKey = (typeof SECTIONS)[number]["key"];
