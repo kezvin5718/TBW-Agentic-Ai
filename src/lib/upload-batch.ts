@@ -101,7 +101,17 @@ export async function writeCaptionFor(uploadId: string, baseUrl: string, cookie:
       }),
     });
     const data = await res.json();
-    if (!res.ok || !data.caption) throw new Error(data.error || "no caption returned");
+    if (!res.ok || !data.caption) {
+      // A missing address is a fixable gap in the brand record, not a failure of
+      // this creative — it is recorded distinctly so the screen can say which
+      // client needs one instead of showing an unexplained empty box.
+      if (data.code === "missing_contact") {
+        await admin.from("creative_uploads").update({ caption_status: "no_contact" }).eq("id", uploadId);
+        console.warn(`caption for upload ${uploadId} skipped: ${data.error}`);
+        return false;
+      }
+      throw new Error(data.error || "no caption returned");
+    }
 
     await admin
       .from("creative_uploads")

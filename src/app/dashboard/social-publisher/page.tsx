@@ -2024,6 +2024,11 @@ export default function SocialPublisherPage() {
                         <span className="text-[11px] font-bold text-white truncate max-w-[220px]">{r.file_name || "creative"}</span>
                         <span className="text-[9px] uppercase font-bold text-slate-500">{r.content_type}</span>
                         {r.caption_status === "failed" && <span className="text-[9px] font-bold text-amber-400">caption failed — write one</span>}
+                        {r.caption_status === "no_contact" && (
+                          <span className="text-[9px] font-bold text-rose-400" title="Every caption must carry the address and phone">
+                            no address/phone on file — add it in Brand Brain
+                          </span>
+                        )}
                       </div>
                       {r.content_type === "story" ? (
                         <p className="text-[10px] text-slate-600">Stories carry no caption — both platforms drop the text.</p>

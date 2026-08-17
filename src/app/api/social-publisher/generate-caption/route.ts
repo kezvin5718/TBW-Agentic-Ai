@@ -73,7 +73,21 @@ export async function POST(request: NextRequest) {
 
   const { notes, rules } = splitPreferences((brain?.design_preferences as unknown[]) || []);
   const addr = ((brain?.addresses as AddressEntry[]) || [])[0];
-  const hasContact = !!(addr?.address || addr?.phone);
+
+  // Both are required on every caption. There is no way to write one without
+  // them and no acceptable way to fill the gap: an invented address or a made-up
+  // phone number on a live jewellery post is worse than no post at all. So this
+  // refuses, names what is missing, and says where to add it.
+  const missingContact = [!addr?.address && "address", !addr?.phone && "phone number"].filter(Boolean);
+  if (missingContact.length > 0) {
+    return NextResponse.json(
+      {
+        error: `${client.name} has no ${missingContact.join(" or ")} on file, and every caption must carry both. Add it in Brand Brain → ${client.name}, then generate again.`,
+        code: "missing_contact",
+      },
+      { status: 400 }
+    );
+  }
   const hashtagCount = rules.hashtags || "3-6";
   const keywordCount = rules.seo_keywords || "5-8";
   const feedbackDigest = Array.isArray(brain?.feedback_log)
@@ -112,11 +126,13 @@ ${feedbackDigest ? `\nRecent feedback on past posts:\n${feedbackDigest}` : ""}
 
 ${brief ? `What this post is about: ${brief}` : "Write something on-brand and engaging for this brand."}
 
+LENGTH — this matters. The written part of the caption (the hook, the body and the closing line together) must be between 100 and 120 words. That is a real paragraph, not two lines: describe the piece, the craft, the occasion it suits and who it is for, drawing on what is actually in the creative. Count only those words — the 📍/📞 lines, the keyword line and the hashtags are not part of the count.
+
 Format the caption in EXACTLY this structure — a blank line between every block, nothing merged together, no markdown:
 
 <hook line, 1-2 emoji at the end>
 <blank line>
-<1-2 short sentences describing the piece and the occasion it suits — grounded in what's actually in the creative>
+<the body: several sentences on the piece, its craftsmanship and the occasion it suits, grounded in what's actually in the creative. This is where nearly all of the 100-120 words live.>
 <blank line>
 <one closing tagline line — no emoji>
 <blank line>
@@ -127,13 +143,35 @@ Format the caption in EXACTLY this structure — a blank line between every bloc
 <blank line>
 <${hashtagCount} hashtags on one line, space-separated, each starting with #>
 
-${hasContact ? `Use this exact address and phone in the 📍/📞 lines: ${addr!.address || ""} / ${addr!.phone || ""}` : "No address or phone is on file for this brand — leave out the 📍/📞 block entirely, including its blank lines."}
+The 📍 and 📞 lines are mandatory and must both appear, exactly as given here — never altered, never abbreviated, never left out:
+📍 ${addr!.address}
+📞 ${addr!.phone}
 
 Output only the caption, nothing else.`,
     }],
     model: chosenModel,
-    maxTokens: 400,
+    // A 100-120 word body plus the contact block, keywords and hashtags does not
+    // fit in 400 — the old limit cut captions off mid-sentence.
+    maxTokens: 900,
   });
 
-  return NextResponse.json({ success: true, caption: caption.trim(), model: chosenModel });
+  const text = caption.trim();
+
+  // The contact block is the one part that cannot be quietly dropped, and a
+  // model told to include something will occasionally not. Appending it is safer
+  // than returning a caption the team assumes is complete.
+  const withContact = text.includes(addr!.address!) && text.includes(addr!.phone!)
+    ? text
+    : `${text}\n\n📍 ${addr!.address}\n📞 ${addr!.phone}`;
+
+  // Reported so a caption that came back far short of the brief is visible
+  // rather than being discovered at posting time.
+  const bodyWords = withContact
+    .split("\n")
+    .filter((l) => !/^\s*(📍|📞|🏷️|#)/.test(l))
+    .join(" ")
+    .split(/\s+/)
+    .filter(Boolean).length;
+
+  return NextResponse.json({ success: true, caption: withContact, model: chosenModel, bodyWords });
 }
