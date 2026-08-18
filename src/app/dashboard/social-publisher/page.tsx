@@ -758,6 +758,10 @@ export default function SocialPublisherPage() {
   const [autoOrder, setAutoOrder] = useState<string[]>([]);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
+  // The row only becomes draggable while the mouse is down on its ⠿ handle.
+  // With the whole row permanently draggable, selecting caption text in the
+  // textarea starts a drag instead of a selection.
+  const [dragArm, setDragArm] = useState<string | null>(null);
   const [captionBusy, setCaptionBusy] = useState(false);
 
   /** Move one row to sit where another currently is, keeping the rest in order. */
@@ -2127,9 +2131,9 @@ export default function SocialPublisherPage() {
                 return (
                   <div
                     key={r.id}
-                    draggable
+                    draggable={dragArm === r.id}
                     onDragStart={(e) => { setDragId(r.id); e.dataTransfer.effectAllowed = "move"; }}
-                    onDragEnd={() => { setDragId(null); setOverId(null); }}
+                    onDragEnd={() => { setDragId(null); setOverId(null); setDragArm(null); }}
                     onDragOver={(e) => { e.preventDefault(); if (dragId && dragId !== r.id) setOverId(r.id); }}
                     onDragLeave={() => setOverId((o) => (o === r.id ? null : o))}
                     onDrop={(e) => { e.preventDefault(); if (dragId) reorder(dragId, r.id); setDragId(null); setOverId(null); }}
@@ -2140,8 +2144,10 @@ export default function SocialPublisherPage() {
                       : "border-slate-900 bg-slate-950/70"
                     }`}
                   >
-                    <div className="flex flex-col items-center gap-1 shrink-0 mt-0.5">
-                      <span className="w-6 h-6 rounded-full bg-[var(--yellow)] text-black text-[10px] font-black flex items-center justify-center">{i + 1}</span>
+                    <div className="flex flex-col items-center gap-1 shrink-0 mt-0.5"
+                      onMouseDown={() => setDragArm(r.id)}
+                      onMouseUp={() => setDragArm(null)}>
+                      <span className="w-6 h-6 rounded-full bg-[var(--yellow)] text-black text-[10px] font-black flex items-center justify-center cursor-grab active:cursor-grabbing select-none">{i + 1}</span>
                       <span className="text-slate-600 cursor-grab active:cursor-grabbing select-none leading-none" title="Drag to reorder — the dates follow the order">⠿</span>
                     </div>
                     <div className={`w-12 shrink-0 rounded-lg overflow-hidden border border-slate-800 bg-slate-900 ${["reel", "story"].includes(r.content_type) ? "aspect-[9/16]" : "aspect-square"}`}>
