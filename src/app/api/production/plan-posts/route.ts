@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { analysePlan } from "@/lib/post-designer";
-import { generatePlanPosts } from "@/lib/post-studio";
-import { describeImageViaVision, isImageGenerationConfigured } from "@/lib/integrations/openai-images";
+import { generatePlanPosts, buildScenePrompt } from "@/lib/post-studio";
+import { describeImageViaVision, isImageGenerationConfigured, imageModelName } from "@/lib/integrations/openai-images";
 import { isDriveConnected, getDriveQuota, getDriveStatus, storeToDriveStrict } from "@/lib/google-drive";
 import { cleanProductPhoto } from "@/lib/product-photo";
 
@@ -38,6 +38,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       ...plan,
+      // The exact text each generated post will send to the image model, and
+      // which model that is — shown before Build so nobody pays to find out.
+      specs: plan.specs.map((sp) => ({
+        ...sp,
+        imagePrompt: sp.kind === "generated" && sp.scenePrompt.trim() ? buildScenePrompt(sp) : null,
+      })),
+      imageModel: imageModelName(),
       photos: photos || [],
       alreadyMade: made || [],
       imagesReady: isImageGenerationConfigured(),

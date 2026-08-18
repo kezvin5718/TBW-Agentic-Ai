@@ -12,6 +12,7 @@ import {
 interface SpecRow {
   item: number; date: string | null; platform: string; contentType: string;
   kind: "product" | "generated"; frames: number; headline: string; reason: string;
+  imagePrompt?: string | null;
 }
 interface PhotoRow { id: string; seq: number; image_url: string; file_name: string | null; description: string | null }
 
@@ -25,6 +26,7 @@ export default function PlanPostsPage() {
     clientName: string; month: string; total: number; needPhoto: number;
     photosRequired: number; generated: number; skippedReels: number;
     specs: SpecRow[]; photos: PhotoRow[]; alreadyMade: { id: string }[]; imagesReady: boolean;
+    imageModel?: string;
     driveConnected?: boolean;
     driveError?: string | null;
     driveQuota?: { usedGb: number; limitGb: number | null; percent: number | null } | null;
@@ -293,7 +295,8 @@ export default function PlanPostsPage() {
               minute or so per post.
             </p>
             {analysis.specs.map((s) => (
-              <label key={s.item}
+              <div key={s.item} className="space-y-1">
+              <label
                 className={`flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${picked.includes(s.item) ? "border-indigo-600 bg-indigo-950/20" : "border-slate-900 bg-slate-950/60 hover:border-slate-800"}`}>
                 <input type="checkbox" checked={picked.includes(s.item)}
                   onChange={(e) => setPicked((prev) => e.target.checked ? [...prev, s.item] : prev.filter((n) => n !== s.item))}
@@ -306,6 +309,27 @@ export default function PlanPostsPage() {
                 <span className="text-[10px] text-slate-500 shrink-0 capitalize">{s.contentType}{s.frames > 1 ? ` ×${s.frames}` : ""}</span>
                 <span className="text-[10px] font-mono text-slate-600 shrink-0">{s.date?.slice(5) || "—"}</span>
               </label>
+              {/* The exact prompt this post sends to the image model — visible
+                  before Build, because after Build it has already been paid for. */}
+              {s.imagePrompt && (
+                <details className="ml-9 rounded-lg border border-slate-900 bg-slate-950/40">
+                  <summary className="px-3 py-1.5 text-[10px] font-bold text-slate-500 hover:text-white cursor-pointer list-none">
+                    ▸ Image prompt — sent to {analysis.imageModel || "the image model"} on Build
+                  </summary>
+                  <div className="px-3 pb-2 space-y-1.5">
+                    <pre className="text-[10px] text-slate-300 whitespace-pre-wrap font-mono leading-relaxed bg-slate-950 border border-slate-900 rounded-lg p-2.5">{s.imagePrompt}</pre>
+                    <button type="button"
+                      onClick={() => navigator.clipboard.writeText(s.imagePrompt!)}
+                      className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 cursor-pointer">
+                      Copy prompt
+                    </button>
+                  </div>
+                </details>
+              )}
+              {s.kind === "product" && (
+                <p className="ml-9 text-[9px] text-slate-700">No image is generated for this one — your product photo is used as-is, with the type composited on.</p>
+              )}
+              </div>
             ))}
           </div>
 

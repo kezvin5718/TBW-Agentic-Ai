@@ -89,6 +89,12 @@ export async function describeImageViaVision(imageUrl: string, instruction: stri
  * Only ever used for creatives with no real product in them. A photograph of a
  * client's jewellery is composited, never regenerated.
  */
+/** The model a generation will actually use, resolvable without calling it. */
+export function imageModelName(): string {
+  const viaRouter = !!process.env.OPENROUTER_API_KEY;
+  return process.env.IMAGE_MODEL || (viaRouter ? "openai/gpt-5.4-image-2" : "gpt-image-1");
+}
+
 export async function generateBrandImage(
   prompt: string,
   shape: "square" | "portrait" | "landscape" = "square"

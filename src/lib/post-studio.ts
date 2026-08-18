@@ -184,6 +184,18 @@ async function canvas(spec: PostSpec, width: number, height: number): Promise<Bu
 }
 
 /**
+ * The exact text handed to the image model for a generated post — exported so
+ * the 5b screen can show it before any money is spent, and so what is shown is
+ * what is sent rather than a paraphrase of it.
+ */
+export function buildScenePrompt(spec: PostSpec): string {
+  return `${spec.scenePrompt}
+
+Style: premium Indian advertising background for a jewellery brand. Rich but uncluttered, with clear empty space across the lower half where text will be placed afterwards.
+Absolutely no text, no letters, no numbers, no logos, no watermarks, no people, and no jewellery or products of any kind. Background scene only.`;
+}
+
+/**
  * Fetch an image the pipeline needs, without trusting the host to answer.
  *
  * Product photos and logos live on Google Drive, and Google's CDN does not
@@ -363,12 +375,8 @@ export async function renderFrame(
       note = "Could not read the product photo — fell back to a plain brand background.";
     }
   } else if (spec.kind === "generated" && spec.scenePrompt) {
-    const prompt = `${spec.scenePrompt}
-
-Style: premium Indian advertising background for a jewellery brand. Rich but uncluttered, with clear empty space across the lower half where text will be placed afterwards.
-Absolutely no text, no letters, no numbers, no logos, no watermarks, no people, and no jewellery or products of any kind. Background scene only.`;
     console.log(`      · generating background scene (this is the slow one)…`);
-    const { buffer, error } = await generateBrandImage(prompt, shapeFor(spec));
+    const { buffer, error } = await generateBrandImage(buildScenePrompt(spec), shapeFor(spec));
     console.log(`      · background scene ${buffer ? "generated" : `FAILED: ${error}`}.`);
     if (buffer) {
       hasImagery = true;
