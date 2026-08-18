@@ -29,6 +29,10 @@ interface InboxRow {
   id: string;
   group_jid: string | null;
   group_name: string | null;
+  media_url?: string | null;
+  media_note?: string | null;
+  media_kind?: string | null;
+  from_me?: boolean | null;
   sender_name: string | null;
   message_text: string | null;
   received_at: string;
@@ -83,7 +87,7 @@ export async function runWhatsAppTaskBot(): Promise<BotResult> {
   // without a draft, and must not come back round on the next run.
   const { data: rows, error } = await admin
     .from("wa_inbox")
-    .select("id, group_jid, group_name, sender_name, message_text, received_at, client_id")
+    .select("id, group_jid, group_name, sender_name, message_text, received_at, client_id, media_url, media_note, media_kind, from_me")
     .is("clustered_at", null)
     .order("received_at", { ascending: true })
     .limit(300);
@@ -119,8 +123,15 @@ export async function runWhatsAppTaskBot(): Promise<BotResult> {
       out.clusters++;
       const ids = cluster.map((c) => c.id);
       const groupName = cluster[0].group_name || "";
+      // A filed creative or transcribed voice note is often the whole point of
+      // the conversation — the task must carry it, not say "[media]".
       const transcript = cluster
-        .map((c) => `${c.sender_name || "someone"}: ${(c.message_text || "").slice(0, 500)}`)
+        .map((c) => {
+          const media = c.media_url
+            ? ` [sent a ${c.media_kind || "file"}${c.media_note ? ` — ${c.media_note.slice(0, 260)}` : ""}: ${c.media_url}]`
+            : "";
+          return `${c.sender_name || "someone"}${c.from_me ? " (our team)" : ""}: ${(c.message_text || "").slice(0, 500)}${media}`;
+        })
         .join("\n");
 
       if (!transcript.replace(/\w+:/g, "").trim()) {

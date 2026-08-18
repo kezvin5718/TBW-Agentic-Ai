@@ -785,3 +785,50 @@ export async function get_drive_health() {
     : "";
   return `Google Drive is connected as ${status.email || "unknown account"}.${quotaLine}`;
 }
+
+/**
+ * What is happening in one brand's WhatsApp right now — group and DMs together.
+ * The question this answers is the one a founder actually asks: has the client
+ * said something we haven't answered?
+ */
+export async function get_group_activity(supabase: SupabaseClient, clientName: string) {
+  const { data: client } = await supabase
+    .from("clients").select("id, name, whatsapp_group_id").ilike("name", `%${clientName}%`).maybeSingle();
+  if (!client) return `Client "${clientName}" not found.`;
+
+  const { data: contacts } = await supabase.from("wa_contacts").select("number").eq("client_id", client.id);
+  const dmNumbers = (contacts || []).map((c) => c.number);
+
+  let q = supabase
+    .from("wa_inbox")
+    .select("sender_name, sender_number, message_text, media_kind, media_note, media_url, from_me, is_dm, received_at")
+    .order("received_at", { ascending: false })
+    .limit(15);
+  if (client.whatsapp_group_id && dmNumbers.length > 0) {
+    q = q.or(`group_jid.eq.${client.whatsapp_group_id},sender_number.in.(${dmNumbers.join(",")})`);
+  } else if (client.whatsapp_group_id) {
+    q = q.eq("group_jid", client.whatsapp_group_id);
+  } else if (dmNumbers.length > 0) {
+    q = q.in("sender_number", dmNumbers);
+  } else {
+    return `${client.name} has no WhatsApp group mapped and no named DM contacts — nothing to read.`;
+  }
+  const { data: rows } = await q;
+  if (!rows || rows.length === 0) return `Nothing recorded from ${client.name}'s WhatsApp yet.`;
+
+  // Unanswered: the newest message is theirs, not ours, and has sat a while.
+  const newest = rows[0];
+  const ageHrs = (Date.now() - new Date(newest.received_at as string).getTime()) / 3600000;
+  const unanswered = !newest.from_me && ageHrs >= 2
+    ? `⚠️ Last word is the client's — unanswered for ${ageHrs.toFixed(0)}h.`
+    : "";
+
+  const lines = rows.slice(0, 10).reverse().map((r) => {
+    const who = r.from_me ? "us" : r.sender_name || r.sender_number || "client";
+    const media = r.media_url ? ` [${r.media_kind}${r.media_note ? `: ${String(r.media_note).slice(0, 120)}` : ""}]` : "";
+    const when = fmtIST(r.received_at as string);
+    return `- ${when} ${who}${r.is_dm ? " (DM)" : ""}: ${(r.message_text || "").slice(0, 140)}${media}`;
+  });
+
+  return `${client.name} — latest WhatsApp activity:\n${unanswered ? unanswered + "\n" : ""}${lines.join("\n")}`;
+}

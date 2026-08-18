@@ -1,5 +1,7 @@
 "use client";
 
+import WaBridgePanels from "./WaBridgePanels";
+
 import { useState, useEffect, useCallback, useRef } from "react";
 import QRCode from "qrcode";
 import { QrCode, RefreshCw, Loader2, CheckCircle2, AlertTriangle, Link2 } from "lucide-react";
@@ -107,7 +109,9 @@ export default function WhatsAppReaderPage() {
         </button>
       </div>
 
-      <p className="text-[11px] text-slate-600 text-center">Uses the unofficial WhatsApp protocol on a dedicated number — read-only. If the number is ever banned, click Re-link and scan with a new one.</p>
+      <p className="text-[11px] text-slate-600 text-center">Uses the unofficial WhatsApp protocol on a dedicated number. It reads client groups and DMs, files media to Drive, and sends only what staff queue below. If the number is ever banned, click Re-link and scan with a new one.</p>
+
+      <WaBridgePanels />
     </div>
   );
 }
