@@ -48,6 +48,11 @@ Tool notes:
 - get_content_hub_status: creative the designers have delivered that has NOT been posted yet. Use for "what is waiting to go out", "what has the team delivered", "anything pending for <client>".
 - get_social_queue: what is scheduled, what already went out, and what FAILED to publish. Use for "what is going out today", "did anything fail", "what is scheduled".
 - get_whatsapp_drafts: tasks the WhatsApp bot framed from client messages that still need someone to approve them.
+- get_festivals: the festival list with each one's posting time and how many creatives are attached. Use for "which festivals are set up", "is the Diwali story ready".
+- get_automation_status: what is approved and waiting in the Automation tab, whose captions are missing, and what QC rejected. Use for "what is ready to schedule", "anything rejected", "are captions done for <client>".
+- get_drive_health: whether Google Drive is connected and how full it is. Use for "is drive working", "why are uploads failing".
+- generate_plan: reports the plan that EXISTS for a client (rows, direction, status). It does not write plans — those are made in Campaign Planning.
+- draft_weekly_report: real posting numbers for the last/next 7 days. Ad metrics are not connected; never invent them.
 
 Guidelines:
 1. You have full access to search and modify system states (creatives, plans, tasks, campaigns, leads, uploads, scheduled posts) via tools.
@@ -58,7 +63,7 @@ Guidelines:
 You MUST respond in JSON format matching this schema:
 {
   "thought": "Explain your reasoning about the user command.",
-  "tool": "get_pending_approvals" | "get_client_status" | "get_campaign_metrics" | "get_overdue_tasks" | "get_lead_pipeline" | "search_brand_brain" | "get_content_hub_status" | "get_social_queue" | "get_whatsapp_drafts" | "draft_client_reply" | "generate_plan" | "draft_weekly_report" | "approve_creative" | "activate_campaign" | "update_budget" | "send_to_client" | "none",
+  "tool": "get_pending_approvals" | "get_client_status" | "get_campaign_metrics" | "get_overdue_tasks" | "get_lead_pipeline" | "search_brand_brain" | "get_content_hub_status" | "get_social_queue" | "get_whatsapp_drafts" | "get_festivals" | "get_automation_status" | "get_drive_health" | "draft_client_reply" | "generate_plan" | "draft_weekly_report" | "approve_creative" | "activate_campaign" | "update_budget" | "send_to_client" | "none",
   "args": { "client": "string", "query": "string", "id": "string", "campaign": "string", "amount": number, "content": "string", "range": number },
   "response": "Provide a direct direct response if no tool is required."
 }`;
@@ -112,6 +117,15 @@ You MUST respond in JSON format matching this schema:
         break;
       case "get_whatsapp_drafts":
         toolResult = await tools.get_whatsapp_drafts(supabase);
+        break;
+      case "get_festivals":
+        toolResult = await tools.get_festivals(supabase);
+        break;
+      case "get_automation_status":
+        toolResult = await tools.get_automation_status(supabase, (args.client as string) || undefined);
+        break;
+      case "get_drive_health":
+        toolResult = await tools.get_drive_health();
         break;
       case "search_brand_brain":
         toolResult = await tools.search_brand_brain(supabase, (args.client as string) || "", (args.query as string) || "");

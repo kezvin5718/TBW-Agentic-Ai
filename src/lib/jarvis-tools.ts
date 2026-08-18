@@ -261,12 +261,39 @@ export async function generate_plan(supabase: SupabaseClient, clientName: string
     return `Client "${clientName}" not found.`;
   }
 
-  // Simulate generating strategy brief
-  return `Draft Plan for ${client.name} (${monthStr}):
-1. Strategy Summary: Focus on seasonal pickles and festival gift packaging.
-2. Content Pillars: product showcase, heritage recipe stories, chef testimonials.
-3. Content Calendar: 4 posts (2 videos, 2 static images) scheduled.
-4. Daily ad budget suggestion: Rs. 1500/day.`;
+  // This used to return an invented plan — hardcoded pickle-company text, the
+  // same for every client. Bron reports what actually exists; plans are made
+  // and imported in Campaign Planning, not composed in chat.
+  let q = supabase
+    .from("monthly_plans")
+    .select("month, status, strategy_summary, content_calendar")
+    .eq("client_id", client.id)
+    .order("month", { ascending: false })
+    .limit(1);
+  if (monthStr && /^\d{4}-\d{2}/.test(monthStr)) {
+    q = supabase
+      .from("monthly_plans")
+      .select("month, status, strategy_summary, content_calendar")
+      .eq("client_id", client.id)
+      .eq("month", `${monthStr.slice(0, 7)}-01`)
+      .limit(1);
+  }
+  const { data: plans } = await q;
+  const plan = plans?.[0];
+  if (!plan) {
+    return `${client.name} has no plan on file${monthStr ? ` for ${monthStr}` : ""}. Create or import one in Campaign Planning — Bron can then report on it.`;
+  }
+
+  const cal = (plan.content_calendar as Array<Record<string, unknown>> | null) || [];
+  const withDirection = cal.filter((r) => String(r.productionNote || "").trim()).length;
+  const withCaption = cal.filter((r) => String(r.caption || "").trim()).length;
+  const reels = cal.filter((r) => String(r.format || "").toLowerCase().includes("reel")).length;
+
+  return `Plan for ${client.name} — ${String(plan.month).slice(0, 7)} (${plan.status}):
+- ${cal.length} calendar rows: ${reels} reels, ${cal.length - reels} static/carousel.
+- ${withDirection} rows carry the author's production direction, ${withCaption} carry a written caption.
+- Strategy: ${String(plan.strategy_summary || "not recorded").slice(0, 220)}
+To change it, use Campaign Planning; to produce stills from it, use Plan → Posts.`;
 }
 
 export async function draft_weekly_report(supabase: SupabaseClient, clientName: string) {
@@ -280,11 +307,47 @@ export async function draft_weekly_report(supabase: SupabaseClient, clientName: 
     return `Client "${clientName}" not found.`;
   }
 
-  // Get campaign stats
-  return `Draft Weekly Report for ${client.name}:
-- Overview: Reached 25k users with blended ROAS at 2.45x.
-- Top Creative: 'Reel - Pickle Heritage Recipe' (CTR 1.25%).
-- Next Week recommendation: Shift 20% budget from static images to video placements.`;
+  // Real numbers only. The old version returned the same invented ROAS and a
+  // pickle-recipe reel for every client — a report that reads plausibly and is
+  // entirely fiction is worse than none.
+  const now = Date.now();
+  const weekAgo = new Date(now - 7 * 86400000).toISOString();
+  const weekAhead = new Date(now + 7 * 86400000).toISOString();
+  const nowIso = new Date(now).toISOString();
+
+  const { data: posted } = await supabase
+    .from("social_posts")
+    .select("platform, content_type, status, scheduled_for")
+    .eq("client_id", client.id)
+    .gte("scheduled_for", weekAgo)
+    .lte("scheduled_for", nowIso);
+  const { data: upcoming } = await supabase
+    .from("social_posts")
+    .select("platform, scheduled_for, status")
+    .eq("client_id", client.id)
+    .gt("scheduled_for", nowIso)
+    .lte("scheduled_for", weekAhead);
+  const { count: waiting } = await supabase
+    .from("creative_uploads")
+    .select("id", { count: "exact", head: true })
+    .eq("client_id", client.id)
+    .eq("status", "uploaded")
+    .eq("qc_status", "match");
+  const { count: rejected } = await supabase
+    .from("creative_uploads")
+    .select("id", { count: "exact", head: true })
+    .eq("client_id", client.id)
+    .eq("status", "rejected");
+
+  const went = (posted || []).filter((p) => p.status !== "failed");
+  const failed = (posted || []).filter((p) => p.status === "failed");
+  const byType = went.reduce<Record<string, number>>((a, p) => { a[p.content_type] = (a[p.content_type] || 0) + 1; return a; }, {});
+  const typeLine = Object.entries(byType).map(([t, n]) => `${n} ${t}`).join(", ") || "nothing";
+
+  return `Week report for ${client.name} (organic posting — ad metrics are not connected):
+- Went out in the last 7 days: ${went.length} post(s) (${typeLine}).${failed.length ? ` ${failed.length} FAILED to publish — check the Library.` : ""}
+- Scheduled for the next 7 days: ${(upcoming || []).length} post(s).
+- Approved and waiting in Automation: ${waiting || 0}. Rejected at QC awaiting a fix: ${rejected || 0}.`;
 }
 
 // ==========================================
@@ -645,4 +708,80 @@ export async function get_whatsapp_drafts(supabase: SupabaseClient) {
     out += `- ${d.title}\n  ${client}${d.client_uncertain ? " (brand NOT confirmed)" : ""} | ${d.priority} | suggested: ${d.suggested_assignee || "nobody"}\n`;
   });
   return out;
+}
+
+// ==========================================
+// 4. NEW SURFACES — festivals, automation, Drive
+// Bron answers for what the portal can actually do today; a section that his
+// tool list does not cover is a section he confidently knows nothing about.
+// ==========================================
+
+export async function get_festivals(supabase: SupabaseClient) {
+  const { data: fests } = await supabase
+    .from("festivals")
+    .select("id, name, scheduled_at")
+    .order("scheduled_at", { ascending: true });
+  if (!fests || fests.length === 0) {
+    return "No festivals on the list. Add them under 8b · Festivals in the sidebar.";
+  }
+  const { data: linked } = await supabase
+    .from("creative_uploads")
+    .select("festival_id, status")
+    .not("festival_id", "is", null);
+  const counts = new Map<string, { total: number; scheduled: number }>();
+  for (const u of linked || []) {
+    const c = counts.get(u.festival_id as string) || { total: 0, scheduled: 0 };
+    c.total++;
+    if (u.status === "scheduled") c.scheduled++;
+    counts.set(u.festival_id as string, c);
+  }
+  const now = Date.now();
+  const lines = fests.map((f) => {
+    const when = new Date(f.scheduled_at as string);
+    const c = counts.get(f.id as string);
+    const past = when.getTime() < now;
+    const dateStr = when.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+    return `- ${f.name} — ${dateStr} IST${past ? " (past)" : ""}${c ? ` · ${c.scheduled}/${c.total} creative(s) scheduled` : " · no creative uploaded yet"}`;
+  });
+  return `Festivals (${fests.length}):\n${lines.join("\n")}`;
+}
+
+export async function get_automation_status(supabase: SupabaseClient, clientName?: string) {
+  let clientId: string | null = null;
+  let label = "all clients";
+  if (clientName) {
+    const { data: client } = await supabase.from("clients").select("id, name").ilike("name", `%${clientName}%`).maybeSingle();
+    if (!client) return `Client "${clientName}" not found.`;
+    clientId = client.id as string;
+    label = client.name as string;
+  }
+  let approvedQ = supabase.from("creative_uploads").select("id, caption, client_id, clients(name)")
+    .eq("status", "uploaded").eq("qc_status", "match").is("festival_id", null).neq("content_type", "thumbnail");
+  let rejectedQ = supabase.from("creative_uploads").select("id", { count: "exact", head: true }).eq("status", "rejected");
+  if (clientId) { approvedQ = approvedQ.eq("client_id", clientId); rejectedQ = rejectedQ.eq("client_id", clientId); }
+  const { data: approved } = await approvedQ;
+  const { count: rejectedCount } = await rejectedQ;
+  const rows = approved || [];
+  const noCaption = rows.filter((r) => !String(r.caption || "").trim()).length;
+  if (rows.length === 0 && !rejectedCount) return `Nothing waiting in Automation for ${label}.`;
+  const byClient = rows.reduce<Record<string, number>>((a, r) => {
+    const n = (r.clients as { name?: string } | null)?.name || "unknown";
+    a[n] = (a[n] || 0) + 1; return a;
+  }, {});
+  const clientLine = clientId ? "" : `\nBy client: ${Object.entries(byClient).map(([n, c]) => `${n} (${c})`).join(", ")}`;
+  return `Automation for ${label}: ${rows.length} creative(s) approved and waiting to schedule.${noCaption ? ` ${noCaption} still need a caption — the "Write missing captions" button in the Automation tab fills them.` : " All captions written."}${rejectedCount ? ` ${rejectedCount} rejected at QC awaiting a fixed re-upload.` : ""}${clientLine}`;
+}
+
+export async function get_drive_health() {
+  // Drive going down takes uploads, generation and festival stories with it —
+  // worth being able to ask about directly.
+  const { getDriveStatus, getDriveQuota } = await import("@/lib/google-drive");
+  const status = await getDriveStatus();
+  if (!status.configured) return "Google Drive is not configured on this server.";
+  if (!status.connected) return `Google Drive is DISCONNECTED${status.error ? ` — ${status.error}` : ""}. Reconnect it under Settings → Integrations; uploads, post generation and festival stories are all blocked until then.`;
+  const quota = await getDriveQuota();
+  const quotaLine = quota
+    ? ` Storage: ${quota.usedGb.toFixed(1)} GB used${quota.limitGb ? ` of ${quota.limitGb} GB (${quota.percent?.toFixed(0)}%)` : ""}.`
+    : "";
+  return `Google Drive is connected as ${status.email || "unknown account"}.${quotaLine}`;
 }

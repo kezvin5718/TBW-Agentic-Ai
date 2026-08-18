@@ -67,6 +67,7 @@ export default function JarvisChatPage() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speakReplies, setSpeakReplies] = useState(false);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Initialize Web Speech API Recognition
   useEffect(() => {
@@ -124,27 +125,51 @@ export default function JarvisChatPage() {
     }
   };
 
-  const speakText = (text: string) => {
+  /** The browser's built-in voice — the fallback when server TTS is unavailable. */
+  const speakWithBrowser = (cleanText: string) => {
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
-      // Remove markdown chars and emojis from speech output
-      const cleanText = text.replace(/[*#`❌🎙]/g, "").replace(/\n+/g, " ");
       const utterance = new SpeechSynthesisUtterance(cleanText);
       utterance.lang = "en-IN"; // Indian English voice
-
       utterance.onstart = () => setIsSpeaking(true);
       utterance.onend = () => setIsSpeaking(false);
       utterance.onerror = () => setIsSpeaking(false);
-
       window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  const speakText = async (text: string) => {
+    // Remove markdown chars and emojis from speech output
+    const cleanText = text.replace(/[*#`❌🎙]/g, "").replace(/\n+/g, " ");
+    // Server TTS first — a real voice rather than the robotic browser one. Any
+    // failure (no key, network, autoplay refusal) falls back to the browser.
+    try {
+      const res = await fetch("/api/jarvis/speak", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: cleanText }),
+      });
+      if (!res.ok) throw new Error("tts unavailable");
+      const url = URL.createObjectURL(await res.blob());
+      audioRef.current?.pause();
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onplay = () => setIsSpeaking(true);
+      audio.onended = () => { setIsSpeaking(false); URL.revokeObjectURL(url); };
+      audio.onerror = () => { setIsSpeaking(false); URL.revokeObjectURL(url); };
+      await audio.play();
+    } catch {
+      speakWithBrowser(cleanText);
     }
   };
 
   const toggleSpeakReplies = () => {
     const newVal = !speakReplies;
     setSpeakReplies(newVal);
-    if (!newVal && typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
+    if (!newVal) {
+      if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
+      audioRef.current?.pause();
+      audioRef.current = null;
       setIsSpeaking(false);
     }
   };
