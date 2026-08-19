@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import Avatar from "../Avatar";
 import {
   Loader2, Plus, X, Check, Users, Rows3,
-  Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2,
+  Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2, Pencil,
 } from "lucide-react";
 
 interface Task {
@@ -62,6 +62,34 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ title: "", clientId: "", assigneeName: "", type: "design", priority: "medium", deadline: "" });
   const [saving, setSaving] = useState(false);
+  // The task being edited — one modal serves both the board and the team tab.
+  const [editTask, setEditTask] = useState<Task | null>(null);
+  const [editForm, setEditForm] = useState({ title: "", clientId: "", assigneeName: "", type: "other", priority: "medium", deadline: "" });
+
+  const openEdit = (t: Task) => {
+    setEditTask(t);
+    setEditForm({
+      title: t.title || "",
+      clientId: t.client_id || "",
+      assigneeName: t.assignee_name || "",
+      type: t.type || "other",
+      priority: t.priority || "medium",
+      deadline: t.deadline ? new Date(t.deadline).toISOString().slice(0, 10) : "",
+    });
+  };
+
+  const saveEdit = async () => {
+    if (!editTask || !editForm.title.trim()) return;
+    await patch(editTask.id, {
+      title: editForm.title,
+      clientId: editForm.clientId || null,
+      assigneeName: editForm.assigneeName,
+      type: editForm.type,
+      priority: editForm.priority,
+      deadline: editForm.deadline || undefined,
+    });
+    setEditTask(null);
+  };
 
   const fetchAll = useCallback(async (status: string) => {
     setLoading(true);
@@ -202,6 +230,10 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                 <option value="review">Review</option>
                 <option value="done">Done</option>
               </select>
+              <button onClick={() => openEdit(t)} disabled={!!busy} title="Edit task"
+                className="p-1 rounded text-slate-700 hover:text-indigo-400 cursor-pointer disabled:opacity-40">
+                <Pencil className="w-3 h-3" />
+              </button>
               <button onClick={() => remove(t.id)} disabled={!!busy} title="Delete task"
                 className="p-1 rounded text-slate-700 hover:text-rose-400 cursor-pointer disabled:opacity-40">
                 <Trash2 className="w-3 h-3" />
@@ -370,6 +402,14 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                             <option value="review">Review</option>
                             <option value="done">Done</option>
                           </select>
+                          <button onClick={() => openEdit(t)} disabled={!!busy} title="Edit task"
+                            className="p-0.5 rounded text-slate-700 hover:text-indigo-400 cursor-pointer disabled:opacity-40 shrink-0">
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                          <button onClick={() => remove(t.id)} disabled={!!busy} title="Delete task"
+                            className="p-0.5 rounded text-slate-700 hover:text-rose-400 cursor-pointer disabled:opacity-40 shrink-0">
+                            <Trash2 className="w-3 h-3" />
+                          </button>
                         </div>
                       );
                     })}
@@ -378,6 +418,76 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Edit modal — one for both tabs. */}
+      {editTask && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={() => setEditTask(null)}>
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5 w-full max-w-md space-y-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2"><Pencil className="w-4 h-4 text-indigo-400" /><span>Edit task</span></h3>
+              <button onClick={() => setEditTask(null)} className="text-slate-600 hover:text-white cursor-pointer"><X className="w-4 h-4" /></button>
+            </div>
+            <div>
+              <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Task</span>
+              <input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-indigo-600" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Client</span>
+                <select value={editForm.clientId} onChange={(e) => setEditForm({ ...editForm, clientId: e.target.value })}
+                  className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
+                  <option value="">No client</option>
+                  {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Assigned to</span>
+                <select value={editForm.assigneeName} onChange={(e) => setEditForm({ ...editForm, assigneeName: e.target.value })}
+                  className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
+                  <option value="">Unassigned</option>
+                  {team.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Type</span>
+                <select value={editForm.type} onChange={(e) => setEditForm({ ...editForm, type: e.target.value })}
+                  className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
+                  {Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </div>
+              <div>
+                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Priority</span>
+                <select value={editForm.priority} onChange={(e) => setEditForm({ ...editForm, priority: e.target.value })}
+                  className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
+                </select>
+              </div>
+              <div className="col-span-2">
+                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Deadline</span>
+                <input type="date" value={editForm.deadline} onChange={(e) => setEditForm({ ...editForm, deadline: e.target.value })}
+                  className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 focus:outline-none" />
+              </div>
+            </div>
+            <div className="flex items-center justify-between pt-1">
+              <button onClick={() => { const id = editTask.id; setEditTask(null); remove(id); }} disabled={!!busy}
+                className="px-3 py-2 rounded-lg bg-rose-950/40 border border-rose-900 text-rose-400 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5">
+                <Trash2 className="w-3 h-3" /><span>Delete</span>
+              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setEditTask(null)} className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 text-[10px] font-bold cursor-pointer hover:text-white">Cancel</button>
+                <button onClick={saveEdit} disabled={!!busy || !editForm.title.trim()}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5">
+                  {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}<span>Save</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
