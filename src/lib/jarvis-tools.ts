@@ -832,3 +832,17 @@ export async function get_group_activity(supabase: SupabaseClient, clientName: s
 
   return `${client.name} — latest WhatsApp activity:\n${unanswered ? unanswered + "\n" : ""}${lines.join("\n")}`;
 }
+
+/**
+ * The management layer's daily output: what the four managers found this
+ * morning, compressed by Ochrester. Built at 7:45 AM IST by cron; if asked
+ * earlier, it is built on the spot from live data.
+ */
+export async function get_manager_brief() {
+  const { getTodayBrief } = await import("./manager-brief");
+  try {
+    return await getTodayBrief();
+  } catch (err: unknown) {
+    return `The manager brief could not be built: ${err instanceof Error ? err.message : "unknown error"}`;
+  }
+}

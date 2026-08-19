@@ -52,6 +52,7 @@ Tool notes:
 - get_automation_status: what is approved and waiting in the Automation tab, whose captions are missing, and what QC rejected. Use for "what is ready to schedule", "anything rejected", "are captions done for <client>".
 - get_drive_health: whether Google Drive is connected and how full it is. Use for "is drive working", "why are uploads failing".
 - get_group_activity: the latest WhatsApp messages for one brand — group and DMs — including files they sent, and whether their last message is still unanswered. Use for "what is happening with <client>", "did <client> reply", "what did <client> send".
+- get_manager_brief: Ochrester's daily brief — what the Brand, Design, Content and Social managers found this morning (missing contacts, thin style categories, failed captions/posts, bare festivals, empty weeks, unanswered groups). Use for "what did the managers find", "manager brief", "what needs me today", "morning report".
 - generate_plan: reports the plan that EXISTS for a client (rows, direction, status). It does not write plans — those are made in Campaign Planning.
 - draft_weekly_report: real posting numbers for the last/next 7 days. Ad metrics are not connected; never invent them.
 
@@ -64,7 +65,7 @@ Guidelines:
 You MUST respond in JSON format matching this schema:
 {
   "thought": "Explain your reasoning about the user command.",
-  "tool": "get_pending_approvals" | "get_client_status" | "get_campaign_metrics" | "get_overdue_tasks" | "get_lead_pipeline" | "search_brand_brain" | "get_content_hub_status" | "get_social_queue" | "get_whatsapp_drafts" | "get_festivals" | "get_automation_status" | "get_drive_health" | "get_group_activity" | "draft_client_reply" | "generate_plan" | "draft_weekly_report" | "approve_creative" | "activate_campaign" | "update_budget" | "send_to_client" | "none",
+  "tool": "get_pending_approvals" | "get_client_status" | "get_campaign_metrics" | "get_overdue_tasks" | "get_lead_pipeline" | "search_brand_brain" | "get_content_hub_status" | "get_social_queue" | "get_whatsapp_drafts" | "get_festivals" | "get_automation_status" | "get_drive_health" | "get_group_activity" | "get_manager_brief" | "draft_client_reply" | "generate_plan" | "draft_weekly_report" | "approve_creative" | "activate_campaign" | "update_budget" | "send_to_client" | "none",
   "args": { "client": "string", "query": "string", "id": "string", "campaign": "string", "amount": number, "content": "string", "range": number },
   "response": "Provide a direct direct response if no tool is required."
 }`;
@@ -130,6 +131,9 @@ You MUST respond in JSON format matching this schema:
         break;
       case "get_group_activity":
         toolResult = await tools.get_group_activity(supabase, (args.client as string) || "");
+        break;
+      case "get_manager_brief":
+        toolResult = await tools.get_manager_brief();
         break;
       case "search_brand_brain":
         toolResult = await tools.search_brand_brain(supabase, (args.client as string) || "", (args.query as string) || "");

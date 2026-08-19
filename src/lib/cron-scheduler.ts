@@ -6,6 +6,7 @@ import {
   runOverdueDigest,
   runPublishingScheduler
 } from "@/lib/cron-jobs";
+import { runManagerBrief } from "@/lib/manager-brief";
 
 interface CronStatus {
   running: boolean;
@@ -61,6 +62,21 @@ export function startCronScheduler() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("❌ In-App Cron: Ads Autopilot failed:", msg);
+    }
+  }, { timezone: "Asia/Kolkata" });
+  cronSchedulerStatus.jobsScheduledCount++;
+
+  // 2b. Manager Brief (Daily at 7:45 AM IST — before the founder briefing, so
+  // the managers' notes exist by the time anyone asks Bron for them.)
+  cron.schedule("45 7 * * *", async () => {
+    console.log("⏰ In-App Cron: Building the daily Manager Brief...");
+    try {
+      const res = await runManagerBrief();
+      cronSchedulerStatus.lastRun["manager_brief"] = new Date().toISOString();
+      console.log(`✅ In-App Cron: Manager Brief built for ${res.date}.`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: Manager Brief failed:", msg);
     }
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;
