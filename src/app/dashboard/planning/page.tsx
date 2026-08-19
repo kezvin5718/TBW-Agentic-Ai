@@ -959,12 +959,20 @@ export default function PlanningIndexPage() {
                       // flagging a mismatch with zero.
                       const targetVal = Number(clientObj?.deliverables_per_month || 0);
                       const sumVal = Number(qtyStatic) + Number(qtyReel) + Number(qtyCarousel);
-                      const hasMismatch = targetVal > 0 && sumVal !== targetVal;
+                      // With an imported calendar in hand, the real number is
+                      // its slot count — the quantity boxes only matter on the
+                      // "Replace with AI slots" path. Comparing the contract to
+                      // untouched zero boxes cried mismatch at every import.
+                      const imported = calendarSlots.length;
+                      const effective = imported > 0 ? imported : sumVal;
+                      const hasMismatch = targetVal > 0 && effective !== targetVal;
 
                       return (
                         <div className="space-y-2 text-xs">
                           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400 bg-slate-950/20 border border-slate-900 p-2.5 rounded-lg">
-                            <span>Total Scheduled Posts: <strong className="text-white">{sumVal}</strong></span>
+                            <span>{imported > 0
+                              ? <>Your imported plan: <strong className="text-white">{imported} slots</strong><span className="text-slate-600"> (quantity boxes only apply if you replace with AI slots)</span></>
+                              : <>Total Scheduled Posts: <strong className="text-white">{sumVal}</strong></>}</span>
                             <span>{targetVal > 0
                               ? <>Contract: <strong className="text-white">{targetVal}/month</strong></>
                               : <span className="text-slate-600">No contract number set for this client — the plan is the only truth.</span>}</span>
@@ -974,7 +982,7 @@ export default function PlanningIndexPage() {
                               <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                               <div>
                                 <p className="font-bold text-white">Plan differs from the contract</p>
-                                <p className="font-normal mt-0.5">These quantities add to {sumVal}; the contract from onboarding says {targetVal}/month. Production follows the plan — this is only a heads-up, and the morning brief keeps watching it.</p>
+                                <p className="font-normal mt-0.5">{imported > 0 ? `Your imported plan has ${imported} slots` : `These quantities add to ${sumVal}`}; the contract from onboarding says {targetVal}/month. Production follows the plan — this is only a heads-up, you&apos;ll get a reconcile option when you save, and the morning brief keeps watching it.</p>
                               </div>
                             </div>
                           )}
