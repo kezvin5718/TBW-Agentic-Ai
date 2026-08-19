@@ -952,24 +952,27 @@ export default function PlanningIndexPage() {
                     {/* Reconciliation & Mismatch warnings */}
                     {(() => {
                       const clientObj = clients.find(c => c.id === selectedClient);
-                      const targetVal = clientObj?.deliverables_per_month;
+                      // 0 / unset means "no contract number recorded" — there is
+                      // nothing to compare against, so say that instead of
+                      // flagging a mismatch with zero.
+                      const targetVal = Number(clientObj?.deliverables_per_month || 0);
                       const sumVal = Number(qtyStatic) + Number(qtyReel) + Number(qtyCarousel);
-                      const hasMismatch = targetVal !== undefined && sumVal !== targetVal;
-                      
+                      const hasMismatch = targetVal > 0 && sumVal !== targetVal;
+
                       return (
                         <div className="space-y-2 text-xs">
                           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400 bg-slate-950/20 border border-slate-900 p-2.5 rounded-lg">
                             <span>Total Scheduled Posts: <strong className="text-white">{sumVal}</strong></span>
-                            {targetVal !== undefined && (
-                              <span>Client Profile Target: <strong className="text-white">{targetVal}</strong></span>
-                            )}
+                            <span>{targetVal > 0
+                              ? <>Contract: <strong className="text-white">{targetVal}/month</strong></>
+                              : <span className="text-slate-600">No contract number set for this client — the plan is the only truth.</span>}</span>
                           </div>
                           {hasMismatch && (
                             <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-3 flex items-start space-x-2 text-[10px] text-amber-300 font-semibold animate-in fade-in duration-200">
                               <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                               <div>
-                                <p className="font-bold text-white">Target Quota Mismatch</p>
-                                <p className="font-normal mt-0.5">The total quantity of formats ({sumVal}) does not match the client profile target ({targetVal}). Please reconcile or verify if you wish to override this.</p>
+                                <p className="font-bold text-white">Plan differs from the contract</p>
+                                <p className="font-normal mt-0.5">These quantities add to {sumVal}; the contract from onboarding says {targetVal}/month. Production follows the plan — this is only a heads-up, and the morning brief keeps watching it.</p>
                               </div>
                             </div>
                           )}
@@ -1040,16 +1043,16 @@ export default function PlanningIndexPage() {
 
                   {(() => {
                     const clientObj = clients.find(c => c.id === selectedClient);
-                    const targetVal = clientObj?.deliverables_per_month;
-                    const hasMismatch = targetVal !== undefined && calendarSlots.length !== targetVal;
-                    
+                    const targetVal = Number(clientObj?.deliverables_per_month || 0);
+                    const hasMismatch = targetVal > 0 && calendarSlots.length !== targetVal;
+
                     if (!hasMismatch) return null;
                     return (
                       <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-3 flex items-start space-x-2 text-[10px] text-amber-300 font-semibold animate-in fade-in duration-200">
                         <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                         <div>
-                          <p className="font-bold text-white">Target Quota Mismatch</p>
-                          <p className="font-normal mt-0.5">This plan currently contains {calendarSlots.length} content slots, but the client profile specifies a target of {targetVal} deliverables per month.</p>
+                          <p className="font-bold text-white">Plan differs from the contract</p>
+                          <p className="font-normal mt-0.5">This plan has {calendarSlots.length} slots; the contract from onboarding says {targetVal}/month. Production follows the plan — you&apos;ll get a reconcile option when you save.</p>
                         </div>
                       </div>
                     );
