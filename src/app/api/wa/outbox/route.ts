@@ -66,11 +66,13 @@ export async function POST(request: NextRequest) {
     // DMs go only to numbers someone has already named — the directory is the
     // allowlist, so a typo'd number can't be messaged cold.
     const clean = String(toNumber).replace(/[^0-9]/g, "");
-    const { data: contact } = await admin.from("wa_contacts").select("number, label, client_id, status").eq("number", clean).maybeSingle();
+    const { data: contact } = await admin.from("wa_contacts").select("number, jid, label, client_id, status").eq("number", clean).maybeSingle();
     if (!contact || contact.status !== "assigned") {
       return NextResponse.json({ error: "That number isn't a named contact. Assign it in the WhatsApp Reader tray first." }, { status: 400 });
     }
-    toJid = clean;
+    // Reply on the address WhatsApp actually used for this chat — a "@lid"
+    // conversation cannot be reached by rebuilding one from the digits.
+    toJid = (contact.jid as string) || clean;
     toLabel = contact.label || clean;
     resolvedClient = (contact.client_id as string) || null;
   } else {

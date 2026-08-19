@@ -104,6 +104,26 @@ async function shipMedia(msg, waMessageId, kind) {
   }
 }
 
+/**
+ * The human phone number behind a direct chat.
+ *
+ * A "@lid" chat hides the number in the address itself, but WhatsApp still
+ * sends the real one alongside when it has it. Prefer any field that is
+ * explicitly a phone address; fall back to the raw id so a message is never
+ * dropped just because we could not name the sender — staff can rename it in
+ * the portal tray either way.
+ */
+function dmPhone(msg, jid) {
+  const candidates = [msg.key?.senderPn, msg.key?.participantPn, msg.key?.remoteJidAlt, msg.key?.remoteJid];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.includes("@s.whatsapp.net")) return c.split("@")[0].split(":")[0];
+  }
+  return String(jid).split("@")[0].split(":")[0];
+}
+
+/** Log an unknown chat type once, not once per message. */
+const skippedSuffixes = new Set();
+
 async function start() {
   const { state, saveCreds } = await useMultiFileAuthState("./auth");
   const { version } = await fetchLatestBaileysVersion();
@@ -132,7 +152,7 @@ async function start() {
       }
     }
     if (connection === "open") {
-      console.log("✅ WhatsApp reader connected. Listening to group messages…");
+      console.log("✅ WhatsApp reader connected. Listening to groups and direct messages…");
       await setStatus({ status: "connected", qr: null, pairing_code: null, last_seen_at: new Date().toISOString() });
     }
     if (connection === "close") {
@@ -151,9 +171,22 @@ async function start() {
       try {
         const jid = msg.key?.remoteJid || "";
         const isGroup = jid.endsWith("@g.us");
-        const isDm = jid.endsWith("@s.whatsapp.net");
-        // Groups and direct chats only — never statuses, broadcasts or channels.
-        if (!isGroup && !isDm) continue;
+        // Statuses, broadcast lists and channels are never conversation.
+        const isSystem = jid.endsWith("@broadcast") || jid.endsWith("@newsletter") || !jid;
+        // Everything else addressed to us is a direct chat. This used to test
+        // for "@s.whatsapp.net" alone, and WhatsApp now addresses many personal
+        // chats as "<id>@lid" instead — so every DM was skipped here, silently,
+        // while groups flowed normally. Whatever the addressing scheme, a chat
+        // that is not a group and not a system feed is someone talking to us.
+        const isDm = !isGroup && !isSystem;
+        if (!isGroup && !isDm) {
+          const suffix = jid.includes("@") ? jid.slice(jid.indexOf("@")) : "(none)";
+          if (!skippedSuffixes.has(suffix)) {
+            skippedSuffixes.add(suffix);
+            console.log(`↷ ignoring ${suffix} chats (statuses/broadcasts/channels).`);
+          }
+          continue;
+        }
         // In a group our own messages are noise; in a DM they are half the
         // conversation, so both directions are kept there.
         if (msg.key?.fromMe && !isDm) continue;
@@ -166,7 +199,7 @@ async function start() {
         }
 
         const senderNumber = isDm
-          ? jid.split("@")[0]
+          ? dmPhone(msg, jid)
           : (msg.key?.participant || "").split("@")[0] || null;
 
         // A DM sender joins the contact directory on first sight, as "new"
@@ -174,7 +207,7 @@ async function start() {
         // tasks, they wait in the tray.
         if (isDm && senderNumber && !msg.key?.fromMe) {
           await supabase.from("wa_contacts").upsert(
-            { number: senderNumber, push_name: msg.pushName || null, updated_at: new Date().toISOString() },
+            { number: senderNumber, jid, push_name: msg.pushName || null, updated_at: new Date().toISOString() },
             { onConflict: "number" }
           );
         }
@@ -182,7 +215,7 @@ async function start() {
         const kind = mediaKind(msg);
         const row = {
           wa_message_id: msg.key?.id || `${jid}-${msg.messageTimestamp}`,
-          group_jid: isGroup ? jid : jid,
+          group_jid: jid,
           group_name: isGroup ? groupNameCache.get(jid) || null : null,
           sender_number: senderNumber,
           sender_name: msg.pushName || null,
