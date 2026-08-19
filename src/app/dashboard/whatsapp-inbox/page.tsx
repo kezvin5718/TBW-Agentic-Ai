@@ -18,6 +18,11 @@ interface Item {
   status: string;
   extracted: boolean;
   task_id: string | null;
+  is_dm: boolean | null;
+  sender_number: string | null;
+  media_url: string | null;
+  media_kind: string | null;
+  media_note: string | null;
   clients?: { name: string } | null;
   profiles?: { name: string } | null;
 }
@@ -81,7 +86,7 @@ export default function WhatsAppInboxPage() {
           <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
             <MessageSquare className="w-6 h-6 text-emerald-400" /><span>WhatsApp Task Bar</span>
           </h1>
-          <p className="text-sm text-slate-500 mt-1">Client group messages, read-only. The bot reads each conversation and drafts the task; you approve it. The system never replies on WhatsApp.</p>
+          <p className="text-sm text-slate-500 mt-1">Client messages — groups and direct chats — read-only. The bot reads each conversation, files any photo or file they send to Drive, and drafts the task; you approve it. The system never replies on WhatsApp.</p>
         </div>
         <button onClick={runExtract} disabled={extracting} className="px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider bg-slate-900 border border-slate-800 hover:border-indigo-600 text-white flex items-center space-x-2 cursor-pointer disabled:opacity-60">
           {extracting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}<span>Scan new</span>
@@ -102,15 +107,25 @@ export default function WhatsAppInboxPage() {
       {loading ? (
         <div className="py-16 flex justify-center"><Loader2 className="w-6 h-6 text-indigo-500 animate-spin" /></div>
       ) : items.length === 0 ? (
-        <p className="text-xs text-slate-600 py-16 text-center">Nothing here. New client group messages will appear once the WhatsApp reader is running and you click <span className="text-slate-300 font-semibold">Scan new</span>.</p>
+        <p className="text-xs text-slate-600 py-16 text-center">Nothing here. New client messages — groups and direct — appear once the WhatsApp reader is running and you click <span className="text-slate-300 font-semibold">Scan new</span>.</p>
       ) : (
         <div className="space-y-3">
           {items.map((i) => (
             <div key={i.id} className="bg-slate-950/60 border border-slate-900 rounded-2xl p-4 space-y-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 text-[11px] text-slate-500">
-                  <span className="font-bold text-slate-300">{i.clients?.name || i.group_name || "Unknown group"}</span>
-                  <span>· {i.sender_name || "—"}</span>
+                  {i.is_dm ? (
+                    <span className="font-bold text-emerald-300 flex items-center gap-1">
+                      <MessageSquare className="w-3 h-3" />
+                      <span>{i.clients?.name || i.sender_name || "Direct message"}</span>
+                      {i.sender_number && <span className="font-mono font-normal text-slate-500">+{i.sender_number}</span>}
+                    </span>
+                  ) : (
+                    <>
+                      <span className="font-bold text-slate-300">{i.clients?.name || i.group_name || "Unknown group"}</span>
+                      <span>· {i.sender_name || "—"}</span>
+                    </>
+                  )}
                   <span>· {fmtIST(i.received_at)}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -121,7 +136,25 @@ export default function WhatsAppInboxPage() {
               </div>
 
               {i.ai_summary && <p className="text-xs text-white font-semibold">{i.ai_summary}</p>}
-              <p className="text-[11px] text-slate-500 whitespace-pre-wrap break-words">{i.message_text}</p>
+              {i.message_text && <p className="text-[11px] text-slate-500 whitespace-pre-wrap break-words">{i.message_text}</p>}
+
+              {i.media_url && (
+                <div className="flex items-start gap-3 bg-slate-950/60 border border-slate-900 rounded-xl p-2">
+                  {i.media_kind === "image" ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={i.media_url} alt={i.media_note || "attachment"} className="w-24 h-24 object-cover rounded-lg border border-slate-800" loading="lazy" />
+                  ) : (
+                    <div className="w-24 h-24 rounded-lg border border-slate-800 bg-slate-900 flex items-center justify-center text-[10px] font-bold text-slate-500 uppercase">
+                      {i.media_kind || "file"}
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sent a {i.media_kind || "file"} · filed to Drive</p>
+                    {i.media_note && <p className="text-[11px] text-slate-400 leading-snug">{i.media_note}</p>}
+                    <a href={i.media_url} target="_blank" rel="noreferrer" className="text-[10px] text-indigo-400 hover:text-indigo-300 inline-block">Open the file ↗</a>
+                  </div>
+                </div>
+              )}
 
               {i.profiles?.name && <p className="text-[10px] text-emerald-400">Assigned to {i.profiles.name}</p>}
 
