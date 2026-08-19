@@ -176,13 +176,19 @@ export default function TaskBoard() {
             {new Date(t.deadline).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
           </span>
           {busy === t.id ? <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" /> : (
-            <select value={t.status} disabled={!!busy} onChange={(e) => patch(t.id, { status: e.target.value })}
-              className={`text-[9px] font-bold rounded-md px-1.5 py-0.5 border cursor-pointer focus:outline-none ${STATUS_STYLE[t.status]}`}>
-              <option value="todo">To Do</option>
-              <option value="in_progress">In Progress</option>
-              <option value="review">Review</option>
-              <option value="done">Done</option>
-            </select>
+            <>
+              <select value={t.status} disabled={!!busy} onChange={(e) => patch(t.id, { status: e.target.value })}
+                className={`text-[9px] font-bold rounded-md px-1.5 py-0.5 border cursor-pointer focus:outline-none ${STATUS_STYLE[t.status]}`}>
+                <option value="todo">To Do</option>
+                <option value="in_progress">In Progress</option>
+                <option value="review">Review</option>
+                <option value="done">Done</option>
+              </select>
+              <button onClick={() => remove(t.id)} disabled={!!busy} title="Delete task"
+                className="p-1 rounded text-slate-700 hover:text-rose-400 cursor-pointer disabled:opacity-40">
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -194,67 +200,6 @@ export default function TaskBoard() {
     () => [...filtered].sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime()),
     [filtered]
   );
-
-  const card = (t: Task, showAssignee: boolean) => {
-    const overdue = new Date(t.deadline).getTime() < now && t.status !== "done";
-    return (
-      <div key={t.id} className="bg-slate-950/60 border border-slate-900 rounded-xl p-3 space-y-2 hover:border-slate-800 transition-colors">
-        <div className="flex items-start justify-between gap-2">
-          <p className="text-xs font-semibold text-white leading-snug whitespace-pre-wrap break-words">{t.title || "Untitled task"}</p>
-          <span className={`shrink-0 mt-1 w-2 h-2 rounded-full ${PRIORITY_DOT[t.priority] || PRIORITY_DOT.medium}`} title={`Priority: ${t.priority}`} />
-        </div>
-        <div className="flex items-center gap-1.5 flex-wrap text-[9px] font-bold">
-          {t.clients?.name && <span className="px-1.5 py-0.5 rounded bg-indigo-950/40 border border-indigo-900 text-indigo-300">{t.clients.name}</span>}
-          <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400">{TYPE_LABEL[t.type] || t.type}</span>
-          {showAssignee && <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300">{t.assignee_name || "Unassigned"}</span>}
-          {t.source === "whatsapp" && <span className="px-1.5 py-0.5 rounded bg-emerald-950/40 border border-emerald-900 text-emerald-400 flex items-center gap-0.5"><MessageSquare className="w-2.5 h-2.5" />WA</span>}
-          {t.source === "excel_import" && <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-500 flex items-center gap-0.5"><FileSpreadsheet className="w-2.5 h-2.5" />XLS</span>}
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className={`flex items-center gap-1 text-[9px] font-mono font-bold ${overdue ? "text-red-400" : "text-slate-500"}`}>
-            {overdue ? <AlertTriangle className="w-3 h-3" /> : <Calendar className="w-3 h-3" />}
-            {new Date(t.deadline).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-          </span>
-          <div className="flex items-center gap-1">
-            {busy === t.id ? <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" /> : (
-              <>
-                <select
-                  value={t.status}
-                  disabled={!!busy}
-                  onChange={(e) => patch(t.id, { status: e.target.value })}
-                  className={`text-[9px] font-bold rounded-md px-1.5 py-0.5 border cursor-pointer focus:outline-none ${STATUS_STYLE[t.status]}`}
-                >
-                  <option value="todo">To Do</option>
-                  <option value="in_progress">In Progress</option>
-                  <option value="review">Review</option>
-                  <option value="done">Done</option>
-                </select>
-                {t.status !== "done" && (
-                  <button disabled={!!busy} onClick={() => patch(t.id, { status: "done" })} title="Mark done"
-                    className="p-1 rounded-md bg-emerald-950/40 border border-emerald-900 text-emerald-400 hover:bg-emerald-900/40 cursor-pointer">
-                    <Check className="w-3 h-3" />
-                  </button>
-                )}
-                <button disabled={!!busy} onClick={() => remove(t.id)} title="Delete (founder only)"
-                  className="p-1 rounded-md bg-slate-900 border border-slate-800 text-slate-600 hover:text-red-400 cursor-pointer">
-                  <Trash2 className="w-3 h-3" />
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-        <select
-          value={t.assignee_name || ""}
-          disabled={!!busy}
-          onChange={(e) => patch(t.id, { assigneeName: e.target.value })}
-          className="w-full text-[9px] bg-slate-950 border border-slate-800 rounded-md px-1.5 py-1 text-slate-400 cursor-pointer focus:outline-none"
-        >
-          <option value="">Unassigned</option>
-          {team.map((m) => <option key={m.id} value={m.name}>{m.name}{m.role_title ? ` · ${m.role_title}` : ""}</option>)}
-        </select>
-      </div>
-    );
-  };
 
   return (
     <div className="space-y-5">
@@ -341,56 +286,85 @@ export default function TaskBoard() {
         <p className="text-xs text-slate-600 py-16 text-center">No tasks here. Add one above, or create tasks from the WhatsApp Task Bar.</p>
       ) : null}
 
-      {/* Everyone's outstanding work, one line each — the whole picture first,
-          before it is split up per person. */}
+      {/* The whole picture and the team, side by side: every pending task on
+          the left, every member and what's on their plate on the right. */}
       {!loading && filtered.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-xs font-bold text-white flex items-center gap-2">
-              <Rows3 className="w-3.5 h-3.5 text-indigo-400" />
-              <span>{tab === "done" ? "Completed" : "All pending tasks"}</span>
-              <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{byUrgency.length}</span>
-            </h3>
-            <span className="text-[10px] text-slate-600">Soonest due first</span>
-          </div>
-          <div className="hidden md:grid grid-cols-12 gap-2 px-3 text-[9px] font-bold uppercase tracking-wider text-slate-600">
-            <span className="col-span-4">Task</span>
-            <span className="col-span-2">Client</span>
-            <span className="col-span-2">Assigned to</span>
-            <span className="col-span-2">Assigned on</span>
-            <span className="col-span-2 text-right">Due</span>
-          </div>
-          <div className="space-y-1.5">{byUrgency.map(oneLine)}</div>
-        </div>
-      )}
-
-      {/* Then the same work split by person. */}
-      {!loading && filtered.length > 0 && view === "board" && (
-        <div className="space-y-2 border-t border-slate-900 pt-4">
-        <h3 className="text-xs font-bold text-white flex items-center gap-2">
-          <Users className="w-3.5 h-3.5 text-indigo-400" /><span>By team member</span>
-        </h3>
-        <div className="flex gap-4 overflow-x-auto pb-4">
-          {columns.map((col) => (
-            <div key={col.name} className="w-72 shrink-0 space-y-2">
-              <div className="flex items-center justify-between bg-slate-950/40 border border-slate-900 rounded-xl px-3 py-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  {col.member ? (
-                    <Avatar name={col.name} url={col.member.avatar_url} size={22} rounded="rounded-full" />
-                  ) : (
-                    <Users className="w-3.5 h-3.5 text-indigo-400" />
-                  )}
-                  <span className="text-xs font-bold text-white truncate">{col.name}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {col.member?.role_title && <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500">{col.member.role_title}</span>}
-                  <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{col.items.length}</span>
-                </div>
-              </div>
-              <div className="space-y-2">{col.items.map((t) => card(t, false))}</div>
+        <div className={view === "board" ? "grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-5 items-start" : ""}>
+          <div className="space-y-2 min-w-0">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-xs font-bold text-white flex items-center gap-2">
+                <Rows3 className="w-3.5 h-3.5 text-indigo-400" />
+                <span>{tab === "done" ? "Completed" : "All pending tasks"}</span>
+                <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{byUrgency.length}</span>
+              </h3>
+              <span className="text-[10px] text-slate-600">Soonest due first</span>
             </div>
-          ))}
-        </div>
+            <div className="hidden md:grid grid-cols-12 gap-2 px-3 text-[9px] font-bold uppercase tracking-wider text-slate-600">
+              <span className="col-span-4">Task</span>
+              <span className="col-span-2">Client</span>
+              <span className="col-span-2">Assigned to</span>
+              <span className="col-span-2">Assigned on</span>
+              <span className="col-span-2 text-right">Due</span>
+            </div>
+            <div className="space-y-1.5">{byUrgency.map(oneLine)}</div>
+          </div>
+
+          {view === "board" && (
+            <div className="space-y-2 xl:sticky xl:top-4">
+              <h3 className="text-xs font-bold text-white flex items-center gap-2">
+                <Users className="w-3.5 h-3.5 text-indigo-400" /><span>Team</span>
+                <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{team.length}</span>
+              </h3>
+              {/* Every member appears — an empty plate is information too. */}
+              {[...team.map((m) => ({ name: m.name, member: m as Member | undefined, items: filtered.filter((t) => (t.assignee_name || "").toLowerCase() === m.name.toLowerCase()) })),
+                ...columns.filter((c) => !c.member && c.name === "Unassigned")]
+                .map((col) => {
+                  const late = col.items.filter((t) => new Date(t.deadline).getTime() < now && t.status !== "done").length;
+                  return (
+                    <div key={col.name} className={`border rounded-xl bg-slate-950/50 ${late > 0 ? "border-rose-900/50" : "border-slate-900"}`}>
+                      <button onClick={() => setFilterMember(filterMember === col.name ? "" : col.name === "Unassigned" ? "unassigned" : col.name)}
+                        title="Click to filter the list to this person"
+                        className="w-full flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-slate-900/40 rounded-xl">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {col.member ? (
+                            <Avatar name={col.name} url={col.member.avatar_url} size={22} rounded="rounded-full" />
+                          ) : (
+                            <Users className="w-3.5 h-3.5 text-indigo-400" />
+                          )}
+                          <div className="min-w-0 text-left">
+                            <p className="text-xs font-bold text-white truncate">{col.name}</p>
+                            {col.member?.role_title && <p className="text-[8px] font-bold uppercase tracking-wider text-slate-500">{col.member.role_title}</p>}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {late > 0 && <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-rose-950/60 border border-rose-900 text-rose-400">{late} late</span>}
+                          <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{col.items.length}</span>
+                        </div>
+                      </button>
+                      {col.items.length === 0 ? (
+                        <p className="text-[10px] text-slate-600 px-3 pb-2">No open tasks.</p>
+                      ) : (
+                        <div className="px-2 pb-2 space-y-1">
+                          {col.items.slice(0, 5).map((t) => {
+                            const overdue = new Date(t.deadline).getTime() < now && t.status !== "done";
+                            return (
+                              <div key={t.id} className="flex items-center gap-2 text-[10px] bg-slate-950/60 border border-slate-900/70 rounded-lg px-2 py-1.5">
+                                <span className="text-slate-300 truncate flex-1">{t.title || "Untitled"}</span>
+                                {t.clients?.name && <span className="text-slate-600 truncate max-w-[70px]">{t.clients.name}</span>}
+                                <span className={`font-mono shrink-0 ${overdue ? "text-rose-400 font-bold" : "text-slate-500"}`}>
+                                  {new Date(t.deadline).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+                                </span>
+                              </div>
+                            );
+                          })}
+                          {col.items.length > 5 && <p className="text-[9px] text-slate-600 px-1">+{col.items.length - 5} more — click the name to see all</p>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
+          )}
         </div>
       )}
     </div>
