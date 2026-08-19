@@ -137,7 +137,7 @@ export async function POST(request: NextRequest) {
     // hand over one already cut to the shape and size the format shows.
     let retryThumb = post.thumbnail_url as string | null;
     if (isVideo && retryThumb) {
-      retryThumb = (await toPublishableThumbUrl(retryThumb, post.content_type as string)).url;
+      retryThumb = (await toPublishableThumbUrl(retryThumb)).url;
     }
     if (post.platform === "facebook") {
       if (post.content_type !== "post") params.fb_post_type = post.content_type;
@@ -283,7 +283,7 @@ export async function POST(request: NextRequest) {
         // ourselves rather than letting the platform re-encode a print file.
         let sendThumb = thumbnailUrl as string | null;
         if (mediaIsVideo && sendThumb) {
-          const norm = await toPublishableThumbUrl(sendThumb, contentType);
+          const norm = await toPublishableThumbUrl(sendThumb);
           sendThumb = norm.url;
           if (norm.note) console.log(`🖼️ ${platform} ${contentType}: ${norm.note}`);
         }

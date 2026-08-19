@@ -84,20 +84,17 @@ export async function toPublishableVideoUrl(
  *
  * A designer's cover arrives at print resolution — the Swarna Kanchi reel used a
  * 4500x5625, 12MB JPEG — and Meta re-encodes anything that large to its own
- * cover size on the way in. That re-encode is where the softness comes from,
- * and it is worse still when the shape is wrong: a 4:5 cover on a 9:16 reel is
- * fitted before it is compressed, so the picture is scaled twice.
+ * cover size on the way in. That re-encode is the softness.
  *
- * So do the resize ourselves, once, properly: crop to the frame the format
- * actually shows and hand over a file small enough that nobody re-encodes it.
- * Attention-cropping keeps the jewellery in frame rather than slicing the top
- * off a portrait cover.
+ * So do that resize ourselves, once, properly. Only the resolution changes:
+ * the frame the designer composed is never cropped or re-shaped, because a 4:5
+ * cover is a deliberate choice and cropping it to a reel's 9:16 would throw
+ * away the part of the design they placed there. The image is fitted inside the
+ * largest sensible box with its aspect ratio intact.
  */
 export async function toPublishableThumbUrl(
-  url: string,
-  contentType: string
+  url: string
 ): Promise<{ url: string; note?: string }> {
-  const TALL = contentType === "reel" || contentType === "story";
   const MAX_BYTES = 2 * 1024 * 1024;
 
   try {
@@ -113,23 +110,26 @@ export async function toPublishableThumbUrl(
     const w = meta.width || 0, h = meta.height || 0;
     if (!w || !h) return { url };
 
-    const aspect = w / h;
-    const wanted = TALL ? 1080 / 1920 : aspect; // a square/portrait post keeps its own shape
-    const wrongShape = TALL && Math.abs(aspect - wanted) > 0.02;
-    const tooBig = buf.length > MAX_BYTES || w > 1440;
-    if (!wrongShape && !tooBig) return { url };
+    // Only oversized covers are touched; a correctly sized one is passed
+    // through untouched rather than re-encoded for no reason.
+    const tooBig = buf.length > MAX_BYTES || w > 1440 || h > 1920;
+    if (!tooBig) return { url };
 
-    const resized = TALL
-      ? await sharp(buf).resize({ width: 1080, height: 1920, fit: "cover", position: "attention" }).jpeg({ quality: 88 }).toBuffer()
-      : await sharp(buf).resize({ width: 1080, withoutEnlargement: true }).jpeg({ quality: 88 }).toBuffer();
+    // "inside" scales down to fit the box and keeps the aspect ratio exactly —
+    // a 4:5 cover stays 4:5, a 9:16 one stays 9:16. Nothing is ever cropped.
+    const resized = await sharp(buf)
+      .resize({ width: 1080, height: 1920, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+    const out = await sharp(resized).metadata();
 
-    const path = `social/thumb-${Date.now()}-${TALL ? "1080x1920" : "1080w"}.jpg`;
+    const path = `social/thumb-${Date.now()}-${out.width}x${out.height}.jpg`;
     const { error } = await admin.storage.from(BUCKET).upload(path, resized, { contentType: "image/jpeg", upsert: true });
     if (error) return { url };
 
     return {
       url: admin.storage.from(BUCKET).getPublicUrl(path).data.publicUrl,
-      note: `Cover resized from ${w}x${h} (${(buf.length / 1024 / 1024).toFixed(1)}MB) to ${TALL ? "1080x1920" : "1080w"} (${(resized.length / 1024).toFixed(0)}KB) so the platform doesn't re-compress it.`,
+      note: `Cover resized from ${w}x${h} (${(buf.length / 1024 / 1024).toFixed(1)}MB) to ${out.width}x${out.height} (${(resized.length / 1024).toFixed(0)}KB) — same aspect ratio, no crop — so the platform doesn't re-compress it.`,
     };
   } catch {
     // A cover that cannot be normalised is still better sent than not sent.
