@@ -89,9 +89,13 @@ function findPlaceholders(rows: CalendarSlot[]): Placeholder[] {
  * 24k-character plan — the last days, the production list and the whole paid
  * layer — with nothing in the UI to say so.
  */
-const CHUNK_CHARS = 18000;
+// 18k in one pass proved too greedy: a dense chunk carrying verbatim captions
+// can need more output tokens than the model may produce, the JSON stops
+// mid-array, and that whole chunk's days quietly become zero rows. Smaller
+// bites keep every answer comfortably inside the output ceiling.
+const CHUNK_CHARS = 10000;
 /** A ceiling so a pathological upload can't fan out into dozens of calls. */
-const MAX_CHUNKS = 6;
+const MAX_CHUNKS = 10;
 
 /**
  * Split on blank lines so a single day's entry is never cut in half.
@@ -124,6 +128,9 @@ function htmlToText(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    // Table cells keep a visible separator — without it a calendar table
+    // mashes each row's date, hook and caption into one undifferentiated line.
+    .replace(/<\/(td|th)>/gi, " | ")
     .replace(/<\/(p|div|tr|li|h[1-6]|br)>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ")
@@ -131,6 +138,45 @@ function htmlToText(html: string): string {
     .replace(/[ \t]+/g, " ")
     .replace(/\n\s*\n\s*\n+/g, "\n\n")
     .trim();
+}
+
+/**
+ * Parse the model's JSON, salvaging a truncated answer instead of discarding
+ * it. An output that hits the token ceiling stops mid-array — cutting back to
+ * the last complete object and closing the brackets recovers every finished
+ * row, where the old behaviour returned an empty calendar for the chunk.
+ */
+function parseWithRepair(raw: string, fallback: FullPlan): FullPlan {
+  const direct = safeJsonParse<FullPlan>(raw, fallback);
+  if (Array.isArray(direct.contentCalendar) && direct.contentCalendar.length > 0) return direct;
+
+  const cleaned = raw.replace(/^```(?:json)?/m, "").replace(/```\s*$/m, "").trim();
+  for (let cut = cleaned.lastIndexOf("}"); cut > 0; cut = cleaned.lastIndexOf("}", cut - 1)) {
+    const head = cleaned.slice(0, cut + 1);
+    for (const tail of ["]}", "]}}", "}]}", "]}]}"]) {
+      try {
+        const candidate = JSON.parse(head + tail) as FullPlan;
+        if (Array.isArray(candidate.contentCalendar) && candidate.contentCalendar.length > 0) return candidate;
+      } catch { /* try the next closer */ }
+    }
+    // Only walk back a bounded distance — beyond that the answer is junk.
+    if (cleaned.length - cut > 4000) break;
+  }
+  return direct;
+}
+
+/** Rough count of how many dated entries the author's file visibly contains. */
+function countDateSignals(text: string): number {
+  const patterns = [
+    /\b\d{4}-\d{2}-\d{2}\b/g,                                        // 2026-08-05
+    /\b\d{1,2}[\/.]\d{1,2}(?:[\/.]\d{2,4})?\b/g,                     // 5/8, 05.08.2026
+    /\b\d{1,2}\s?(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/gi, // 5 Aug
+    /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b/gi,                    // Aug 5
+    /\bday\s*[-#]?\s*\d{1,2}\b/gi,                                   // Day 12
+  ];
+  let count = 0;
+  for (const re of patterns) count = Math.max(count, (text.match(re) || []).length);
+  return count;
 }
 
 /**
@@ -184,6 +230,13 @@ export async function POST(request: NextRequest) {
 
     text = text.trim();
     if (!text) return NextResponse.json({ error: "No readable text found in the file." }, { status: 400 });
+    // A big HTML file yielding almost no text means the content lives in
+    // scripts or images — parsing would "succeed" with nearly nothing in it.
+    if ((name.endsWith(".html") || name.endsWith(".htm")) && buffer.length > 20000 && text.length < 1200) {
+      return NextResponse.json({
+        error: `This HTML file is ${(buffer.length / 1024).toFixed(0)}KB but contains almost no readable text (${text.length} characters) — the plan is likely rendered by scripts or stored as images. Open it in a browser and save as PDF (text, not scanned), or export the plan as plain HTML/TXT, then import again.`,
+      }, { status: 400 });
+    }
     const { parts: chunks, complete: readWholeFile } = splitForModel(text);
     const coveredChars = chunks.reduce((n, c) => n + c.length, 0);
 
@@ -251,17 +304,33 @@ Return ONLY valid JSON.`;
         maxTokens: 16000,
       });
 
-      const part = safeJsonParse<FullPlan>(raw, fallback);
+      const part = parseWithRepair(raw, fallback);
       if (first) {
         merged.strategySummary = String(part.strategySummary || "");
         merged.contentPillars = Array.isArray(part.contentPillars) ? part.contentPillars.slice(0, 6) : [];
         merged.budgetSummary =
           part.budgetSummary && Array.isArray(part.budgetSummary.allocations) ? part.budgetSummary : { allocations: [] };
       }
-      if (Array.isArray(part.contentCalendar)) merged.contentCalendar.push(...part.contentCalendar.filter((s) => s && s.date));
+      // A row without a date is still a row — dropping it silently is how a
+      // "Day 1 / Day 2" plan shrinks to nothing. Keep anything with content;
+      // missing dates are spread across the month after the merge.
+      if (Array.isArray(part.contentCalendar)) {
+        merged.contentCalendar.push(...part.contentCalendar.filter(
+          (s) => s && ((s.concept || "").trim() || (s.hook || "").trim() || (s.caption || "").trim())
+        ));
+      }
       if (Array.isArray(part.openQuestions)) merged.openQuestions.push(...part.openQuestions.map(String).filter(Boolean));
     }
     merged.openQuestions = Array.from(new Set(merged.openQuestions)).slice(0, 12);
+
+    // Undated survivors get dates spread across the plan month, in order.
+    const monthPrefix = `${new Date(month).getFullYear()}-${String(new Date(month).getMonth() + 1).padStart(2, "0")}`;
+    const daysInMonth = new Date(new Date(month).getFullYear(), new Date(month).getMonth() + 1, 0).getDate();
+    const undated = merged.contentCalendar.filter((s) => !String(s.date || "").trim());
+    undated.forEach((s, i) => {
+      const day = Math.min(daysInMonth, Math.max(1, Math.round(((i + 1) * daysInMonth) / (undated.length + 1))));
+      s.date = `${monthPrefix}-${String(day).padStart(2, "0")}`;
+    });
 
     // A day split across two chunks can come back twice — keep the richer copy.
     const byDate = new Map<string, CalendarSlot>();
@@ -272,6 +341,12 @@ Return ONLY valid JSON.`;
       if (!seen || weight(slot) > weight(seen)) byDate.set(key, slot);
     }
     merged.contentCalendar = Array.from(byDate.values()).sort((a, b) => (a.date < b.date ? -1 : 1));
+
+    // Honesty check: how many dated entries does the file itself show, and how
+    // many rows did we actually extract? A big gap means structure was lost —
+    // the one situation that must never look like success.
+    const dateSignals = countDateSignals(text);
+    const underExtracted = dateSignals >= 4 && merged.contentCalendar.length < Math.ceil(dateSignals * 0.6);
 
     const withDirection = merged.contentCalendar.filter((s) => (s.productionNote || "").trim()).length;
 
@@ -299,6 +374,8 @@ Return ONLY valid JSON.`;
       truncatedChars: readWholeFile ? 0 : Math.max(0, text.length - coveredChars),
       chunks: chunks.length,
       rowsWithDirection: withDirection,
+      dateSignals,
+      underExtracted,
       // Everything the wizard should ask about before this plan is produced.
       needs: {
         placeholders: findPlaceholders(merged.contentCalendar),

@@ -479,12 +479,14 @@ export default function PlanningIndexPage() {
         setFontDraft("");
       }
       setImportNote({
-        // Truncation used to be invisible: the tail of the file was cut and the
-        // plan simply arrived short, with nothing to say why.
-        ok: !data.truncated,
+        // Truncation and under-extraction used to be invisible: the plan
+        // simply arrived short, with nothing to say why.
+        ok: !data.truncated && !data.underExtracted,
         text: data.truncated
           ? `Read ${rows} rows, but the file was too long — ${data.truncatedChars} characters at the end were not read. Split the plan into two files, or trim it, and import again.`
-          : `Read ${rows} rows, ${data.rowsWithDirection} of them with your production direction attached.`,
+          : data.underExtracted
+            ? `⚠ The file shows roughly ${data.dateSignals} dated entries but only ${rows} row${rows === 1 ? "" : "s"} came out — the file's structure is hiding content from the reader. Don't save this as your plan. Try: open the file in a browser → Print → Save as PDF (text), and import that instead.`
+            : `Read ${rows} rows, ${data.rowsWithDirection} of them with your production direction attached.`,
       });
       setWizardStep(1);
     } catch (err: unknown) {
