@@ -100,13 +100,28 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   const body = await request.json().catch(() => ({}));
   const action = body.action;
-  if (!["archive", "restore", "rename"].includes(action)) {
-    return NextResponse.json({ error: "action must be 'archive', 'restore', or 'rename'" }, { status: 400 });
+  if (!["archive", "restore", "rename", "deliverables"].includes(action)) {
+    return NextResponse.json({ error: "action must be 'archive', 'restore', 'rename', or 'deliverables'" }, { status: 400 });
   }
 
   const admin = createServiceRoleClient();
   const { data: client } = await admin.from("clients").select("id, name").eq("id", id).maybeSingle();
   if (!client) return NextResponse.json({ error: "Client not found" }, { status: 404 });
+
+  if (action === "deliverables") {
+    // The contract number is the commercial agreement — only the founder moves it.
+    const role = (guard.user?.user_metadata?.role as string) || "";
+    if (role !== "founder") {
+      return NextResponse.json({ error: "Only the founder can change a client's contracted deliverables." }, { status: 403 });
+    }
+    const count = Number(body.count);
+    if (!Number.isFinite(count) || count < 0 || count > 200) {
+      return NextResponse.json({ error: "Give a sensible monthly deliverables number (0–200)." }, { status: 400 });
+    }
+    const { error } = await admin.from("clients").update({ deliverables_per_month: count }).eq("id", id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, message: `${client.name}'s contract is now ${count} deliverables/month.` });
+  }
 
   if (action === "rename") {
     const name = String(body.name || "").trim();

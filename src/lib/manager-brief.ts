@@ -39,7 +39,7 @@ async function collectNotes(): Promise<ManagerNotes> {
 
   const { data: clients } = await admin
     .from("clients")
-    .select("id, name, whatsapp_group_id")
+    .select("id, name, whatsapp_group_id, deliverables_per_month")
     .is("archived_at", null);
   const clientName = new Map((clients || []).map((c) => [c.id as string, c.name as string]));
 
@@ -75,6 +75,29 @@ async function collectNotes(): Promise<ManagerNotes> {
   const repeatRej = Object.entries(rejByClient).filter(([, n]) => n >= 3);
   if (repeatRej.length > 0) {
     notes.brand.push(`Repeated QC rejections this week: ${repeatRej.map(([id, n]) => `${clientName.get(id) || "?"} (${n})`).join(", ")} — the brief or allowed brand names may need fixing.`);
+  }
+
+  // Plan vs contract: this month's plans that promise a different count than
+  // the client pays for. Production follows the plan; the gap is the founder's
+  // to judge — but never silently.
+  const monthStart = `${istToday().slice(0, 7)}-01`;
+  const { data: monthPlans } = await admin
+    .from("monthly_plans")
+    .select("client_id, deliverables")
+    .eq("month", monthStart)
+    .not("deliverables", "is", null);
+  const contractByClient = new Map((clients || []).map((c) => [c.id as string, c]));
+  const gaps: string[] = [];
+  for (const p of monthPlans || []) {
+    const planned = Number((p.deliverables as { total?: number } | null)?.total || 0);
+    const client = contractByClient.get(p.client_id as string);
+    const contract = Number((client as { deliverables_per_month?: number } | undefined)?.deliverables_per_month || 0);
+    if (planned > 0 && contract > 0 && planned !== contract) {
+      gaps.push(`${clientName.get(p.client_id as string) || "?"} (plan ${planned} vs contract ${contract})`);
+    }
+  }
+  if (gaps.length > 0) {
+    notes.brand.push(`This month's plan promises a different count than the contract: ${gaps.slice(0, 8).join(", ")}${gaps.length > 8 ? ` +${gaps.length - 8} more` : ""}.`);
   }
 
   // Unanswered client groups: newest message per group is from them and >24h old.

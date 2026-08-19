@@ -83,6 +83,9 @@ export default function PlanningIndexPage() {
   const [calendarSlots, setCalendarSlots] = useState<CalendarSlot[]>([]);
   // What the importer actually managed to read, said out loud.
   const [importNote, setImportNote] = useState<{ ok: boolean; text: string } | null>(null);
+  // Plan promises N, contract says M — shown until acted on or dismissed.
+  const [deliverableGap, setDeliverableGap] = useState<{ clientId: string; clientName: string; planned: number; contract: number; breakdown: string } | null>(null);
+  const [gapSaving, setGapSaving] = useState(false);
 
   // --- What the plan still needs before it can be produced --------------------
   // Colours absent from the brand brain are silently replaced with "tasteful
@@ -518,6 +521,21 @@ export default function PlanningIndexPage() {
         throw new Error(data.error || "Failed to save monthly plan");
       }
 
+      // Contract vs plan: a difference is a fact for the founder, not an error.
+      const planned = Number(data.deliverables?.total || 0);
+      const contract = Number(data.contract || 0);
+      if (planned > 0 && contract > 0 && planned !== contract) {
+        const d = data.deliverables || {};
+        const parts = [d.posts && `${d.posts} posts`, d.carousels && `${d.carousels} carousels`, d.stories && `${d.stories} stories`, d.reels && `${d.reels} reels`].filter(Boolean).join(", ");
+        setDeliverableGap({
+          clientId: selectedClient,
+          clientName: clients.find((c) => c.id === selectedClient)?.name || "this client",
+          planned, contract, breakdown: parts,
+        });
+      } else {
+        setDeliverableGap(null);
+      }
+
       setCreating(false);
       fetchIndexData();
     } catch (err: unknown) {
@@ -556,6 +574,42 @@ export default function PlanningIndexPage() {
       {error && (
         <div className="p-4 rounded-xl bg-red-950/20 border border-red-900/50 text-red-200 text-xs flex items-start space-x-2">
           <span>{error}</span>
+        </div>
+      )}
+
+      {deliverableGap && !creating && (
+        <div className="p-4 rounded-xl bg-amber-950/20 border border-amber-900/50 text-amber-200 text-xs space-y-2">
+          <p className="font-bold">
+            {deliverableGap.clientName}: the plan promises {deliverableGap.planned} deliverables ({deliverableGap.breakdown}) — the contract from onboarding says {deliverableGap.contract}/month
+            {deliverableGap.planned < deliverableGap.contract ? ` (short by ${deliverableGap.contract - deliverableGap.planned})` : ` (${deliverableGap.planned - deliverableGap.contract} over)`}.
+          </p>
+          <p className="text-amber-300/70">
+            Production follows the plan either way. If this month is intentional (festival month, package change), carry on — the morning brief will keep watching it. If the package itself changed, update the contract:
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              disabled={gapSaving}
+              onClick={async () => {
+                setGapSaving(true);
+                try {
+                  const res = await fetch(`/api/clients/${deliverableGap.clientId}`, {
+                    method: "PATCH", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "deliverables", count: deliverableGap.planned }),
+                  });
+                  const d = await res.json();
+                  if (!res.ok) throw new Error(d.error || "Could not update");
+                  setDeliverableGap(null);
+                } catch (e: unknown) {
+                  setError(e instanceof Error ? e.message : "Could not update the contract");
+                } finally { setGapSaving(false); }
+              }}
+              className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold cursor-pointer disabled:opacity-50">
+              {gapSaving ? "Saving…" : `Update contract to ${deliverableGap.planned}/month (founder)`}
+            </button>
+            <button onClick={() => setDeliverableGap(null)} className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white font-bold cursor-pointer">
+              Keep contract as is
+            </button>
+          </div>
         </div>
       )}
 

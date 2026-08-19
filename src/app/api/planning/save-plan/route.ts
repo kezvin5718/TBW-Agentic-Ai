@@ -1,6 +1,26 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+interface CalendarSlot { format?: string; platform?: string }
+
+/**
+ * The month's delivery promise, counted from the calendar itself. This is what
+ * production and reporting follow — the onboarding number is only the contract,
+ * and the two being different is a fact to surface, not to silently resolve.
+ */
+function deliverablesFromCalendar(calendar: CalendarSlot[]): Record<string, number | string> {
+  const counts = { posts: 0, carousels: 0, stories: 0, reels: 0, other: 0 };
+  for (const slot of calendar) {
+    const f = String(slot.format || "").toLowerCase();
+    if (/carousel/.test(f)) counts.carousels++;
+    else if (/story/.test(f)) counts.stories++;
+    else if (/reel|video/.test(f)) counts.reels++;
+    else if (/static|post|image|photo/.test(f) || f === "") counts.posts++;
+    else counts.other++;
+  }
+  return { total: calendar.length, ...counts, counted_at: new Date().toISOString() };
+}
+
 export async function POST(request: Request) {
   try {
     const supabase = await createClient();
@@ -33,6 +53,8 @@ export async function POST(request: Request) {
     const rawDate = new Date(month);
     const formattedMonth = `${rawDate.getFullYear()}-${String(rawDate.getMonth() + 1).padStart(2, "0")}-01`;
 
+    const deliverables = deliverablesFromCalendar((contentCalendar as CalendarSlot[]) || []);
+
     // 2. Check if a plan already exists for this client and month
     const { data: existingPlan } = await supabase
       .from("monthly_plans")
@@ -51,6 +73,7 @@ export async function POST(request: Request) {
           content_pillars: contentPillars || [],
           content_calendar: contentCalendar || [],
           budget_summary: budgetSummary || {},
+          deliverables,
           status: status,
         })
         .eq("id", existingPlan.id)
@@ -72,6 +95,7 @@ export async function POST(request: Request) {
           content_pillars: contentPillars || [],
           content_calendar: contentCalendar || [],
           budget_summary: budgetSummary || {},
+          deliverables,
           status: status,
         })
         .select()
@@ -83,9 +107,19 @@ export async function POST(request: Request) {
       resultPlan = data;
     }
 
+    // Contract vs plan — returned so the page can flag a gap the moment it
+    // exists, instead of a whole month sliding by under- or over-delivered.
+    const { data: client } = await supabase
+      .from("clients")
+      .select("deliverables_per_month")
+      .eq("id", clientId)
+      .maybeSingle();
+
     return NextResponse.json({
       success: true,
       plan: resultPlan,
+      deliverables,
+      contract: client?.deliverables_per_month ?? null,
     });
   } catch (error: unknown) {
     console.error("Save Plan Error:", error);
