@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Avatar from "../Avatar";
 import {
-  Loader2, Plus, X, Check, Users, LayoutGrid, Rows3,
+  Loader2, Plus, X, Check, Users, Rows3,
   Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2,
 } from "lucide-react";
 
@@ -41,14 +41,22 @@ const STATUS_STYLE: Record<string, string> = {
   done: "bg-emerald-950/40 border-emerald-900 text-emerald-400",
 };
 
-export default function TaskBoard() {
+/**
+ * One data layer, two faces.
+ *
+ * "board" answers "what is outstanding across the agency, soonest first".
+ * "team" answers "who is carrying what" — every member with their whole plate,
+ * which a manager opens deliberately rather than reading it squeezed beside
+ * the list.
+ */
+export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [team, setTeam] = useState<Member[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [tab, setTab] = useState<"open" | "done">("open");
-  const [view, setView] = useState<"board" | "list">("board");
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [filterMember, setFilterMember] = useState("");
   const [filterClient, setFilterClient] = useState("");
   const [showAdd, setShowAdd] = useState(false);
@@ -116,18 +124,28 @@ export default function TaskBoard() {
     };
   }, [tasks]);
 
-  // Board columns: members that have tasks in the current filter, plus Unassigned
+  /**
+   * Every member and their plate. On the team page nobody is hidden — a person
+   * with an empty plate is exactly what a manager is looking for — while the
+   * board only bothers listing people who actually hold work.
+   */
   const columns = useMemo(() => {
     const names = team.map((m) => m.name);
+    // Names that appear on tasks but not in the team table (imported rows).
     const extra = [...new Set(filtered.map((t) => t.assignee_name).filter((n): n is string => !!n && !names.some((x) => x.toLowerCase() === n.toLowerCase())))];
-    const all = [...names, ...extra];
-    const cols = all
-      .map((name) => ({ name, member: team.find((m) => m.name === name), items: filtered.filter((t) => (t.assignee_name || "").toLowerCase() === name.toLowerCase()) }))
-      .filter((c) => c.items.length > 0);
+    const cols = [...names, ...extra]
+      .map((name) => ({
+        name,
+        member: team.find((m) => m.name === name),
+        items: filtered.filter((t) => (t.assignee_name || "").toLowerCase() === name.toLowerCase()),
+      }))
+      .filter((c) => mode === "team" || c.items.length > 0)
+      // Busiest first, and anyone carrying late work above the rest.
+      .sort((a, b) => b.items.length - a.items.length);
     const unassigned = filtered.filter((t) => !t.assignee_name);
     if (unassigned.length > 0) cols.push({ name: "Unassigned", member: undefined, items: unassigned });
     return cols;
-  }, [filtered, team]);
+  }, [filtered, team, mode]);
 
   /**
    * Everyone's work as one line each, sorted by what is late first.
@@ -263,10 +281,6 @@ export default function TaskBoard() {
             </button>
           ))}
         </div>
-        <div className="flex bg-slate-950 border border-slate-900 rounded-xl p-1">
-          <button onClick={() => setView("board")} title="Board by member" className={`p-2 rounded-lg cursor-pointer ${view === "board" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}><LayoutGrid className="w-3.5 h-3.5" /></button>
-          <button onClick={() => setView("list")} title="List" className={`p-2 rounded-lg cursor-pointer ${view === "list" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}><Rows3 className="w-3.5 h-3.5" /></button>
-        </div>
         <select value={filterMember} onChange={(e) => setFilterMember(e.target.value)} className="text-[10px] font-bold bg-slate-950 border border-slate-900 rounded-xl px-3 py-2.5 text-slate-300 cursor-pointer focus:outline-none">
           <option value="">All members</option>
           <option value="unassigned">Unassigned</option>
@@ -282,89 +296,88 @@ export default function TaskBoard() {
       {/* Content */}
       {loading ? (
         <div className="py-16 flex justify-center"><Loader2 className="w-6 h-6 text-indigo-500 animate-spin" /></div>
-      ) : filtered.length === 0 ? (
+      ) : mode === "board" && filtered.length === 0 ? (
         <p className="text-xs text-slate-600 py-16 text-center">No tasks here. Add one above, or create tasks from the WhatsApp Task Bar.</p>
       ) : null}
 
-      {/* The whole picture and the team, side by side: every pending task on
-          the left, every member and what's on their plate on the right. */}
-      {!loading && filtered.length > 0 && (
-        <div className={view === "board" ? "grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-5 items-start" : ""}>
-          <div className="space-y-2 min-w-0">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-xs font-bold text-white flex items-center gap-2">
-                <Rows3 className="w-3.5 h-3.5 text-indigo-400" />
-                <span>{tab === "done" ? "Completed" : "All pending tasks"}</span>
-                <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{byUrgency.length}</span>
-              </h3>
-              <span className="text-[10px] text-slate-600">Soonest due first</span>
-            </div>
-            <div className="hidden md:grid grid-cols-12 gap-2 px-3 text-[9px] font-bold uppercase tracking-wider text-slate-600">
-              <span className="col-span-4">Task</span>
-              <span className="col-span-2">Client</span>
-              <span className="col-span-2">Assigned to</span>
-              <span className="col-span-2">Assigned on</span>
-              <span className="col-span-2 text-right">Due</span>
-            </div>
-            <div className="space-y-1.5">{byUrgency.map(oneLine)}</div>
+      {/* Board tab: the whole picture — every pending task, soonest due first. */}
+      {!loading && mode === "board" && filtered.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-xs font-bold text-white flex items-center gap-2">
+              <Rows3 className="w-3.5 h-3.5 text-indigo-400" />
+              <span>{tab === "done" ? "Completed" : "All pending tasks"}</span>
+              <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{byUrgency.length}</span>
+            </h3>
+            <span className="text-[10px] text-slate-600">Soonest due first</span>
           </div>
+          <div className="hidden md:grid grid-cols-12 gap-2 px-3 text-[9px] font-bold uppercase tracking-wider text-slate-600">
+            <span className="col-span-4">Task</span>
+            <span className="col-span-2">Client</span>
+            <span className="col-span-2">Assigned to</span>
+            <span className="col-span-2">Assigned on</span>
+            <span className="col-span-2 text-right">Due</span>
+          </div>
+          <div className="space-y-1.5">{byUrgency.map(oneLine)}</div>
+        </div>
+      )}
 
-          {view === "board" && (
-            <div className="space-y-2 xl:sticky xl:top-4">
-              <h3 className="text-xs font-bold text-white flex items-center gap-2">
-                <Users className="w-3.5 h-3.5 text-indigo-400" /><span>Team</span>
-                <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{team.length}</span>
-              </h3>
-              {/* Every member appears — an empty plate is information too. */}
-              {[...team.map((m) => ({ name: m.name, member: m as Member | undefined, items: filtered.filter((t) => (t.assignee_name || "").toLowerCase() === m.name.toLowerCase()) })),
-                ...columns.filter((c) => !c.member && c.name === "Unassigned")]
-                .map((col) => {
-                  const late = col.items.filter((t) => new Date(t.deadline).getTime() < now && t.status !== "done").length;
-                  return (
-                    <div key={col.name} className={`border rounded-xl bg-slate-950/50 ${late > 0 ? "border-rose-900/50" : "border-slate-900"}`}>
-                      <button onClick={() => setFilterMember(filterMember === col.name ? "" : col.name === "Unassigned" ? "unassigned" : col.name)}
-                        title="Click to filter the list to this person"
-                        className="w-full flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-slate-900/40 rounded-xl">
-                        <div className="flex items-center gap-2 min-w-0">
-                          {col.member ? (
-                            <Avatar name={col.name} url={col.member.avatar_url} size={22} rounded="rounded-full" />
-                          ) : (
-                            <Users className="w-3.5 h-3.5 text-indigo-400" />
-                          )}
-                          <div className="min-w-0 text-left">
-                            <p className="text-xs font-bold text-white truncate">{col.name}</p>
-                            {col.member?.role_title && <p className="text-[8px] font-bold uppercase tracking-wider text-slate-500">{col.member.role_title}</p>}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          {late > 0 && <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-rose-950/60 border border-rose-900 text-rose-400">{late} late</span>}
-                          <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{col.items.length}</span>
-                        </div>
-                      </button>
-                      {col.items.length === 0 ? (
-                        <p className="text-[10px] text-slate-600 px-3 pb-2">No open tasks.</p>
-                      ) : (
-                        <div className="px-2 pb-2 space-y-1">
-                          {col.items.slice(0, 5).map((t) => {
-                            const overdue = new Date(t.deadline).getTime() < now && t.status !== "done";
-                            return (
-                              <div key={t.id} className="flex items-center gap-2 text-[10px] bg-slate-950/60 border border-slate-900/70 rounded-lg px-2 py-1.5">
-                                <span className="text-slate-300 truncate flex-1">{t.title || "Untitled"}</span>
-                                {t.clients?.name && <span className="text-slate-600 truncate max-w-[70px]">{t.clients.name}</span>}
-                                <span className={`font-mono shrink-0 ${overdue ? "text-rose-400 font-bold" : "text-slate-500"}`}>
-                                  {new Date(t.deadline).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
-                                </span>
-                              </div>
-                            );
-                          })}
-                          {col.items.length > 5 && <p className="text-[9px] text-slate-600 px-1">+{col.items.length - 5} more — click the name to see all</p>}
-                        </div>
-                      )}
+      {/* Team tab: who is carrying what — every member's whole plate, full width. */}
+      {!loading && mode === "team" && (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
+          {columns.map((col) => {
+            const late = col.items.filter((t) => new Date(t.deadline).getTime() < now && t.status !== "done").length;
+            const isCollapsed = !!collapsed[col.name];
+            return (
+              <div key={col.name} className={`border rounded-2xl bg-slate-950/50 ${late > 0 ? "border-rose-900/50" : "border-slate-900"}`}>
+                <button onClick={() => setCollapsed((p) => ({ ...p, [col.name]: !p[col.name] }))}
+                  title={isCollapsed ? "Show tasks" : "Hide tasks"}
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 cursor-pointer hover:bg-slate-900/40 rounded-2xl">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {col.member ? (
+                      <Avatar name={col.name} url={col.member.avatar_url} size={26} rounded="rounded-full" />
+                    ) : (
+                      <Users className="w-4 h-4 text-indigo-400" />
+                    )}
+                    <div className="min-w-0 text-left">
+                      <p className="text-xs font-bold text-white truncate">{col.name}</p>
+                      {col.member?.role_title && <p className="text-[8px] font-bold uppercase tracking-wider text-slate-500">{col.member.role_title}</p>}
                     </div>
-                  );
-                })}
-            </div>
-          )}
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {late > 0 && <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-rose-950/60 border border-rose-900 text-rose-400">{late} late</span>}
+                    <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{col.items.length}</span>
+                  </div>
+                </button>
+                {!isCollapsed && (col.items.length === 0 ? (
+                  <p className="text-[10px] text-slate-600 px-3.5 pb-2.5">No open tasks.</p>
+                ) : (
+                  <div className="px-2.5 pb-2.5 space-y-1">
+                    {col.items.map((t) => {
+                      const overdue = new Date(t.deadline).getTime() < now && t.status !== "done";
+                      return (
+                        <div key={t.id} className="flex items-center gap-2 text-[10px] bg-slate-950/60 border border-slate-900/70 rounded-lg px-2 py-1.5">
+                          <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${PRIORITY_DOT[t.priority] || PRIORITY_DOT.medium}`} />
+                          <span className="text-slate-300 truncate flex-1" title={t.title || ""}>{t.title || "Untitled"}</span>
+                          {t.clients?.name && <span className="text-slate-600 truncate max-w-[80px]">{t.clients.name}</span>}
+                          <span className={`font-mono shrink-0 ${overdue ? "text-rose-400 font-bold" : "text-slate-500"}`}>
+                            {new Date(t.deadline).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+                          </span>
+                          <select value={t.status} disabled={!!busy} onChange={(e) => patch(t.id, { status: e.target.value })}
+                            className={`text-[8px] font-bold rounded px-1 py-0.5 border cursor-pointer focus:outline-none shrink-0 ${STATUS_STYLE[t.status]}`}>
+                            <option value="todo">To Do</option>
+                            <option value="in_progress">Doing</option>
+                            <option value="review">Review</option>
+                            <option value="done">Done</option>
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
