@@ -153,9 +153,12 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   }, [tasks]);
 
   /**
-   * Every member and their plate. On the team page nobody is hidden — a person
-   * with an empty plate is exactly what a manager is looking for — while the
-   * board only bothers listing people who actually hold work.
+   * Who earns a card on the team page: everyone with a portal account (an
+   * empty plate on a real teammate is information), plus anyone else only
+   * while tasks are allotted to them. Names that never signed up and hold
+   * nothing — old imports, people who left — don't clutter the view, but
+   * they stay in the assign dropdowns and reappear the moment work lands
+   * on them. The board only ever lists people actually holding work.
    */
   const columns = useMemo(() => {
     const names = team.map((m) => m.name);
@@ -167,7 +170,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
         member: team.find((m) => m.name === name),
         items: filtered.filter((t) => (t.assignee_name || "").toLowerCase() === name.toLowerCase()),
       }))
-      .filter((c) => mode === "team" || c.items.length > 0)
+      .filter((c) => c.items.length > 0 || (mode === "team" && !!c.member?.profile_id))
       // Busiest first, and anyone carrying late work above the rest.
       .sort((a, b) => b.items.length - a.items.length);
     const unassigned = filtered.filter((t) => !t.assignee_name);
