@@ -13,7 +13,7 @@ export async function GET() {
   const admin = createServiceRoleClient();
   const { data, error } = await admin
     .from("profiles")
-    .select("id, name, role, brand_name, approved, permissions, created_at, avatar_url, designation, phone, about")
+    .select("id, name, role, brand_name, approved, permissions, can_delete_tasks, created_at, avatar_url, designation, phone, about")
     .order("created_at", { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -32,7 +32,7 @@ export async function PATCH(request: NextRequest) {
   const myRole = (user?.user_metadata?.role as string) || "client";
   if (!user || myRole !== "founder") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-  const { userId, action, role, permissions } = await request.json();
+  const { userId, action, role, permissions, allowed } = await request.json();
   if (!userId || !action) return NextResponse.json({ error: "userId and action required" }, { status: 400 });
   if (userId === user.id && action === "revoke") {
     return NextResponse.json({ error: "You can't revoke your own account." }, { status: 400 });
@@ -64,6 +64,10 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "permissions must be an array of section keys or null" }, { status: 400 });
     }
     patch.permissions = permissions;
+  } else if (action === "set_task_delete") {
+    // Deleting a task is destructive and unrecoverable, so it is granted per
+    // person rather than to the employee role as a whole.
+    patch.can_delete_tasks = !!allowed;
   } else {
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   }

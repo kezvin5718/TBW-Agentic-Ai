@@ -42,7 +42,7 @@ async function syncMemberProfiles(admin: ReturnType<typeof createServiceRoleClie
 
 // GET — the team task board. ?status=open|done|all &assignee=<name> &client=<uuid>
 export async function GET(request: NextRequest) {
-  const { user } = await requireStaff();
+  const { user, role } = await requireStaff();
   if (!user) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const admin = createServiceRoleClient();
@@ -83,7 +83,7 @@ export async function GET(request: NextRequest) {
     return { ...m, avatar_url: prof?.avatar_url || null, role_title: m.role_title || prof?.designation || null };
   });
 
-  return NextResponse.json({ success: true, tasks: tasks || [], team: teamWithPhotos, clients: clients || [] });
+  return NextResponse.json({ success: true, tasks: tasks || [], team: teamWithPhotos, clients: clients || [], canDelete: await mayDeleteTasks(user.id, role) });
 }
 
 // POST — create a task. Body: { title, description?, clientId?, type?, assigneeName?, priority?, deadline? }
@@ -165,11 +165,27 @@ export async function PATCH(request: NextRequest) {
   return NextResponse.json({ success: true });
 }
 
+/**
+ * Who may delete a task. Founders always; employees only when the founder has
+ * granted it to them by name in Team & Access (profiles.can_delete_tasks).
+ * Deletion is unrecoverable, so it stays a named grant rather than a role-wide
+ * one — most of the team should be able to edit and complete, not erase.
+ */
+async function mayDeleteTasks(userId: string, role: string): Promise<boolean> {
+  if (role === "founder") return true;
+  if (role !== "employee") return false;
+  const admin = createServiceRoleClient();
+  const { data } = await admin.from("profiles").select("can_delete_tasks").eq("id", userId).maybeSingle();
+  return !!data?.can_delete_tasks;
+}
+
 // DELETE — remove a task. Body: { id }
 export async function DELETE(request: NextRequest) {
   const { user, role } = await requireStaff();
   if (!user) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  if (role !== "founder") return NextResponse.json({ error: "Only the founder can delete tasks" }, { status: 403 });
+  if (!(await mayDeleteTasks(user.id, role))) {
+    return NextResponse.json({ error: "You don't have permission to delete tasks — ask the founder to grant it in Team & Access." }, { status: 403 });
+  }
 
   const { id } = await request.json();
   if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });

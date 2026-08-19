@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { fmtIST } from "@/lib/time";
-import { Users, Loader2, Check, X, KeyRound, Mail, Phone } from "lucide-react";
+import { Users, Loader2, Check, X, KeyRound, Mail, Phone, Trash2 } from "lucide-react";
 import Avatar from "../Avatar";
 import { SECTIONS } from "@/lib/sections";
 
@@ -13,6 +13,7 @@ interface UserRow {
   brand_name: string | null;
   approved: boolean;
   permissions: string[] | null;
+  can_delete_tasks?: boolean;
   created_at: string;
   avatar_url: string | null;
   designation: string | null;
@@ -48,6 +49,19 @@ export default function TeamPage() {
 
   // Section-permission editing (local draft per user, saved on click)
   const [permDraft, setPermDraft] = useState<Record<string, string[] | null>>({});
+  // Deleting a task can't be undone, so it is granted per person rather than
+  // to the employee role as a whole.
+  const setTaskDelete = async (u: UserRow, allowed: boolean) => {
+    setBusy(u.id);
+    try {
+      await fetch("/api/team", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: u.id, action: "set_task_delete", allowed }),
+      });
+      await load();
+    } finally { setBusy(null); }
+  };
+
   const draftFor = (u: UserRow): string[] | null => (u.id in permDraft ? permDraft[u.id] : u.permissions);
   const togglePerm = (u: UserRow, key: string) => {
     const cur = draftFor(u) ?? SECTIONS.filter((s) => !["onboarding", "agency-brain"].includes(s.key)).map((s) => s.key);
@@ -197,6 +211,20 @@ export default function TeamPage() {
                           <button disabled={!!busy} onClick={() => setFullAccess(u)} className="text-[11px] font-bold px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-emerald-700 text-slate-300 cursor-pointer">Give full access</button>
                         </div>
                       </details>
+                    )}
+
+                    {/* Task deletion — a named grant, not a role-wide one */}
+                    {u.role === "employee" && (
+                      <label className="flex items-center justify-between gap-3 border-t border-slate-900/70 pt-2 cursor-pointer">
+                        <span className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Can delete tasks {u.can_delete_tasks
+                            ? <span className="text-amber-400 font-bold">· allowed</span>
+                            : <span className="text-slate-600">· not allowed</span>}</span>
+                        </span>
+                        <input type="checkbox" disabled={!!busy} checked={!!u.can_delete_tasks}
+                          onChange={(e) => setTaskDelete(u, e.target.checked)} className="accent-[#FFD400] cursor-pointer" />
+                      </label>
                     )}
                   </div>
                 );
