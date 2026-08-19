@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Avatar from "../Avatar";
+import { createClient } from "@/lib/supabase/client";
 import {
   Loader2, Plus, X, Check, Users, Rows3,
   Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2, Pencil,
@@ -62,6 +63,9 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ title: "", clientId: "", assigneeName: "", type: "design", priority: "medium", deadline: "" });
   const [saving, setSaving] = useState(false);
+  // Deleting a task is founder-only on the API. Knowing that here keeps the
+  // button off screens where pressing it could only ever return a 403.
+  const [isFounder, setIsFounder] = useState(false);
   // The task being edited — one modal serves both the board and the team tab.
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [editForm, setEditForm] = useState({ title: "", clientId: "", assigneeName: "", type: "other", priority: "medium", deadline: "" });
@@ -105,6 +109,13 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   }, []);
 
   useEffect(() => { fetchAll(tab); }, [tab, fetchAll]);
+
+  useEffect(() => {
+    (async () => {
+      const { data: { user } } = await createClient().auth.getUser();
+      setIsFounder((user?.user_metadata?.role as string) === "founder");
+    })();
+  }, []);
 
   const patch = async (id: string, fields: Record<string, unknown>) => {
     setBusy(id);
@@ -237,10 +248,12 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                 className="p-1 rounded text-slate-700 hover:text-indigo-400 cursor-pointer disabled:opacity-40">
                 <Pencil className="w-3 h-3" />
               </button>
-              <button onClick={() => remove(t.id)} disabled={!!busy} title="Delete task"
-                className="p-1 rounded text-slate-700 hover:text-rose-400 cursor-pointer disabled:opacity-40">
-                <Trash2 className="w-3 h-3" />
-              </button>
+              {isFounder && (
+                <button onClick={() => remove(t.id)} disabled={!!busy} title="Delete task"
+                  className="p-1 rounded text-slate-700 hover:text-rose-400 cursor-pointer disabled:opacity-40">
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              )}
             </>
           )}
         </div>
@@ -409,10 +422,12 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                             className="p-0.5 rounded text-slate-700 hover:text-indigo-400 cursor-pointer disabled:opacity-40 shrink-0">
                             <Pencil className="w-3 h-3" />
                           </button>
-                          <button onClick={() => remove(t.id)} disabled={!!busy} title="Delete task"
-                            className="p-0.5 rounded text-slate-700 hover:text-rose-400 cursor-pointer disabled:opacity-40 shrink-0">
-                            <Trash2 className="w-3 h-3" />
-                          </button>
+                          {isFounder && (
+                            <button onClick={() => remove(t.id)} disabled={!!busy} title="Delete task"
+                              className="p-0.5 rounded text-slate-700 hover:text-rose-400 cursor-pointer disabled:opacity-40 shrink-0">
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
                         </div>
                       );
                     })}
@@ -478,10 +493,12 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
               </div>
             </div>
             <div className="flex items-center justify-between pt-1">
-              <button onClick={() => { const id = editTask.id; setEditTask(null); remove(id); }} disabled={!!busy}
-                className="px-3 py-2 rounded-lg bg-rose-950/40 border border-rose-900 text-rose-400 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5">
-                <Trash2 className="w-3 h-3" /><span>Delete</span>
-              </button>
+              {isFounder ? (
+                <button onClick={() => { const id = editTask.id; setEditTask(null); remove(id); }} disabled={!!busy}
+                  className="px-3 py-2 rounded-lg bg-rose-950/40 border border-rose-900 text-rose-400 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5">
+                  <Trash2 className="w-3 h-3" /><span>Delete</span>
+                </button>
+              ) : <span />}
               <div className="flex items-center gap-2">
                 <button onClick={() => setEditTask(null)} className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 text-[10px] font-bold cursor-pointer hover:text-white">Cancel</button>
                 <button onClick={saveEdit} disabled={!!busy || !editForm.title.trim()}
