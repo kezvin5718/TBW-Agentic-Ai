@@ -101,6 +101,7 @@ const MANAGERS: Manager[] = [
 
 /** What shipped, newest first — the console doubles as the portal's changelog. */
 const UPDATES: { date: string; text: string }[] = [
+  { date: "19 Aug", text: "Style Library auto-sort: drop a mixed pile of old designs and the extractor files each on the right shelf (Traditional/Modern/Surreal/Boutique) — auto-filed cards wear an ✨ badge, every card has a move dropdown, and when the model disagrees with a human's shelf it shows a quiet “model thinks” hint." },
   { date: "19 Aug", text: "Management layer Phase 1 is live: every morning at 7:45 the four managers walk their territory (missing contacts, thin style categories, failed captions and posts, bare festivals, empty weeks, unanswered groups) and Ochrester compresses it into one brief — ask Bron \u201cwhat did the managers find today?\u201d" },
   { date: "19 Aug", text: "Style Library replaces the unused Ad Production kanban: four jewellery categories (Traditional / Modern / Surreal / Boutique), bulk JPG/PNG/PDF upload to Drive (500MB per drop), automatic style-JSON extraction with one locked ~23-field schema incl. typography, staff curation with starring, per-category font mapping, per-client default style — and a Style selector on 5b that merges the best-matching exemplars into every generated frame." },
   { date: "18 Aug", text: "WhatsApp bridge phase 2: client media auto-downloads to Drive and shows on tasks, DMs get a rename directory (unknown numbers wait in a tray), and outbound messages go through a human-gated queue paced like a person." },

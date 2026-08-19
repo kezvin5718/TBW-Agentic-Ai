@@ -25,17 +25,20 @@ export async function GET(request: NextRequest) {
   const category = new URL(request.url).searchParams.get("category") || "traditional";
   const admin = createServiceRoleClient();
 
+  // "auto" is the unsorted inbox: rows uploaded without a shelf, still
+  // waiting for extraction (or failed) — they move to a real shelf once sorted.
+  const presetQuery = admin.from("style_presets").select("*").order("created_at", { ascending: false }).limit(300);
   const [{ data: presets }, { data: cats }, { data: counts }, { data: clients }] = await Promise.all([
-    admin.from("style_presets").select("*").eq("category", category).order("created_at", { ascending: false }).limit(300),
+    category === "auto" ? presetQuery.is("category", null) : presetQuery.eq("category", category),
     admin.from("style_categories").select("*").order("key"),
     admin.from("style_presets").select("category, status"),
     admin.from("clients").select("id, name, default_style_category").is("archived_at", null).order("name"),
   ]);
 
   const byCat: Record<string, { approved: number; pending: number; failed: number }> = {};
-  for (const key of STYLE_CATEGORIES) byCat[key] = { approved: 0, pending: 0, failed: 0 };
+  for (const key of [...STYLE_CATEGORIES, "auto"]) byCat[key] = { approved: 0, pending: 0, failed: 0 };
   for (const row of counts || []) {
-    const c = byCat[row.category as string];
+    const c = byCat[(row.category as string | null) || "auto"];
     if (!c) continue;
     if (row.status === "approved") c.approved++;
     else if (row.status === "pending") c.pending++;
@@ -73,6 +76,11 @@ export async function POST(request: NextRequest) {
   if (body.action === "review") {
     const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (body.status !== undefined && ["approved", "rejected", "pending"].includes(body.status)) patch.status = body.status;
+    // Moving a card to another shelf is a human decision — the auto badge comes off.
+    if (body.category !== undefined && (STYLE_CATEGORIES as readonly string[]).includes(body.category)) {
+      patch.category = body.category;
+      patch.auto_sorted = false;
+    }
     if (body.starred !== undefined) patch.starred = !!body.starred;
     if (body.tags !== undefined) patch.tags = (body.tags as string[]).map((t) => String(t).toLowerCase().trim()).filter(Boolean);
     if (body.subject !== undefined) patch.subject = String(body.subject).trim() || null;

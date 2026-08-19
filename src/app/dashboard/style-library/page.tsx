@@ -4,9 +4,10 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Palette, UploadCloud, Loader2, Star, Trash2, CheckCircle2, AlertTriangle, RefreshCw, FileText, Settings2, Users } from "lucide-react";
 
 interface Preset {
-  id: string; category: string; image_url: string; file_name: string | null; mime: string | null;
+  id: string; category: string | null; image_url: string; file_name: string | null; mime: string | null;
   subject: string | null; tags: string[]; shot_type: string | null; occasion: string | null;
   prompt: Record<string, unknown>; starred: boolean; status: string; extract_error: string | null;
+  suggested_category: string | null; auto_sorted: boolean;
 }
 interface Category { key: string; name: string; font_primary: string | null; font_secondary: string | null; notes: string | null }
 interface ClientRow { id: string; name: string; default_style_category: string | null }
@@ -168,7 +169,7 @@ export default function StyleLibraryPage() {
         </div>
       )}
 
-      {/* Category tabs */}
+      {/* Category tabs + the auto-sort inbox */}
       <div className="flex gap-2 flex-wrap">
         {CATS.map((c) => {
           const n = counts[c.key];
@@ -181,6 +182,14 @@ export default function StyleLibraryPage() {
             </button>
           );
         })}
+        <button onClick={() => setTab("auto")}
+          title="Drop mixed designs here — the extractor files each one on the right shelf; you can move any card after"
+          className={`px-4 py-2.5 rounded-xl text-sm font-bold border cursor-pointer flex items-center space-x-2 ${tab === "auto" ? "bg-purple-600 border-purple-500 text-white" : "bg-slate-950 border-purple-900/60 text-purple-400 hover:text-purple-300"}`}>
+          <span>✨ Auto-sort</span>
+          {counts.auto && (counts.auto.pending + counts.auto.failed) > 0 && (
+            <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-black/30">{counts.auto.pending + counts.auto.failed}</span>
+          )}
+        </button>
       </div>
 
       {/* Fonts / settings panel */}
@@ -222,8 +231,13 @@ export default function StyleLibraryPage() {
         ) : (
           <>
             <UploadCloud className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-            <p className="text-sm font-bold text-white">Drop old {CATS.find((c) => c.key === tab)?.name} designs here</p>
-            <p className="text-[11px] text-slate-500 mt-1">JPG, PNG or PDF · up to {MAX_MB}MB per upload · bulk is fine — extraction runs by itself after</p>
+            <p className="text-sm font-bold text-white">
+              {tab === "auto" ? "Drop a mixed pile of old designs — the bot files each one" : `Drop old ${CATS.find((c) => c.key === tab)?.name} designs here`}
+            </p>
+            <p className="text-[11px] text-slate-500 mt-1">
+              JPG, PNG or PDF · up to {MAX_MB}MB per upload · bulk is fine — extraction runs by itself after
+              {tab === "auto" ? " and each design lands on the shelf it belongs to (moveable)" : ""}
+            </p>
           </>
         )}
       </div>
@@ -247,7 +261,9 @@ export default function StyleLibraryPage() {
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-slate-600" /></div>
       ) : presets.length === 0 ? (
-        <p className="text-sm text-slate-600 text-center py-10">Nothing in {CATS.find((c) => c.key === tab)?.name} yet — drop your first designs above.</p>
+        <p className="text-sm text-slate-600 text-center py-10">
+          {tab === "auto" ? "The auto-sort inbox is empty — everything dropped here has been filed on its shelf." : `Nothing in ${CATS.find((c) => c.key === tab)?.name} yet — drop your first designs above.`}
+        </p>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           {presets.map((p) => (
@@ -267,11 +283,19 @@ export default function StyleLibraryPage() {
                 </button>
                 {p.status === "pending" && <span className="absolute bottom-2 left-2 text-[9px] font-black px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-900 text-amber-400">extracting…</span>}
                 {p.status === "rejected" && <span className="absolute bottom-2 left-2 text-[9px] font-black px-2 py-0.5 rounded-full bg-slate-900/90 border border-slate-700 text-slate-400">rejected</span>}
+                {p.auto_sorted && p.status === "approved" && <span title="The bot chose this shelf — move it if it's wrong" className="absolute bottom-2 right-2 text-[9px] font-black px-2 py-0.5 rounded-full bg-purple-950/80 border border-purple-900 text-purple-300">✨ auto</span>}
               </div>
               <div className="p-2.5 space-y-1.5">
                 {p.status === "failed" ? (
                   <>
                     <p className="text-[10px] text-rose-400 leading-snug">{p.extract_error || "Extraction failed."}</p>
+                    {!p.category && (
+                      <select defaultValue="" onChange={(e) => e.target.value && review(p.id, { category: e.target.value, status: "pending" }).then(runExtraction)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-1.5 py-1.5 text-[10px] text-slate-300 cursor-pointer focus:outline-none">
+                        <option value="">File it under… (then retries)</option>
+                        {CATS.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
+                      </select>
+                    )}
                     <button onClick={() => review(p.id, { status: "pending" }).then(runExtraction)} className="w-full py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-bold text-white cursor-pointer">Retry extraction</button>
                   </>
                 ) : (
@@ -280,6 +304,22 @@ export default function StyleLibraryPage() {
                     <div className="flex flex-wrap gap-1">
                       {(p.tags || []).slice(0, 4).map((t) => <span key={t} className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400">{t}</span>)}
                     </div>
+                    {p.category && (
+                      <div className="flex items-center gap-1.5">
+                        <select value={p.category} onChange={(e) => review(p.id, { category: e.target.value })}
+                          title="Move to another shelf"
+                          className="bg-slate-950 border border-slate-800 rounded-lg px-1.5 py-1 text-[10px] text-slate-300 cursor-pointer focus:outline-none">
+                          {CATS.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
+                        </select>
+                        {p.suggested_category && p.suggested_category !== p.category && (
+                          <button onClick={() => review(p.id, { category: p.suggested_category })}
+                            title="The model would file this differently — click to accept its suggestion"
+                            className="text-[9px] text-purple-400 hover:text-purple-300 cursor-pointer">
+                            model: {p.suggested_category}?
+                          </button>
+                        )}
+                      </div>
+                    )}
                     <button onClick={() => setExpanded(expanded === p.id ? null : p.id)} className="text-[10px] text-indigo-400 hover:text-indigo-300 cursor-pointer">
                       {expanded === p.id ? "▾ hide style JSON" : "▸ view style JSON"}
                     </button>

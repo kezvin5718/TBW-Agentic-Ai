@@ -14,6 +14,7 @@ import type { PostSpec } from "@/lib/post-designer";
 export const STYLE_CATEGORIES = ["traditional", "modern", "surreal", "boutique"] as const;
 
 export interface StylePrompt {
+  category?: string;
   subject?: string;
   tags?: string[];
   shot_type?: string;
@@ -46,6 +47,11 @@ const EXTRACT_PROMPT = `Study this finished jewellery ad design and extract its 
 
 Return ONLY a JSON object with these fields (omit a field only if truly not determinable):
 {
+  "category": "traditional | modern | surreal | boutique — which of this agency's four style shelves the design belongs on:
+    traditional = heritage Indian look: temple/festive warmth, silk drapes, diyas, deep maroons and golds, ornate;
+    modern = clean contemporary: minimal props, generous white/neutral space, crisp light, geometric simplicity;
+    surreal = dreamlike or conceptual: impossible scenes, floating elements, fantasy scale, painterly skies;
+    boutique = intimate luxury editorial: moody close-ups, rich shadows, premium magazine feel, quiet opulence",
   "subject": "what the piece is, e.g. 'bridal kundan necklace set'",
   "tags": ["necklace|ring|earrings|bangle|bracelet|pendant|mangalsutra|bridal-set|chain", "bridal|festive|daily-wear|gifting", "model-shot|product-only|flat-lay|lifestyle", "...any other useful tag"],
   "shot_type": "product-only | model-wearing | flat-lay | lifestyle",
@@ -83,7 +89,7 @@ export async function extractPendingPresets(limit = 5): Promise<{ done: number; 
   const admin = createServiceRoleClient();
   const { data: pending } = await admin
     .from("style_presets")
-    .select("id, image_url, file_name, mime")
+    .select("id, image_url, file_name, mime, category")
     .eq("status", "pending")
     .order("created_at")
     .limit(limit);
@@ -110,12 +116,24 @@ export async function extractPendingPresets(limit = 5): Promise<{ done: number; 
         throw new Error("The vision model returned nothing usable for this file.");
       }
 
+      // Where the model would file it — recorded always, decisive only when
+      // the upload arrived unsorted. A human's chosen shelf is never moved.
+      const suggested = (STYLE_CATEGORIES as readonly string[]).includes(String(prompt.category || "").toLowerCase())
+        ? String(prompt.category).toLowerCase()
+        : null;
+      if (!row.category && !suggested) {
+        throw new Error("Auto-sort couldn't decide a category — pick a shelf on the card and retry.");
+      }
+
       await admin.from("style_presets").update({
         prompt,
         subject: prompt.subject || null,
         tags: (prompt.tags || []).map((t) => String(t).toLowerCase().trim()).filter(Boolean),
         shot_type: prompt.shot_type || null,
         occasion: prompt.occasion || null,
+        category: row.category || suggested,
+        suggested_category: suggested,
+        auto_sorted: !row.category,
         status: "approved", // extracted straight to approved; staff demotes the weak ones
         extract_error: null,
         updated_at: new Date().toISOString(),

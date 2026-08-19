@@ -27,7 +27,9 @@ export async function POST(request: NextRequest) {
 
   const form = await request.formData();
   const category = String(form.get("category") || "");
-  if (!(STYLE_CATEGORIES as readonly string[]).includes(category)) {
+  // "auto" = no shelf chosen — the extractor classifies each design itself.
+  const isAuto = category === "auto";
+  if (!isAuto && !(STYLE_CATEGORIES as readonly string[]).includes(category)) {
     return NextResponse.json({ error: "Pick a valid category first." }, { status: 400 });
   }
 
@@ -40,7 +42,7 @@ export async function POST(request: NextRequest) {
   }
 
   const admin = createServiceRoleClient();
-  const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
+  const catLabel = isAuto ? "Auto-sort inbox" : category.charAt(0).toUpperCase() + category.slice(1);
   let stored = 0;
   const errors: string[] = [];
 
@@ -64,7 +66,7 @@ export async function POST(request: NextRequest) {
       if (!url) throw new Error(error || "Drive refused the file.");
 
       const { error: dbErr } = await admin.from("style_presets").insert({
-        category,
+        category: isAuto ? null : category,
         image_url: url,
         file_name: file.name || safe,
         mime,
