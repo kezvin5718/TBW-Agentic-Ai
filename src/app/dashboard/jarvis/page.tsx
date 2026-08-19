@@ -13,6 +13,7 @@ import {
   Volume2,
   VolumeX
 } from "lucide-react";
+import BronCore, { type CoreState } from "./BronCore";
 
 interface ChatMessage {
   id?: string;
@@ -68,6 +69,9 @@ export default function JarvisChatPage() {
   const [speakReplies, setSpeakReplies] = useState(false);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // What the dial shows: hearing you beats working, working beats talking.
+  const coreState: CoreState = isRecording ? "listening" : loading ? "thinking" : isSpeaking ? "speaking" : "idle";
 
   // Initialize Web Speech API Recognition
   useEffect(() => {
@@ -267,9 +271,12 @@ export default function JarvisChatPage() {
           </div>
         </div>
 
-        <div className="flex items-center space-x-2 text-[10px] text-emerald-400 font-mono bg-emerald-950/20 px-2.5 py-1 rounded-full border border-emerald-500/15">
-          <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" />
-          <span>CONNECTED</span>
+        <div className="flex items-center gap-3">
+          {messages.length > 0 && <BronCore state={coreState} size={64} label=" " />}
+          <div className="flex items-center space-x-2 text-[10px] text-emerald-400 font-mono bg-emerald-950/20 px-2.5 py-1 rounded-full border border-emerald-500/15">
+            <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" />
+            <span>CONNECTED</span>
+          </div>
         </div>
       </div>
 
@@ -282,13 +289,10 @@ export default function JarvisChatPage() {
           </div>
         ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center max-w-sm mx-auto space-y-4">
-            <Bot className="w-10 h-10 text-indigo-400" />
-            <div className="space-y-1">
-              <h3 className="text-sm font-bold text-white">Bron is online</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Founder-only assistant. Ask for metrics, search client briefs, draft copy, or approve creatives.
-              </p>
-            </div>
+            <BronCore state={coreState} size={230} />
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Founder-only assistant. Ask for metrics, search client briefs, draft copy, or approve creatives — by voice or typing.
+            </p>
           </div>
         ) : (
           <div className="space-y-4">
