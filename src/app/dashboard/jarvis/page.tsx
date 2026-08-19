@@ -70,6 +70,16 @@ export default function JarvisChatPage() {
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
+  // The browser reports no voices until it has loaded them; touching the list
+  // once here means the first spoken reply already has the good one available.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    window.speechSynthesis.getVoices();
+    const onVoices = () => window.speechSynthesis.getVoices();
+    window.speechSynthesis.addEventListener("voiceschanged", onVoices);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", onVoices);
+  }, []);
+
   // What the dial shows: hearing you beats working, working beats talking.
   const coreState: CoreState = isRecording ? "listening" : loading ? "thinking" : isSpeaking ? "speaking" : "idle";
 
@@ -129,17 +139,36 @@ export default function JarvisChatPage() {
     }
   };
 
-  /** The browser's built-in voice — the fallback when server TTS is unavailable. */
+  /**
+   * The browser's own voice — the free fallback when server TTS is unavailable,
+   * and the whole voice if no key is ever configured.
+   *
+   * "en-IN" alone left the choice to the browser, which picks the flat default.
+   * Macs ship far better British male voices (Daniel, Oliver, Arthur — the
+   * Enhanced ones are a free download in System Settings), so ask for one by
+   * name and only fall back to whatever exists. Slightly slower and lower than
+   * default reads as composed rather than hurried.
+   */
   const speakWithBrowser = (cleanText: string) => {
-    if (typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(cleanText);
-      utterance.lang = "en-IN"; // Indian English voice
-      utterance.onstart = () => setIsSpeaking(true);
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
-      window.speechSynthesis.speak(utterance);
-    }
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    const voices = window.speechSynthesis.getVoices();
+    // Best first: a named British male, then any British English voice.
+    const wanted = ["Daniel", "Oliver", "Arthur", "Serena", "Google UK English Male"];
+    const pick =
+      wanted.map((n) => voices.find((v) => v.name.includes(n) && /en[-_]?GB/i.test(v.lang))).find(Boolean) ||
+      voices.find((v) => /en[-_]?GB/i.test(v.lang)) ||
+      voices.find((v) => /en[-_]?IN/i.test(v.lang));
+    if (pick) utterance.voice = pick;
+    utterance.lang = pick?.lang || "en-GB";
+    utterance.rate = 0.94;
+    utterance.pitch = 0.9;
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+    window.speechSynthesis.speak(utterance);
   };
 
   const speakText = async (text: string) => {
