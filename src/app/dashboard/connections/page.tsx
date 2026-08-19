@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Share2, RefreshCw, Loader2, User, Bot, Activity, Copy, Check } from "lucide-react";
+import { Share2, RefreshCw, Loader2, User, Bot, Activity, Copy, Check, Crown, History } from "lucide-react";
 
 type Mode = "live" | "configured" | "simulated" | "offline" | "notbuilt";
 interface Connector { key: string; mode: Mode }
@@ -43,6 +43,75 @@ const EDGES: [number, number][] = [
 ];
 
 const NW = 200, NH = 66, CY = 500, GAP = 112, LOOP_Y = 920;
+
+/**
+ * The management layer: duty-cycles over the same data, one face (Bron).
+ * Each manager is the SMART model wearing a job description — no separate
+ * subscriptions, no separate chat personas. Status tracks what is real today.
+ */
+interface Manager { name: string; model: string; status: "active" | "planned"; face: string; skills: string[] }
+const MANAGERS: Manager[] = [
+  {
+    name: "Ochrester — Main Manager", model: "Claude Sonnet", status: "planned", face: "Speaks through Bron",
+    skills: [
+      "Reads all four managers' daily notes",
+      "Produces one exception brief — “3 things need you today”",
+      "Never talks to you directly; Bron carries what it finds",
+    ],
+  },
+  {
+    name: "Brand Manager", model: "Claude Sonnet + Gemini vision", status: "planned", face: "Brand memory keeper",
+    skills: [
+      "Reads Brand Brain, briefs and the feedback log",
+      "Flags missing address/phone/colours that block captions",
+      "Watches QC rejections for repeat brand mismatches",
+      "Curates the Style Library — flags thin categories",
+      "Watches WhatsApp group activity for silent/unhappy clients",
+    ],
+  },
+  {
+    name: "Design Manager", model: "Claude Sonnet + GPT Image + Gemini critic", status: "active", face: "Art director on 5b",
+    skills: [
+      "Owns Plan → Posts: productionNote → scene prompt → render → critic",
+      "Merges Style Library exemplars into every generated frame",
+      "Enforces the plan's art direction over generic AI output",
+      "Critic pass catches clipped text and cropped product before a human",
+    ],
+  },
+  {
+    name: "Content Writing Manager", model: "GPT-4o + Gemini vision", status: "active", face: "Copywriter",
+    skills: [
+      "Reads the whole creative first — prices on it appear verbatim",
+      "Captions run 100–120 words with address + phone mandatory",
+      "Catalogue Ad Copy: primary text + 2–3 word headlines",
+      "Flags captions stuck in failed / no-contact",
+    ],
+  },
+  {
+    name: "Social Media Manager", model: "Mostly plain code + RecurPost", status: "active", face: "Scheduler",
+    skills: [
+      "Automation tab: batch QC verdicts, ripple dates, gaps, story slots",
+      "Festival stories: right creative, right day, right time — automatic",
+      "RecurPost health: sent, failed, queued",
+      "Flags failed posts and clients with an empty week",
+    ],
+  },
+];
+
+/** What shipped, newest first — the console doubles as the portal's changelog. */
+const UPDATES: { date: string; text: string }[] = [
+  { date: "19 Aug", text: "Style Library replaces the unused Ad Production kanban: four jewellery categories (Traditional / Modern / Surreal / Boutique), bulk JPG/PNG/PDF upload to Drive (500MB per drop), automatic style-JSON extraction with one locked ~23-field schema incl. typography, staff curation with starring, per-category font mapping, per-client default style — and a Style selector on 5b that merges the best-matching exemplars into every generated frame." },
+  { date: "18 Aug", text: "WhatsApp bridge phase 2: client media auto-downloads to Drive and shows on tasks, DMs get a rename directory (unknown numbers wait in a tray), and outbound messages go through a human-gated queue paced like a person." },
+  { date: "18 Aug", text: "Bron speaks with a real voice (OpenAI TTS), hears voice notes, and covers festivals, automation status, Drive health and per-client WhatsApp activity truthfully from the database." },
+  { date: "18 Aug", text: "5b shows the exact image prompt (and model) before Build — nobody pays to find out what was sent." },
+  { date: "17 Aug", text: "Automation tab: approved creatives arrive dated and captioned automatically — everyday/alternate/manual with ripple re-flow, same-day spacing, configurable gaps, drag-to-reorder, and a caption backfill for stuck rows." },
+  { date: "17 Aug", text: "Captions are QC-grounded: the whole video/creative is read first, on-creative prices appear verbatim, 100–120 words, address + phone mandatory." },
+  { date: "17 Aug", text: "Festival stories schedule themselves once QC passes — Library only, at the festival's own day and time; a Festivals page lets staff add/retime/delete." },
+  { date: "17 Aug", text: "One rejected creative rejects its whole upload batch for that client — no half-approved batches slip through." },
+  { date: "17 Aug", text: "Permission system now covers every staff page (two had no section registered), with a regression test so it stays that way." },
+  { date: "16 Aug", text: "Plan imports keep the author's calendar: 'Keep my slots' is the primary action, missing details (brand colours, placeholders) are asked for instead of guessed, and generated posts follow the plan's own art direction." },
+  { date: "16 Aug", text: "Generation reliability: timeouts on every external call, Drive photos read through the API instead of hanging on its CDN, step-by-step logs, and text that always fits the frame." },
+];
 
 export default function AgentsConsolePage() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
@@ -212,6 +281,51 @@ export default function AgentsConsolePage() {
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* Management layer — Ochrester and the four managers */}
+      <div>
+        <h2 className="text-sm font-bold text-white mb-1 flex items-center gap-2">
+          <Crown className="w-4 h-4 text-[var(--yellow)]" /><span>Management Layer</span>
+        </h2>
+        <p className="text-[11px] text-slate-500 mb-3">
+          Duty-cycles over the same data, one face: you talk to Bron, Bron carries what the managers find. Each is the smart model wearing a job description — not a separate subscription.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {MANAGERS.map((m) => (
+            <div key={m.name} className={`bg-slate-950/60 border rounded-2xl p-4 ${m.status === "active" ? "border-emerald-900/60" : "border-slate-900"}`}>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <h3 className="text-xs font-bold text-white">{m.name}</h3>
+                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border shrink-0 ${m.status === "active" ? "text-emerald-400 border-emerald-900 bg-emerald-950/40" : "text-slate-400 border-slate-800 bg-slate-900"}`}>
+                  {m.status === "active" ? "Pipelines live" : "Planned — Phase 1"}
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-500 mb-2">{m.face} · <span className="text-slate-400 font-semibold">{m.model}</span></p>
+              <ul className="space-y-1">
+                {m.skills.map((sk) => (
+                  <li key={sk} className="text-[11px] text-slate-400 leading-snug flex items-start gap-1.5">
+                    <span className="text-indigo-400 mt-0.5">▸</span><span>{sk}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Changelog — what shipped, newest first */}
+      <div>
+        <h2 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+          <History className="w-4 h-4 text-indigo-400" /><span>Recent Updates</span>
+        </h2>
+        <div className="bg-slate-950/50 border border-slate-900 rounded-2xl divide-y divide-slate-900/70">
+          {UPDATES.map((u, i) => (
+            <div key={i} className="flex items-start gap-3 px-4 py-2.5">
+              <span className="text-[10px] font-black text-slate-500 w-14 shrink-0 mt-0.5">{u.date}</span>
+              <p className="text-[11px] text-slate-400 leading-relaxed">{u.text}</p>
+            </div>
+          ))}
         </div>
       </div>
     </div>

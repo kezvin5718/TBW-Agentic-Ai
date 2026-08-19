@@ -8,7 +8,11 @@ export const SECTIONS = [
   { key: "brand-brain", num: 2, name: "Brand Brain", path: "/dashboard/brand-brain" },
   { key: "planning", num: 3, name: "Campaign Planning", path: "/dashboard/planning" },
   { key: "approvals", num: 4, name: "Approvals Flow", path: "/dashboard/approvals" },
-  { key: "production", num: 5, name: "Ad Production", path: "/dashboard/production" },
+  // Section 5 was the unused Ad Production kanban; the slot (and its existing
+  // permission grants — the key stays "production") now belongs to the Style
+  // Library. Plan → Posts still lives under /dashboard/production/plan-posts,
+  // guarded by the same key via SECTION_BY_PREFIX below.
+  { key: "production", num: 5, name: "Style Library", path: "/dashboard/style-library" },
   { key: "image-studio", num: 6, name: "Image Studio", path: "/dashboard/image-studio" },
   { key: "creatives-review", num: 7, name: "Creative Approvals", path: "/dashboard/creatives-review" },
   { key: "content-hub", num: 8, name: "Content Hub", path: "/dashboard/content-hub" },
@@ -35,6 +39,8 @@ export type SectionKey = (typeof SECTIONS)[number]["key"];
 export const SECTION_BY_PREFIX: Record<string, string> = {
   ...Object.fromEntries(SECTIONS.map((s) => [s.path, s.key])),
   "/dashboard/whatsapp-inbox": "task-manager",
+  // 5b Plan → Posts (and the old kanban route) keep following section 5's grant.
+  "/dashboard/production": "production",
 };
 
 export function sectionKeyForPath(path: string): string | null {

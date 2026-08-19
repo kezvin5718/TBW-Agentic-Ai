@@ -8,6 +8,7 @@ import { storeToDriveStrict, isDriveConnected, downloadDriveFileByUrl } from "@/
 /** How long any single supporting asset may take before the render gives up. */
 const ASSET_TIMEOUT_MS = 30_000;
 import { analysePlan, pixelsFor, shapeFor, type PostSpec } from "@/lib/post-designer";
+import { styleBlockFor } from "@/lib/style-library";
 
 /**
  * Builds the actual images.
@@ -188,9 +189,9 @@ async function canvas(spec: PostSpec, width: number, height: number): Promise<Bu
  * the 5b screen can show it before any money is spent, and so what is shown is
  * what is sent rather than a paraphrase of it.
  */
-export function buildScenePrompt(spec: PostSpec): string {
+export function buildScenePrompt(spec: PostSpec, styleBlock = ""): string {
   return `${spec.scenePrompt}
-
+${styleBlock}
 Style: premium Indian advertising background for a jewellery brand. Rich but uncluttered, with clear empty space across the lower half where text will be placed afterwards.
 Absolutely no text, no letters, no numbers, no logos, no watermarks, no people, and no jewellery or products of any kind. Background scene only.`;
 }
@@ -349,7 +350,8 @@ export async function renderFrame(
   spec: PostSpec,
   photoUrl?: string | null,
   frame = 0,
-  logoUrl?: string | null
+  logoUrl?: string | null,
+  styleBlock = ""
 ): Promise<RenderedPost> {
   const { width, height } = pixelsFor(spec);
   const { bandTop, content } = frameLayout(spec, frame, width, height);
@@ -376,7 +378,7 @@ export async function renderFrame(
     }
   } else if (spec.kind === "generated" && spec.scenePrompt) {
     console.log(`      · generating background scene (this is the slow one)…`);
-    const { buffer, error } = await generateBrandImage(buildScenePrompt(spec), shapeFor(spec));
+    const { buffer, error } = await generateBrandImage(buildScenePrompt(spec, styleBlock), shapeFor(spec));
     console.log(`      · background scene ${buffer ? "generated" : `FAILED: ${error}`}.`);
     if (buffer) {
       hasImagery = true;
@@ -450,7 +452,7 @@ Return JSON: { "ok": true|false, "issues": ["short description", ...] }`,
 export async function generatePlanPosts(
   planId: string,
   photoByItem: Record<string, string[]>,
-  options: { items?: number[]; limit?: number } = {}
+  options: { items?: number[]; limit?: number; styleCategory?: string | null } = {}
 ): Promise<{ created: number; failed: number; notes: string[] }> {
   const admin = createServiceRoleClient();
 
@@ -502,10 +504,16 @@ export async function generatePlanPosts(
 
     console.log(`🎨 Studio: post ${spec.item + 1} (${spec.kind}, ${spec.frames} frame(s)) starting at ${since()}.`);
 
+    // The proven-look exemplars for this post, when a category was chosen.
+    // Empty string when the library has nothing — old behaviour, unchanged.
+    const styleBlock = options.styleCategory && spec.kind === "generated"
+      ? await styleBlockFor(spec, options.styleCategory)
+      : "";
+
     for (let frame = 0; frame < spec.frames; frame++) {
       try {
         console.log(`   ↳ post ${spec.item + 1} frame ${frame + 1}/${spec.frames}: rendering… (${since()})`);
-        const { buffer, note, content } = await renderFrame(spec, photos[frame] || photos[0] || null, frame, client?.logo_url);
+        const { buffer, note, content } = await renderFrame(spec, photos[frame] || photos[0] || null, frame, client?.logo_url, styleBlock);
         console.log(`   ↳ post ${spec.item + 1} frame ${frame + 1}: rendered, checking and filing… (${since()})`);
 
         // Judge the frame and file it at the same time. Both only need the

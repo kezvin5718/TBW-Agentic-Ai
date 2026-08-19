@@ -9,12 +9,18 @@ export async function completeVision({
   system,
   prompt,
   imageDataUrl,
+  fileDataUrl,
+  fileName,
   model,
   maxTokens,
 }: {
   system?: string;
   prompt: string;
-  imageDataUrl: string;
+  /** Image as a data URI. Give either this or fileDataUrl. */
+  imageDataUrl?: string;
+  /** A PDF as a data URI (data:application/pdf;base64,…) — Gemini reads these natively. */
+  fileDataUrl?: string;
+  fileName?: string;
   model?: string;
   maxTokens?: number;
 }): Promise<string> {
@@ -23,13 +29,17 @@ export async function completeVision({
     return JSON.stringify({ verdict: "unsure", detected_brand: "unknown", reason: "OPENROUTER_API_KEY not set (mock mode)" });
   }
 
+  const attachment = fileDataUrl
+    ? { type: "file", file: { filename: fileName || "document.pdf", file_data: fileDataUrl } }
+    : { type: "image_url", image_url: { url: imageDataUrl } };
+
   const messages: Array<Record<string, unknown>> = [];
   if (system) messages.push({ role: "system", content: system });
   messages.push({
     role: "user",
     content: [
       { type: "text", text: prompt },
-      { type: "image_url", image_url: { url: imageDataUrl } },
+      attachment,
     ],
   });
 

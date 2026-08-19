@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { analysePlan } from "@/lib/post-designer";
 import { generatePlanPosts, buildScenePrompt } from "@/lib/post-studio";
+import { styleBlockFor } from "@/lib/style-library";
 import { describeImageViaVision, isImageGenerationConfigured, imageModelName } from "@/lib/integrations/openai-images";
 import { isDriveConnected, getDriveQuota, getDriveStatus, storeToDriveStrict } from "@/lib/google-drive";
 import { cleanProductPhoto } from "@/lib/product-photo";
@@ -24,26 +25,41 @@ export async function GET(request: NextRequest) {
   const guard = await requireStaff();
   if (guard.error) return guard.error;
 
-  const planId = new URL(request.url).searchParams.get("planId");
+  const url = new URL(request.url);
+  const planId = url.searchParams.get("planId");
   if (!planId) return NextResponse.json({ error: "planId required" }, { status: 400 });
 
   try {
     const plan = await analysePlan(planId);
     const admin = createServiceRoleClient();
-    const [{ data: photos }, { data: made }] = await Promise.all([
+    // ?style= overrides; otherwise the client's default category applies.
+    const styleParam = url.searchParams.get("style");
+    const styleCategory = styleParam !== null ? (styleParam || null) : plan.styleDefault;
+
+    const [{ data: photos }, { data: made }, { data: styleRows }] = await Promise.all([
       admin.from("plan_product_photos").select("*").eq("plan_id", planId).order("seq"),
       admin.from("creatives").select("id, plan_item, frame_index, media_url, qc_status, founder_approval").eq("plan_id", planId),
+      admin.from("style_presets").select("category").eq("status", "approved"),
     ]);
+
+    const styleCounts: Record<string, number> = {};
+    for (const r of styleRows || []) styleCounts[r.category as string] = (styleCounts[r.category as string] || 0) + 1;
+
+    const specs = await Promise.all(plan.specs.map(async (sp) => ({
+      ...sp,
+      imagePrompt: sp.kind === "generated" && sp.scenePrompt.trim()
+        ? buildScenePrompt(sp, styleCategory ? await styleBlockFor(sp, styleCategory) : "")
+        : null,
+    })));
 
     return NextResponse.json({
       success: true,
       ...plan,
       // The exact text each generated post will send to the image model, and
       // which model that is — shown before Build so nobody pays to find out.
-      specs: plan.specs.map((sp) => ({
-        ...sp,
-        imagePrompt: sp.kind === "generated" && sp.scenePrompt.trim() ? buildScenePrompt(sp) : null,
-      })),
+      specs,
+      styleCategory,
+      styleCounts,
       imageModel: imageModelName(),
       photos: photos || [],
       alreadyMade: made || [],
@@ -191,7 +207,11 @@ export async function POST(request: NextRequest) {
     }
     try {
       const items = Array.isArray(body.items) ? body.items.map(Number).filter(Number.isFinite) : undefined;
-      const result = await generatePlanPosts(planId, body.pairing || {}, { items, limit: Number(body.limit) || 30 });
+      const result = await generatePlanPosts(planId, body.pairing || {}, {
+        items,
+        limit: Number(body.limit) || 30,
+        styleCategory: typeof body.styleCategory === "string" && body.styleCategory ? body.styleCategory : null,
+      });
       return NextResponse.json({
         success: result.failed === 0,
         ...result,

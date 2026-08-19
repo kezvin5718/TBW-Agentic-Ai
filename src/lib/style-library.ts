@@ -1,0 +1,203 @@
+import { createServiceRoleClient } from "@/lib/supabase/server";
+import { completeVision } from "@/lib/llm-vision";
+import { safeJsonParse, stripMarkdownFences } from "@/lib/llm";
+import { downloadDriveFileByUrl } from "@/lib/google-drive";
+import type { PostSpec } from "@/lib/post-designer";
+
+/**
+ * The Style Library: the agency's proven jewellery looks, one JSON per old
+ * design, grouped into four categories. Extraction runs on the cheap vision
+ * model with ONE locked schema so every preset comes out with identical
+ * fields — the whole reason this lives here instead of ad-hoc ChatGPT chats.
+ */
+
+export const STYLE_CATEGORIES = ["traditional", "modern", "surreal", "boutique"] as const;
+
+export interface StylePrompt {
+  subject?: string;
+  tags?: string[];
+  shot_type?: string;
+  occasion?: string;
+  lighting?: string;
+  camera?: string;
+  composition?: string;
+  background?: string;
+  props?: string;
+  material_rendering?: string;
+  color_palette?: string;
+  mood?: string;
+  finish?: string;
+  text_space?: string;
+  human_elements?: string;
+  avoid?: string[];
+  type_style?: string;
+  type_reference?: string;
+  type_weight?: string;
+  type_case?: string;
+  letter_spacing?: string;
+  text_treatment?: string;
+  text_hierarchy?: string;
+  script_language?: string;
+}
+
+const EXTRACT_SYSTEM = `You are a senior art director at an Indian advertising agency that serves jewellery brands. You reverse-engineer finished ad designs into precise, reusable style specifications. You answer ONLY with JSON.`;
+
+const EXTRACT_PROMPT = `Study this finished jewellery ad design and extract its visual style as JSON so a different piece of jewellery could be shot/generated in EXACTLY this look.
+
+Return ONLY a JSON object with these fields (omit a field only if truly not determinable):
+{
+  "subject": "what the piece is, e.g. 'bridal kundan necklace set'",
+  "tags": ["necklace|ring|earrings|bangle|bracelet|pendant|mangalsutra|bridal-set|chain", "bridal|festive|daily-wear|gifting", "model-shot|product-only|flat-lay|lifestyle", "...any other useful tag"],
+  "shot_type": "product-only | model-wearing | flat-lay | lifestyle",
+  "occasion": "wedding | festival | daily-wear | gifting | offer",
+  "lighting": "direction, warmth, hardness, ambience — be specific",
+  "camera": "focal feel, angle, depth of field",
+  "composition": "placement, fill %, negative space, where the eye goes",
+  "background": "surfaces, drapes, colour, bokeh, setting",
+  "props": "what props and how minimal/styled",
+  "material_rendering": "how metal and stones are rendered — specularity, polish, glow",
+  "color_palette": "dominant + accent colours",
+  "mood": "3-4 words, e.g. regal, heritage, intimate",
+  "finish": "editorial / e-commerce clean / film grain / matte etc.",
+  "text_space": "where the layout leaves clean room for text",
+  "human_elements": "none | hands only | full model — with styling notes",
+  "avoid": ["things this style never does"],
+  "type_style": "high-contrast serif | modern sans | script-calligraphy | display-decorative",
+  "type_reference": "a well-known look-alike font family, e.g. 'Playfair/Didot-style thin serif'",
+  "type_weight": "light | regular | bold",
+  "type_case": "ALL CAPS | Title Case | lowercase",
+  "letter_spacing": "tight | normal | wide",
+  "text_treatment": "gold foil | embossed | plain white | outlined | gradient",
+  "text_hierarchy": "e.g. small kicker top, large headline centre, price bottom-right",
+  "script_language": "English | Hindi | Gujarati | mixed"
+}
+
+Describe what IS in this design, never what could be. No markdown, JSON only.`;
+
+/**
+ * Extract style JSON for up to `limit` pending presets. Called repeatedly from
+ * the UI until nothing is pending — same shape as the caption backfill, so a
+ * 50-file upload never has to survive a single request.
+ */
+export async function extractPendingPresets(limit = 5): Promise<{ done: number; failed: number; remaining: number }> {
+  const admin = createServiceRoleClient();
+  const { data: pending } = await admin
+    .from("style_presets")
+    .select("id, image_url, file_name, mime")
+    .eq("status", "pending")
+    .order("created_at")
+    .limit(limit);
+
+  let done = 0, failed = 0;
+  for (const row of pending || []) {
+    try {
+      const buf = await downloadDriveFileByUrl(row.image_url);
+      if (!buf || buf.length === 0) throw new Error("Could not read the file back from Google Drive.");
+
+      const isPdf = (row.mime || "").includes("pdf") || /\.pdf$/i.test(row.file_name || "");
+      const base64 = buf.toString("base64");
+      const raw = await completeVision({
+        system: EXTRACT_SYSTEM,
+        prompt: EXTRACT_PROMPT,
+        ...(isPdf
+          ? { fileDataUrl: `data:application/pdf;base64,${base64}`, fileName: row.file_name || "design.pdf" }
+          : { imageDataUrl: `data:${row.mime || "image/jpeg"};base64,${base64}` }),
+        maxTokens: 900,
+      });
+
+      const prompt = safeJsonParse<StylePrompt>(stripMarkdownFences(raw), {});
+      if (!prompt.lighting && !prompt.composition && !prompt.background) {
+        throw new Error("The vision model returned nothing usable for this file.");
+      }
+
+      await admin.from("style_presets").update({
+        prompt,
+        subject: prompt.subject || null,
+        tags: (prompt.tags || []).map((t) => String(t).toLowerCase().trim()).filter(Boolean),
+        shot_type: prompt.shot_type || null,
+        occasion: prompt.occasion || null,
+        status: "approved", // extracted straight to approved; staff demotes the weak ones
+        extract_error: null,
+        updated_at: new Date().toISOString(),
+      }).eq("id", row.id);
+      done++;
+    } catch (err: unknown) {
+      await admin.from("style_presets").update({
+        status: "failed",
+        extract_error: err instanceof Error ? err.message.slice(0, 300) : "Extraction failed",
+        updated_at: new Date().toISOString(),
+      }).eq("id", row.id);
+      failed++;
+    }
+  }
+
+  const { count } = await admin
+    .from("style_presets")
+    .select("*", { count: "exact", head: true })
+    .eq("status", "pending");
+
+  return { done, failed, remaining: count || 0 };
+}
+
+/** Words worth matching between a plan slot and a preset's tags/subject. */
+function keywords(spec: PostSpec): string[] {
+  const text = `${spec.scenePrompt} ${spec.headline} ${spec.subtext}`.toLowerCase();
+  const JEWELLERY = ["necklace", "ring", "earring", "bangle", "bracelet", "pendant", "mangalsutra", "chain", "bridal", "kundan", "polki", "diamond", "gold", "silver", "wedding", "festival", "festive", "gift", "offer", "daily"];
+  return JEWELLERY.filter((w) => text.includes(w));
+}
+
+interface PresetRow { subject: string | null; tags: string[]; starred: boolean; prompt: StylePrompt }
+
+function scorePreset(p: PresetRow, kws: string[]): number {
+  let score = p.starred ? 2 : 0;
+  const hay = `${p.subject || ""} ${(p.tags || []).join(" ")}`.toLowerCase();
+  for (const k of kws) if (hay.includes(k)) score += 1;
+  return score;
+}
+
+/**
+ * The style block appended to a generated post's scene prompt: the best 2
+ * approved exemplars from the chosen category, merged (best match wins a
+ * field, the runner-up fills its gaps). Returns "" when the category has
+ * nothing approved, so 5b degrades to exactly its old behaviour.
+ */
+export async function styleBlockFor(spec: PostSpec, category: string): Promise<string> {
+  if (!category) return "";
+  const admin = createServiceRoleClient();
+  const { data } = await admin
+    .from("style_presets")
+    .select("subject, tags, starred, prompt")
+    .eq("category", category)
+    .eq("status", "approved")
+    .limit(200);
+  const rows = (data || []) as PresetRow[];
+  if (rows.length === 0) return "";
+
+  const kws = keywords(spec);
+  const ranked = rows.map((p) => ({ p, s: scorePreset(p, kws) })).sort((a, b) => b.s - a.s);
+  const top = ranked.slice(0, 2).map((r) => r.p.prompt);
+
+  const pick = (field: keyof StylePrompt): string => {
+    for (const t of top) {
+      const v = t[field];
+      if (Array.isArray(v) ? v.length : v) return Array.isArray(v) ? v.join(", ") : String(v);
+    }
+    return "";
+  };
+
+  const lines = [
+    ["Lighting", pick("lighting")],
+    ["Camera", pick("camera")],
+    ["Composition", pick("composition")],
+    ["Background", pick("background")],
+    ["Props", pick("props")],
+    ["Material rendering", pick("material_rendering")],
+    ["Colour palette", pick("color_palette")],
+    ["Mood", pick("mood")],
+    ["Finish", pick("finish")],
+    ["Never", pick("avoid")],
+  ].filter(([, v]) => v);
+  if (lines.length === 0) return "";
+
+  return `\nSTYLE REFERENCE — "${category}" (from this agency's proven designs; follow this visual language exactly):\n${lines.map(([k, v]) => `${k}: ${v}`).join("\n")}`;
+}

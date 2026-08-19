@@ -98,12 +98,14 @@ export async function analysePlan(planId: string): Promise<{
   photosRequired: number;
   generated: number;
   skippedReels: number;
+  /** The client's default Style Library category — 5b pre-selects it. */
+  styleDefault: string | null;
   specs: PostSpec[];
 }> {
   const admin = createServiceRoleClient();
   const { data: plan } = await admin
     .from("monthly_plans")
-    .select("id, client_id, month, content_calendar, strategy_summary, clients(name)")
+    .select("id, client_id, month, content_calendar, strategy_summary, clients(name, default_style_category)")
     .eq("id", planId)
     .single();
   if (!plan) throw new Error("Plan not found.");
@@ -253,6 +255,7 @@ Return STRICTLY:
     photosRequired,
     generated: specs.length - needPhoto,
     skippedReels,
+    styleDefault: (plan.clients as { default_style_category?: string | null } | null)?.default_style_category || null,
     specs,
   };
 }

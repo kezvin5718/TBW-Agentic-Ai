@@ -27,10 +27,14 @@ export default function PlanPostsPage() {
     photosRequired: number; generated: number; skippedReels: number;
     specs: SpecRow[]; photos: PhotoRow[]; alreadyMade: { id: string }[]; imagesReady: boolean;
     imageModel?: string;
+    styleCategory?: string | null;
+    styleCounts?: Record<string, number>;
     driveConnected?: boolean;
     driveError?: string | null;
     driveQuota?: { usedGb: number; limitGb: number | null; percent: number | null } | null;
   } | null>(null);
+  // null = follow the client's default from the Style Library; "" = no style.
+  const [styleSel, setStyleSel] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState<"" | "photos" | "generate">("");
@@ -58,6 +62,7 @@ export default function PlanPostsPage() {
         .eq("client_id", clientId).order("month", { ascending: false });
       setPlans(data || []);
       setPlanId(data?.[0]?.id || "");
+      setStyleSel(null); // a new client brings its own default style
     })();
   }, [clientId]);
 
@@ -66,7 +71,8 @@ export default function PlanPostsPage() {
     setLoading(true);
     setNotice(null);
     try {
-      const res = await fetch(`/api/production/plan-posts?planId=${planId}`, { cache: "no-store" });
+      const styleQ = styleSel !== null ? `&style=${encodeURIComponent(styleSel)}` : "";
+      const res = await fetch(`/api/production/plan-posts?planId=${planId}${styleQ}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not read the plan");
       setAnalysis(data);
@@ -75,7 +81,7 @@ export default function PlanPostsPage() {
       setAnalysis(null);
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Failed" });
     } finally { setLoading(false); }
-  }, [planId]);
+  }, [planId, styleSel]);
 
   useEffect(() => { analyse(); }, [analyse]);
 
@@ -123,7 +129,7 @@ export default function PlanPostsPage() {
 
       const res = await fetch("/api/production/plan-posts", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planId, action: "generate", pairing: pairData.pairing, items: picked }),
+        body: JSON.stringify({ planId, action: "generate", pairing: pairData.pairing, items: picked, styleCategory: styleSel ?? analysis?.styleCategory ?? "" }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Generation failed");
@@ -155,7 +161,7 @@ export default function PlanPostsPage() {
         </div>
       )}
 
-      <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 grid grid-cols-1 md:grid-cols-3 gap-3">
         <div>
           <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Client</label>
           <select value={clientId} onChange={(e) => setClientId(e.target.value)}
@@ -170,6 +176,20 @@ export default function PlanPostsPage() {
             className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white cursor-pointer focus:outline-none focus:border-indigo-500 disabled:opacity-50">
             {plans.length === 0 && <option value="">No plans for this client</option>}
             {plans.map((p) => <option key={p.id} value={p.id}>{String(p.month).slice(0, 7)} · {p.status}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+            Style {styleSel === null && analysis?.styleCategory ? <span className="text-indigo-400 normal-case">(client default)</span> : null}
+          </label>
+          <select value={styleSel ?? analysis?.styleCategory ?? ""} onChange={(e) => setStyleSel(e.target.value)} disabled={!planId}
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white cursor-pointer focus:outline-none focus:border-indigo-500 disabled:opacity-50">
+            <option value="">No style — plain scene prompt</option>
+            {["traditional", "modern", "surreal", "boutique"].map((k) => (
+              <option key={k} value={k}>
+                {k.charAt(0).toUpperCase() + k.slice(1)}{analysis?.styleCounts?.[k] ? ` · ${analysis.styleCounts[k]} looks` : " · empty"}
+              </option>
+            ))}
           </select>
         </div>
       </div>
