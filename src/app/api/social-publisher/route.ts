@@ -18,6 +18,40 @@ function recurPostIdOf(res: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * RecurPost reports a refused post as HTTP 200 with a one-line body that names
+ * no field. Carry the platform's known causes alongside it so the team reads a
+ * next step instead of "Something went wrong in posting."
+ */
+function explainFailure(platform: string, detail: string): string {
+  if (!/something went wrong/i.test(detail)) return detail;
+  if (platform === "pinterest") {
+    return `${detail} — Pinterest refused it without naming a reason. Usual causes: the Pinterest account in RecurPost has no board selected (open RecurPost → Pinterest account → set a default board), the pin image is too large or an unsupported ratio, or the account needs reconnecting.`;
+  }
+  return detail;
+}
+
+/**
+ * A Pinterest pin always carries a title.
+ *
+ * Video pins are accepted without one, which is why this went unnoticed for
+ * weeks — every Pinterest post that ever succeeded here was a video. The first
+ * two image pins both came back "Something went wrong in posting.", a generic
+ * body that names no field, with a 200 status. Rather than make the social team
+ * remember which platform needs which box filled, derive a title from the
+ * caption when they leave it blank: the first line is the hook the writer
+ * already composed, and Pinterest caps titles at 100 characters.
+ */
+function pinterestTitle(title?: string | null, caption?: string | null): string {
+  const typed = String(title || "").trim();
+  if (typed) return typed.slice(0, 100);
+  const firstLine = String(caption || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  return (firstLine || "New pin").slice(0, 100);
+}
+
 // GET — post history (newest first).
 export async function GET() {
   const supabase = await createClient();
@@ -115,14 +149,14 @@ export async function POST(request: NextRequest) {
       // was silently ignored, which is why no thumbnail ever appeared.
       if (post.thumbnail_url) params.yt_thumb = post.thumbnail_url;
     }
-    if (post.platform === "pinterest" && post.title) params.pi_title = post.title;
+    if (post.platform === "pinterest") params.pi_title = pinterestTitle(post.title, post.caption);
 
     let ok = false;
     let detail = "";
     let rpId: number | null = null;
     try {
       const res = await postContent(params);
-      detail = JSON.stringify(res).slice(0, 300);
+      detail = explainFailure(post.platform, JSON.stringify(res).slice(0, 300));
       const lower = detail.toLowerCase();
       // An id coming back means RecurPost queued it, and that is the truth
       // regardless of any other wording in the body. Recording an accepted post
@@ -257,10 +291,10 @@ export async function POST(request: NextRequest) {
           // and dropped, so thumbnails never reached YouTube.
           if (thumbnailUrl) params.yt_thumb = thumbnailUrl;
         }
-        if (platform === "pinterest" && title) params.pi_title = title;
+        if (platform === "pinterest") params.pi_title = pinterestTitle(title, caption);
         try {
           const res = await postContent(params);
-          detail = JSON.stringify(res).slice(0, 300);
+          detail = explainFailure(platform, JSON.stringify(res).slice(0, 300));
           const lower = detail.toLowerCase();
           // A post id back means RecurPost queued it — that settles it. Only
           // when there is no id do we fall back to reading the body for errors.
