@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Avatar from "../Avatar";
 import {
   Loader2, Plus, X, Check, Users, Rows3,
-  Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2, Pencil,
+  Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2, Pencil, ScanLine,
 } from "lucide-react";
 
 interface Task {
@@ -66,6 +66,19 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   // employee the founder granted it to) and echoed on every load, so the button
   // never appears where pressing it could only return a 403.
   const [canDelete, setCanDelete] = useState(false);
+  // A job sheet read from an image, waiting for a human to check and assign.
+  const [scanning, setScanning] = useState(false);
+  const [scan, setScan] = useState<null | {
+    sheetUrl: string | null; sheetWarning: string | null; clientId: string;
+    clientHint: string; summary: string; flagged: number;
+    rows: { title: string; size: string; qty: string; remark: string; type: string; issues: string[]; include: boolean; assigneeName: string }[];
+  }>(null);
+  const [scanClient, setScanClient] = useState("");
+  const [scanDeadline, setScanDeadline] = useState("");
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const sheetInputRef = useRef<HTMLInputElement>(null);
+
   // The task being edited — one modal serves both the board and the team tab.
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [editForm, setEditForm] = useState({ title: "", clientId: "", assigneeName: "", type: "other", priority: "medium", deadline: "" });
@@ -126,6 +139,60 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
       await fetch("/api/team-tasks", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
       await fetchAll(tab);
     } finally { setBusy(null); }
+  };
+
+  const readSheet = async (file: File) => {
+    setScanning(true);
+    setScanError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/team-tasks/scan", { method: "POST", body: fd });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not read the sheet");
+      setScan({
+        sheetUrl: d.sheetUrl || null,
+        sheetWarning: d.sheetWarning || null,
+        clientId: d.clientId || "",
+        clientHint: d.clientHint || "",
+        summary: d.summary || "",
+        flagged: d.flagged || 0,
+        rows: (d.tasks || []).map((t: Record<string, unknown>) => ({
+          title: String(t.title || ""), size: String(t.size || ""), qty: String(t.qty || ""),
+          remark: String(t.remark || ""), type: String(t.type || "print"),
+          issues: (t.issues as string[]) || [], include: true, assigneeName: "",
+        })),
+      });
+      setScanClient(d.clientId || "");
+    } catch (err: unknown) {
+      setScanError(err instanceof Error ? err.message : "Could not read the sheet");
+    } finally {
+      setScanning(false);
+      if (sheetInputRef.current) sheetInputRef.current.value = "";
+    }
+  };
+
+  const createFromSheet = async () => {
+    if (!scan) return;
+    setCreating(true);
+    setScanError(null);
+    try {
+      const res = await fetch("/api/team-tasks/scan", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: scanClient || null,
+          sheetUrl: scan.sheetUrl,
+          tasks: scan.rows.filter((r) => r.include).map((r) => ({ ...r, deadline: scanDeadline || undefined })),
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not create the tasks");
+      setScan(null);
+      setScanDeadline("");
+      await fetchAll(tab);
+    } catch (err: unknown) {
+      setScanError(err instanceof Error ? err.message : "Could not create the tasks");
+    } finally { setCreating(false); }
   };
 
   const addTask = async () => {
@@ -266,10 +333,125 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
       {/* Board actions */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <p className="text-xs text-slate-500">Everyone&apos;s work in one place — daily jobs, WhatsApp tasks and client grids.</p>
-        <button onClick={() => setShowAdd((s) => !s)} className="px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider bg-indigo-600 hover:bg-indigo-500 text-white flex items-center space-x-2 cursor-pointer">
-          {showAdd ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}<span>{showAdd ? "Close" : "Add Task"}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <input ref={sheetInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
+            onChange={(e) => e.target.files?.[0] && readSheet(e.target.files[0])} />
+          <button onClick={() => sheetInputRef.current?.click()} disabled={scanning}
+            title="Attach a photo or screenshot of a job sheet — every row becomes a task"
+            className="px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider bg-slate-900 border border-slate-800 hover:border-indigo-600 text-white flex items-center space-x-2 cursor-pointer disabled:opacity-60">
+            {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ScanLine className="w-4 h-4" />}
+            <span>{scanning ? "Reading sheet…" : "Scan sheet"}</span>
+          </button>
+          <button onClick={() => setShowAdd((s) => !s)} className="px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider bg-indigo-600 hover:bg-indigo-500 text-white flex items-center space-x-2 cursor-pointer">
+            {showAdd ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}<span>{showAdd ? "Close" : "Add Task"}</span>
+          </button>
+        </div>
       </div>
+
+      {scanError && (
+        <div className="bg-rose-950/30 border border-rose-900/60 rounded-xl p-3 text-xs text-rose-300 flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /><span>{scanError}</span>
+        </div>
+      )}
+
+      {/* Job sheet review — read from the image, checked by a human before it
+          becomes work on the board. */}
+      {scan && (
+        <div className="bg-slate-950/60 border border-indigo-900/60 rounded-2xl p-4 space-y-3">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <ScanLine className="w-4 h-4 text-indigo-400" />
+                <span>{scan.rows.length} job(s) read from the sheet</span>
+                {scan.flagged > 0 && (
+                  <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-amber-950/60 border border-amber-900 text-amber-400">
+                    {scan.flagged} need checking
+                  </span>
+                )}
+              </h3>
+              {scan.summary && <p className="text-[11px] text-slate-500 mt-0.5">{scan.summary}</p>}
+              {scan.clientHint && !scanClient && (
+                <p className="text-[11px] text-amber-400 mt-0.5">Sheet names &ldquo;{scan.clientHint}&rdquo; — pick the matching client below.</p>
+              )}
+              {scan.sheetWarning && <p className="text-[11px] text-amber-400 mt-0.5">{scan.sheetWarning}</p>}
+            </div>
+            <button onClick={() => setScan(null)} className="text-slate-600 hover:text-white cursor-pointer"><X className="w-4 h-4" /></button>
+          </div>
+
+          <div className="flex items-end gap-2 flex-wrap">
+            <div className="min-w-[190px]">
+              <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Client (all rows)</span>
+              <select value={scanClient} onChange={(e) => setScanClient(e.target.value)}
+                className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
+                <option value="">No client</option>
+                {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Deadline (all rows)</span>
+              <input type="date" value={scanDeadline} onChange={(e) => setScanDeadline(e.target.value)}
+                className="text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 focus:outline-none" />
+            </div>
+            <div className="min-w-[170px]">
+              <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Assign all to…</span>
+              <select value="" onChange={(e) => e.target.value && setScan({ ...scan, rows: scan.rows.map((r) => ({ ...r, assigneeName: e.target.value })) })}
+                className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
+                <option value="">— pick a person —</option>
+                {team.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+              </select>
+            </div>
+            {scan.sheetUrl && (
+              <a href={scan.sheetUrl} target="_blank" rel="noreferrer" className="text-[11px] text-indigo-400 hover:text-indigo-300 py-2">Open the sheet ↗</a>
+            )}
+          </div>
+
+          <div className="space-y-1.5 max-h-[420px] overflow-y-auto pr-1">
+            {scan.rows.map((r, i) => {
+              const set = (patchRow: Partial<typeof r>) =>
+                setScan({ ...scan, rows: scan.rows.map((x, j) => (j === i ? { ...x, ...patchRow } : x)) });
+              return (
+                <div key={i} className={`rounded-xl border p-2.5 space-y-1.5 ${r.include ? (r.issues.length ? "border-amber-900/60 bg-amber-950/10" : "border-slate-900 bg-slate-950/60") : "border-slate-900/60 bg-slate-950/30 opacity-50"}`}>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input type="checkbox" checked={r.include} onChange={(e) => set({ include: e.target.checked })} className="accent-[#FFD400] cursor-pointer" />
+                    <input value={r.title} onChange={(e) => set({ title: e.target.value })}
+                      className="flex-1 min-w-[150px] text-xs font-semibold bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-white focus:outline-none focus:border-indigo-600" />
+                    <input value={r.size} onChange={(e) => set({ size: e.target.value })} placeholder="size"
+                      className="w-32 text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-slate-300 placeholder-slate-600 focus:outline-none" />
+                    <input value={r.qty} onChange={(e) => set({ qty: e.target.value })} placeholder="qty"
+                      className="w-16 text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-slate-300 placeholder-slate-600 focus:outline-none" />
+                    <select value={r.type} onChange={(e) => set({ type: e.target.value })}
+                      className="text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-1.5 py-1.5 text-slate-400 cursor-pointer focus:outline-none">
+                      {["print", "packaging", "design", "video", "other"].map((k) => <option key={k} value={k}>{TYPE_LABEL[k] || k}</option>)}
+                    </select>
+                    <select value={r.assigneeName} onChange={(e) => set({ assigneeName: e.target.value })}
+                      className={`text-[11px] rounded-lg px-1.5 py-1.5 border cursor-pointer focus:outline-none ${r.assigneeName ? "bg-indigo-950/40 border-indigo-900 text-indigo-300" : "bg-slate-950 border-slate-800 text-slate-500"}`}>
+                      <option value="">Unassigned</option>
+                      {team.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+                    </select>
+                  </div>
+                  {r.remark && <p className="text-[10px] text-slate-500 pl-6">{r.remark}</p>}
+                  {r.issues.length > 0 && (
+                    <p className="text-[10px] text-amber-400 pl-6 flex items-start gap-1">
+                      <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" /><span>{r.issues.join(" · ")}</span>
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-900">
+            <span className="text-[10px] text-slate-600">
+              Fix anything flagged before creating — the sheet stays attached to every task either way.
+            </span>
+            <button onClick={createFromSheet} disabled={creating || scan.rows.every((r) => !r.include)}
+              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer disabled:opacity-50 flex items-center gap-2">
+              {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+              <span>Create {scan.rows.filter((r) => r.include).length} task(s)</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
