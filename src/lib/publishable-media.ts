@@ -78,3 +78,61 @@ export async function toPublishableVideoUrl(
 
   return { url: admin.storage.from(BUCKET).getPublicUrl(path).data.publicUrl, copied: true };
 }
+
+/**
+ * A cover image the platforms will show sharply.
+ *
+ * A designer's cover arrives at print resolution — the Swarna Kanchi reel used a
+ * 4500x5625, 12MB JPEG — and Meta re-encodes anything that large to its own
+ * cover size on the way in. That re-encode is where the softness comes from,
+ * and it is worse still when the shape is wrong: a 4:5 cover on a 9:16 reel is
+ * fitted before it is compressed, so the picture is scaled twice.
+ *
+ * So do the resize ourselves, once, properly: crop to the frame the format
+ * actually shows and hand over a file small enough that nobody re-encodes it.
+ * Attention-cropping keeps the jewellery in frame rather than slicing the top
+ * off a portrait cover.
+ */
+export async function toPublishableThumbUrl(
+  url: string,
+  contentType: string
+): Promise<{ url: string; note?: string }> {
+  const TALL = contentType === "reel" || contentType === "story";
+  const MAX_BYTES = 2 * 1024 * 1024;
+
+  try {
+    const sharp = (await import("sharp")).default;
+    const admin = createServiceRoleClient();
+
+    const buf = isDriveUrl(url)
+      ? await downloadDriveFileByUrl(url)
+      : Buffer.from(await (await fetch(url, { signal: AbortSignal.timeout(30_000) })).arrayBuffer());
+    if (!buf || buf.length === 0) return { url };
+
+    const meta = await sharp(buf).metadata();
+    const w = meta.width || 0, h = meta.height || 0;
+    if (!w || !h) return { url };
+
+    const aspect = w / h;
+    const wanted = TALL ? 1080 / 1920 : aspect; // a square/portrait post keeps its own shape
+    const wrongShape = TALL && Math.abs(aspect - wanted) > 0.02;
+    const tooBig = buf.length > MAX_BYTES || w > 1440;
+    if (!wrongShape && !tooBig) return { url };
+
+    const resized = TALL
+      ? await sharp(buf).resize({ width: 1080, height: 1920, fit: "cover", position: "attention" }).jpeg({ quality: 88 }).toBuffer()
+      : await sharp(buf).resize({ width: 1080, withoutEnlargement: true }).jpeg({ quality: 88 }).toBuffer();
+
+    const path = `social/thumb-${Date.now()}-${TALL ? "1080x1920" : "1080w"}.jpg`;
+    const { error } = await admin.storage.from(BUCKET).upload(path, resized, { contentType: "image/jpeg", upsert: true });
+    if (error) return { url };
+
+    return {
+      url: admin.storage.from(BUCKET).getPublicUrl(path).data.publicUrl,
+      note: `Cover resized from ${w}x${h} (${(buf.length / 1024 / 1024).toFixed(1)}MB) to ${TALL ? "1080x1920" : "1080w"} (${(resized.length / 1024).toFixed(0)}KB) so the platform doesn't re-compress it.`,
+    };
+  } catch {
+    // A cover that cannot be normalised is still better sent than not sent.
+    return { url };
+  }
+}

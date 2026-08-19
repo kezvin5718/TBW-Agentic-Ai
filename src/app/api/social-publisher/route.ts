@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { isRecurPostConfigured, postContent } from "@/lib/recurpost";
 import { istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
-import { toPublishableVideoUrl } from "@/lib/publishable-media";
+import { toPublishableVideoUrl, toPublishableThumbUrl } from "@/lib/publishable-media";
 
 export const dynamic = "force-dynamic";
 
@@ -133,21 +133,27 @@ export async function POST(request: NextRequest) {
     }
     if (isVideo) params.video_url = retryUrl;
     else params.image_url = [retryUrl];
+    // A print-resolution cover is re-encoded by the platform and arrives soft;
+    // hand over one already cut to the shape and size the format shows.
+    let retryThumb = post.thumbnail_url as string | null;
+    if (isVideo && retryThumb) {
+      retryThumb = (await toPublishableThumbUrl(retryThumb, post.content_type as string)).url;
+    }
     if (post.platform === "facebook") {
       if (post.content_type !== "post") params.fb_post_type = post.content_type;
-      if (isVideo && post.thumbnail_url) params.fb_thumb = post.thumbnail_url;
+      if (isVideo && retryThumb) params.fb_thumb = retryThumb;
     }
     if (post.platform === "instagram") {
       if (post.content_type !== "post") params.in_post_type = post.content_type;
       if (post.content_type === "reel") params.in_reel_share_in_feed = "yes";
-      if (isVideo && post.thumbnail_url) params.in_thumb = post.thumbnail_url;
+      if (isVideo && retryThumb) params.in_thumb = retryThumb;
     }
-    if (post.platform === "linkedin" && isVideo && post.thumbnail_url) params.ln_thumb = post.thumbnail_url;
+    if (post.platform === "linkedin" && isVideo && retryThumb) params.ln_thumb = retryThumb;
     if (post.platform === "youtube") {
       if (post.title) params.yt_title = post.title;
       // RecurPost calls this yt_thumb. We sent yt_thumbnail for months and it
       // was silently ignored, which is why no thumbnail ever appeared.
-      if (post.thumbnail_url) params.yt_thumb = post.thumbnail_url;
+      if (retryThumb) params.yt_thumb = retryThumb;
     }
     if (post.platform === "pinterest") params.pi_title = pinterestTitle(post.title, post.caption);
 
@@ -273,23 +279,31 @@ export async function POST(request: NextRequest) {
         if (scheduledFor) params.schedule_date_time = utcToIstWallClock(istWallClockToUtc(scheduledFor));
         if (mediaIsVideo) params.video_url = publishUrl;
         else params.image_url = [publishUrl];
+        // Same reason as the retry path: cut the cover to the format's frame
+        // ourselves rather than letting the platform re-encode a print file.
+        let sendThumb = thumbnailUrl as string | null;
+        if (mediaIsVideo && sendThumb) {
+          const norm = await toPublishableThumbUrl(sendThumb, contentType);
+          sendThumb = norm.url;
+          if (norm.note) console.log(`🖼️ ${platform} ${contentType}: ${norm.note}`);
+        }
         // fb_thumb / in_thumb / ln_thumb only apply to video posts — RecurPost
         // ignores them on an image post since there's nothing to override.
         if (platform === "facebook") {
           if (contentType !== "post") params.fb_post_type = contentType;
-          if (mediaIsVideo && thumbnailUrl) params.fb_thumb = thumbnailUrl;
+          if (mediaIsVideo && sendThumb) params.fb_thumb = sendThumb;
         }
         if (platform === "instagram") {
           if (contentType !== "post") params.in_post_type = contentType;
           if (contentType === "reel") params.in_reel_share_in_feed = "yes";
-          if (mediaIsVideo && thumbnailUrl) params.in_thumb = thumbnailUrl;
+          if (mediaIsVideo && sendThumb) params.in_thumb = sendThumb;
         }
-        if (platform === "linkedin" && mediaIsVideo && thumbnailUrl) params.ln_thumb = thumbnailUrl;
+        if (platform === "linkedin" && mediaIsVideo && sendThumb) params.ln_thumb = sendThumb;
         if (platform === "youtube") {
           if (title) params.yt_title = title;
           // yt_thumb, not yt_thumbnail — the wrong name was accepted with a 200
           // and dropped, so thumbnails never reached YouTube.
-          if (thumbnailUrl) params.yt_thumb = thumbnailUrl;
+          if (sendThumb) params.yt_thumb = sendThumb;
         }
         if (platform === "pinterest") params.pi_title = pinterestTitle(title, caption);
         try {
