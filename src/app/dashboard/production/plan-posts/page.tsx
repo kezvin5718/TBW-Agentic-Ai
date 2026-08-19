@@ -184,10 +184,10 @@ export default function PlanPostsPage() {
           </label>
           <select value={styleSel ?? analysis?.styleCategory ?? ""} onChange={(e) => setStyleSel(e.target.value)} disabled={!planId}
             className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white cursor-pointer focus:outline-none focus:border-indigo-500 disabled:opacity-50">
-            <option value="">No style — plain scene prompt</option>
+            <option value="">Auto — AI styles it from the plan + Brand Brain</option>
             {["traditional", "modern", "surreal", "boutique"].map((k) => (
               <option key={k} value={k}>
-                {k.charAt(0).toUpperCase() + k.slice(1)}{analysis?.styleCounts?.[k] ? ` · ${analysis.styleCounts[k]} looks` : " · empty"}
+                {k.charAt(0).toUpperCase() + k.slice(1)}{analysis?.styleCounts?.[k] ? ` · ${analysis.styleCounts[k]} of your proven looks` : " · empty — upload designs first"}
               </option>
             ))}
           </select>
