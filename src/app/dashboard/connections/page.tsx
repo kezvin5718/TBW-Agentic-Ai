@@ -110,6 +110,7 @@ const MANAGERS: Manager[] = [
 
 /** What shipped, newest first — the console doubles as the portal's changelog. */
 const UPDATES: { date: string; text: string }[] = [
+  { date: "19 Aug", text: "Style Library reads Instagram-style grids: switch the upload to Grid mode (auto-detect or 3×3/2×2/3×4/3×2) and one composite is sliced into individual tiles — each tile becomes its own design with the hairline gaps trimmed away, and tiles from one grid share a campaign marker." },
   { date: "19 Aug", text: "Agents Console rebuilt: the management rail now sits on the map itself with live issue counts from the morning scan, the Style Library is wired into Creative Production, and clicking any node explains what it is, what runs it, and what's wrong today." },
   { date: "19 Aug", text: "Style Library auto-sort: drop a mixed pile of old designs and the extractor files each on the right shelf (Traditional/Modern/Surreal/Boutique) — auto-filed cards wear an ✨ badge, every card has a move dropdown, and when the model disagrees with a human's shelf it shows a quiet “model thinks” hint." },
   { date: "19 Aug", text: "Management layer Phase 1 is live: every morning at 7:45 the four managers walk their territory (missing contacts, thin style categories, failed captions and posts, bare festivals, empty weeks, unanswered groups) and Ochrester compresses it into one brief — ask Bron “what did the managers find today?”" },

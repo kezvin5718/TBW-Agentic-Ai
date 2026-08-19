@@ -36,6 +36,8 @@ export default function StyleLibraryPage() {
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
   const [uploading, setUploading] = useState(false);
+  // "" = each file is one design; otherwise each file is a grid composite to slice.
+  const [gridMode, setGridMode] = useState("");
   const [extracting, setExtracting] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showClients, setShowClients] = useState(false);
@@ -93,6 +95,7 @@ export default function StyleLibraryPage() {
     try {
       const form = new FormData();
       form.append("category", tab);
+      if (gridMode) form.append("split", gridMode);
       for (const f of list) form.append("files", f);
       const res = await fetch("/api/style-library/upload", { method: "POST", body: form });
       const data = await res.json();
@@ -217,6 +220,25 @@ export default function StyleLibraryPage() {
         </div>
       )}
 
+      {/* What is being dropped: individual designs, or grid composites to slice */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mr-1">Upload as</span>
+        {[
+          { v: "", label: "Single designs" },
+          { v: "auto", label: "Grid · auto-detect" },
+          { v: "3x3", label: "3×3" },
+          { v: "2x2", label: "2×2" },
+          { v: "3x4", label: "3×4" },
+          { v: "3x2", label: "3×2" },
+        ].map((o) => (
+          <button key={o.v} onClick={() => setGridMode(o.v)}
+            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer ${gridMode === o.v ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
+            {o.label}
+          </button>
+        ))}
+        {gridMode && <span className="text-[10px] text-slate-500">each file is sliced into tiles — every tile becomes its own design</span>}
+      </div>
+
       {/* Upload dropzone */}
       <div
         onDragOver={(e) => e.preventDefault()}
@@ -232,7 +254,9 @@ export default function StyleLibraryPage() {
           <>
             <UploadCloud className="w-8 h-8 text-slate-600 mx-auto mb-2" />
             <p className="text-sm font-bold text-white">
-              {tab === "auto" ? "Drop a mixed pile of old designs — the bot files each one" : `Drop old ${CATS.find((c) => c.key === tab)?.name} designs here`}
+              {gridMode
+                ? "Drop grid composites — each tile becomes its own design"
+                : tab === "auto" ? "Drop a mixed pile of old designs — the bot files each one" : `Drop old ${CATS.find((c) => c.key === tab)?.name} designs here`}
             </p>
             <p className="text-[11px] text-slate-500 mt-1">
               JPG, PNG or PDF · up to {MAX_MB}MB per upload · bulk is fine — extraction runs by itself after
