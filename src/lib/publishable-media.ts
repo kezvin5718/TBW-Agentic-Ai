@@ -82,20 +82,23 @@ export async function toPublishableVideoUrl(
 /**
  * A cover image the platforms will show sharply.
  *
- * A designer's cover arrives at print resolution — the Swarna Kanchi reel used a
- * 4500x5625, 12MB JPEG — and Meta re-encodes anything that large to its own
- * cover size on the way in. That re-encode is the softness.
+ * The rule is: never change the creative. Not its dimensions, not its shape,
+ * not its framing. A 4500x5625 print-resolution cover is sent at 4500x5625.
  *
- * So do that resize ourselves, once, properly. Only the resolution changes:
- * the frame the designer composed is never cropped or re-shaped, because a 4:5
- * cover is a deliberate choice and cropping it to a reel's 9:16 would throw
- * away the part of the design they placed there. The image is fitted inside the
- * largest sensible box with its aspect ratio intact.
+ * The one thing that has to be respected is the platform's upload ceiling —
+ * past roughly 8MB an image is refused or brutally re-compressed on the way
+ * in, and that is where the softness came from. So a cover over the ceiling is
+ * re-encoded at the SAME pixel dimensions, trading a little JPEG quality for
+ * file size: the 11.7MB Swarna Kanchi cover becomes 3.3MB while staying
+ * 4500x5625. Scaling down is a last resort that only happens if even the
+ * lowest quality step is still too heavy — and it says so when it does.
  */
 export async function toPublishableThumbUrl(
   url: string
 ): Promise<{ url: string; note?: string }> {
-  const MAX_BYTES = 2 * 1024 * 1024;
+  // Meta refuses images past ~8MB; staying under it is the only reason to
+  // touch a cover at all.
+  const MAX_BYTES = 8 * 1024 * 1024;
 
   try {
     const sharp = (await import("sharp")).default;
@@ -106,30 +109,40 @@ export async function toPublishableThumbUrl(
       : Buffer.from(await (await fetch(url, { signal: AbortSignal.timeout(30_000) })).arrayBuffer());
     if (!buf || buf.length === 0) return { url };
 
+    // Anything the platform will accept is sent exactly as the designer made
+    // it — no re-encode, no resize, not a single pixel changed.
+    if (buf.length <= MAX_BYTES) return { url };
+
     const meta = await sharp(buf).metadata();
     const w = meta.width || 0, h = meta.height || 0;
     if (!w || !h) return { url };
 
-    // Only oversized covers are touched; a correctly sized one is passed
-    // through untouched rather than re-encoded for no reason.
-    const tooBig = buf.length > MAX_BYTES || w > 1440 || h > 1920;
-    if (!tooBig) return { url };
+    // Same dimensions, lighter file. Quality steps down only as far as needed.
+    let out: Buffer | null = null;
+    let usedQuality = 0;
+    for (const quality of [92, 88, 84]) {
+      const candidate = await sharp(buf).jpeg({ quality, mozjpeg: true }).toBuffer();
+      if (candidate.length <= MAX_BYTES) { out = candidate; usedQuality = quality; break; }
+    }
 
-    // "inside" scales down to fit the box and keeps the aspect ratio exactly —
-    // a 4:5 cover stays 4:5, a 9:16 one stays 9:16. Nothing is ever cropped.
-    const resized = await sharp(buf)
-      .resize({ width: 1080, height: 1920, fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality: 90 })
-      .toBuffer();
-    const out = await sharp(resized).metadata();
+    let scaled = false;
+    if (!out) {
+      // Only reachable by a cover so large that even q84 can't fit it — at
+      // that point sending nothing usable is worse than sending it smaller.
+      out = await sharp(buf).resize({ width: 2160, withoutEnlargement: true }).jpeg({ quality: 88, mozjpeg: true }).toBuffer();
+      scaled = true;
+    }
 
-    const path = `social/thumb-${Date.now()}-${out.width}x${out.height}.jpg`;
-    const { error } = await admin.storage.from(BUCKET).upload(path, resized, { contentType: "image/jpeg", upsert: true });
+    const outMeta = await sharp(out).metadata();
+    const path = `social/thumb-${Date.now()}-${outMeta.width}x${outMeta.height}.jpg`;
+    const { error } = await admin.storage.from(BUCKET).upload(path, out, { contentType: "image/jpeg", upsert: true });
     if (error) return { url };
 
     return {
       url: admin.storage.from(BUCKET).getPublicUrl(path).data.publicUrl,
-      note: `Cover resized from ${w}x${h} (${(buf.length / 1024 / 1024).toFixed(1)}MB) to ${out.width}x${out.height} (${(resized.length / 1024).toFixed(0)}KB) — same aspect ratio, no crop — so the platform doesn't re-compress it.`,
+      note: scaled
+        ? `Cover was ${w}x${h} at ${(buf.length / 1024 / 1024).toFixed(1)}MB — too heavy for the platform even compressed, so it went out at ${outMeta.width}x${outMeta.height}. Export it under 8MB to keep full resolution.`
+        : `Cover kept at full ${outMeta.width}x${outMeta.height} — only the file was made lighter (${(buf.length / 1024 / 1024).toFixed(1)}MB → ${(out.length / 1024 / 1024).toFixed(1)}MB at quality ${usedQuality}) so the platform accepts it without re-compressing.`,
     };
   } catch {
     // A cover that cannot be normalised is still better sent than not sent.
