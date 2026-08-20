@@ -12,8 +12,8 @@
 
 const API = "https://api.elevenlabs.io/v1/text-to-speech";
 
-/** Daniel — deep, calm, British. The closest public voice to the one asked for. */
-const DEFAULT_VOICE = "onwK4e9ZLuTAKqWW03F9";
+/** The founder's chosen voice. ELEVENLABS_VOICE_ID overrides it without a deploy. */
+const DEFAULT_VOICE = "dxhwlBCxCrnzRlP4wDeE";
 /** Turbo keeps the reply quick; the multilingual model is the quality option. */
 const DEFAULT_MODEL = "eleven_turbo_v2_5";
 
