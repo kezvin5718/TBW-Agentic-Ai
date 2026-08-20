@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { isRecurPostConfigured, postContent } from "@/lib/recurpost";
 import { istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
-import { toPublishableVideoUrl } from "@/lib/publishable-media";
+import { toPublishableVideoUrl, toPublishableThumbUrl } from "@/lib/publishable-media";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -179,6 +179,9 @@ export async function POST(request: NextRequest) {
   const skipped: string[] = [];
   const doneUploads = new Set<string>();
   const stagedCache = new Map<string, string>();
+  // One creative fans out across platforms and content types — normalise its
+  // cover once per run rather than re-fetching it for every send.
+  const thumbCache = new Map<string, string>();
 
   for (const item of items) {
     const upload = byId.get(item.uploadId);
@@ -232,8 +235,16 @@ export async function POST(request: NextRequest) {
         if (platform === "instagram" && contentType !== "post") params.in_post_type = contentType;
         if (platform === "instagram" && contentType === "reel") params.in_reel_share_in_feed = "yes";
         if (isVideo && upload.thumbnail_url) {
-          if (platform === "facebook") params.fb_thumb = upload.thumbnail_url;
-          if (platform === "instagram") params.in_thumb = upload.thumbnail_url;
+          // The manual publisher checks a cover against the platform's upload
+          // ceiling before sending it; this path did not, so a designer's
+          // 20MB print-resolution cover went out raw and came back
+          // re-compressed. Same guard, same rule: full resolution kept, only
+          // an over-ceiling file is made lighter.
+          const cover = thumbCache.get(upload.thumbnail_url as string)
+            ?? (await toPublishableThumbUrl(upload.thumbnail_url as string)).url;
+          thumbCache.set(upload.thumbnail_url as string, cover);
+          if (platform === "facebook") params.fb_thumb = cover;
+          if (platform === "instagram") params.in_thumb = cover;
         }
 
         try {
