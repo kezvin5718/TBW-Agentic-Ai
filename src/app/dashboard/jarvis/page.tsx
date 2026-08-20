@@ -282,8 +282,29 @@ export default function JarvisChatPage() {
     }
   };
 
+  const STATE_LABEL: Record<CoreState, string> = {
+    idle: "Standby", listening: "Listening", thinking: "Working", speaking: "Speaking",
+  };
+
   return (
-    <div className="flex flex-col h-[calc(100vh-130px)] max-w-2xl mx-auto bg-slate-950/40 border border-slate-900 rounded-3xl overflow-hidden backdrop-blur-md">
+    <div className="flex gap-5 items-stretch justify-center h-[calc(100vh-130px)]">
+    {/* The reactor lives here permanently on a wide screen — the console's face
+        shouldn't disappear the moment a conversation starts, which is exactly
+        when you most want to see what Bron is doing. */}
+    <aside className="hidden xl:flex flex-col items-center justify-center gap-4 w-[280px] shrink-0">
+      <BronCore state={coreState} size={240} />
+      <div className="text-center space-y-1">
+        <p className="text-[11px] font-mono font-bold tracking-[0.3em] uppercase text-indigo-400">{STATE_LABEL[coreState]}</p>
+        <p className="text-[10px] text-slate-600">
+          {coreState === "listening" ? "Speak — the ring follows your voice"
+            : coreState === "thinking" ? "Reading the database"
+            : coreState === "speaking" ? "Replying aloud"
+            : "Ready for an instruction"}
+        </p>
+      </div>
+    </aside>
+
+    <div className="flex flex-col flex-1 max-w-2xl bg-slate-950/40 border border-slate-900 rounded-3xl overflow-hidden backdrop-blur-md">
       
       {/* Header Info */}
       <div className="bg-slate-900/35 border-b border-slate-900 p-4 flex items-center justify-between">
@@ -301,7 +322,7 @@ export default function JarvisChatPage() {
         </div>
 
         <div className="flex items-center gap-3">
-          {messages.length > 0 && <BronCore state={coreState} size={64} label=" " />}
+          <div className="xl:hidden"><BronCore state={coreState} size={72} label=" " /></div>
           <div className="flex items-center space-x-2 text-[10px] text-emerald-400 font-mono bg-emerald-950/20 px-2.5 py-1 rounded-full border border-emerald-500/15">
             <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" />
             <span>CONNECTED</span>
@@ -443,6 +464,7 @@ export default function JarvisChatPage() {
         </form>
       </div>
 
+    </div>
     </div>
   );
 }
