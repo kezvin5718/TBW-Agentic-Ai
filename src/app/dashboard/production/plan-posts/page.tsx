@@ -37,6 +37,8 @@ export default function PlanPostsPage() {
   const [styleSel, setStyleSel] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(false);
+  // A background refresh — content stays on screen, only the sync icon spins.
+  const [refreshing, setRefreshing] = useState(false);
   const [working, setWorking] = useState<"" | "photos" | "generate">("");
   const [uploadPct, setUploadPct] = useState(0);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
@@ -66,27 +68,40 @@ export default function PlanPostsPage() {
     })();
   }, [clientId]);
 
+  // Which plan the analysis on screen belongs to, and when it was fetched.
+  // A refresh for the SAME plan updates in place — blanking the whole page
+  // behind a spinner on every sync made the tool feel broken.
+  const shownPlanRef = useRef("");
+  const lastAnalysedRef = useRef(0);
+
   const analyse = useCallback(async () => {
-    if (!planId) { setAnalysis(null); return; }
-    setLoading(true);
-    setNotice(null);
+    if (!planId) { setAnalysis(null); shownPlanRef.current = ""; return; }
+    const changingPlan = shownPlanRef.current !== planId;
+    if (changingPlan) { setLoading(true); setNotice(null); }
+    setRefreshing(true);
     try {
       const styleQ = styleSel !== null ? `&style=${encodeURIComponent(styleSel)}` : "";
       const res = await fetch(`/api/production/plan-posts?planId=${planId}${styleQ}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not read the plan");
       setAnalysis(data);
-      setPicked([]);
+      shownPlanRef.current = planId;
+      lastAnalysedRef.current = Date.now();
+      if (changingPlan) setPicked([]);
     } catch (err: unknown) {
-      setAnalysis(null);
+      if (changingPlan) setAnalysis(null);
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Failed" });
-    } finally { setLoading(false); }
+    } finally { setLoading(false); setRefreshing(false); }
   }, [planId, styleSel]);
 
   useEffect(() => { analyse(); }, [analyse]);
 
+  // Returning to the tab refreshes quietly — but not more than once a minute;
+  // window focus fires on every alt-tab and each analyse is a real request.
   useEffect(() => {
-    const onFocus = () => { if (planId) analyse(); };
+    const onFocus = () => {
+      if (planId && Date.now() - lastAnalysedRef.current > 60_000) analyse();
+    };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [planId, analyse]);
@@ -193,7 +208,7 @@ export default function PlanPostsPage() {
             <span>Style {styleSel === null && analysis?.styleCategory ? <span className="text-indigo-400 normal-case">(client default)</span> : null}</span>
             <button onClick={analyse} disabled={loading || !planId} title="Sync with Style Library — pull the latest uploaded looks"
               className="p-1 rounded text-indigo-400 hover:text-indigo-300 cursor-pointer disabled:opacity-40">
-              <RefreshCw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
+              <RefreshCw className={`w-3 h-3 ${loading || refreshing ? "animate-spin" : ""}`} />
             </button>
           </label>
           <select value={styleSel ?? analysis?.styleCategory ?? ""} onChange={(e) => setStyleSel(e.target.value)} disabled={!planId}

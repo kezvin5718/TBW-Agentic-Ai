@@ -105,7 +105,7 @@ export async function analysePlan(planId: string): Promise<{
   const admin = createServiceRoleClient();
   const { data: plan } = await admin
     .from("monthly_plans")
-    .select("id, client_id, month, content_calendar, strategy_summary, clients(name, default_style_category)")
+    .select("id, client_id, month, content_calendar, strategy_summary, designed_specs, designed_hash, clients(name, default_style_category)")
     .eq("id", planId)
     .single();
   if (!plan) throw new Error("Plan not found.");
@@ -132,6 +132,13 @@ export async function analysePlan(planId: string): Promise<{
     .map((item, i) => ({ item, i }))
     .filter(({ item }) => normaliseType(item.format, item.platform) !== "reel");
   const skippedReels = calendar.length - usable.length;
+
+  // Designing a month is a paid multi-second model call, and its inputs are
+  // fully known: the calendar and the brand brain. Hash them; when nothing
+  // changed, the stored design IS the design. This is what lets the page
+  // refresh freely — a cache hit is one database read.
+  const designHash = fnvHash(JSON.stringify([calendar, brain?.colors, brain?.caption_tone, brain?.design_preferences, brain?.brand_brief, brain?.feedback_log]));
+  const cached = plan.designed_hash === designHash && Array.isArray(plan.designed_specs) ? (plan.designed_specs as PostSpec[]) : null;
 
   // The founder's last corrections, in their own words. These are the whole
   // reason a rejection is worth making.
@@ -196,19 +203,38 @@ ${usable
 Return STRICTLY:
 { "posts": [ { "item": <the index number given above>, "kind": "product" | "generated", "contentType": "post" | "story" | "carousel", "frames": 1, "headline": "...", "subtext": "...", "cta": "...", "backgroundHex": "#RRGGBB", "accentHex": "#RRGGBB", "textHex": "#RRGGBB", "scenePrompt": "...", "reason": "one short line" } ] }`;
 
-  const raw = await complete({
-    model: MODEL_SMART,
-    system,
-    messages: [{ role: "user", content: prompt }],
-    jsonSchema: true,
-    // A full month of rows now carries far more per post than it used to;
-    // 4000 clipped the JSON mid-array on a long calendar.
-    maxTokens: 12000,
-  });
+  let raw = "";
+  if (!cached) {
+    raw = await complete({
+      model: MODEL_SMART,
+      system,
+      messages: [{ role: "user", content: prompt }],
+      jsonSchema: true,
+      // A full month of rows now carries far more per post than it used to;
+      // 4000 clipped the JSON mid-array on a long calendar.
+      maxTokens: 12000,
+    });
+  }
 
   let clean = raw.trim();
   if (clean.startsWith("```")) clean = clean.replace(/^```[a-zA-Z]*\s*/, "").replace(/\s*```$/, "");
   const parsed = safeJsonParse<{ posts: Partial<PostSpec>[] }>(clean, { posts: [] });
+
+  if (cached) {
+    const needPhotoC = cached.filter((s) => s.kind === "product").length;
+    return {
+      clientId: plan.client_id as string,
+      clientName,
+      month: String(plan.month),
+      total: cached.length,
+      needPhoto: needPhotoC,
+      photosRequired: cached.filter((s) => s.kind === "product").reduce((n, s) => n + s.frames, 0),
+      generated: cached.length - needPhotoC,
+      skippedReels,
+      styleDefault: (plan.clients as { default_style_category?: string | null } | null)?.default_style_category || null,
+      specs: cached,
+    };
+  }
 
   const specs: PostSpec[] = [];
   for (const { item, i } of usable) {
@@ -243,6 +269,9 @@ Return STRICTLY:
     });
   }
 
+  // Remember this design until the calendar or the brand brain changes.
+  await admin.from("monthly_plans").update({ designed_specs: specs, designed_hash: designHash }).eq("id", planId);
+
   const needPhoto = specs.filter((s) => s.kind === "product").length;
   const photosRequired = specs.filter((s) => s.kind === "product").reduce((n, s) => n + s.frames, 0);
 
@@ -258,6 +287,16 @@ Return STRICTLY:
     styleDefault: (plan.clients as { default_style_category?: string | null } | null)?.default_style_category || null,
     specs,
   };
+}
+
+/** FNV-1a — tiny, stable, good enough to detect "did the inputs change". */
+function fnvHash(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
 }
 
 function hexOr(value: unknown, fallback: string): string {
