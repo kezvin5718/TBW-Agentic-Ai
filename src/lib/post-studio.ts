@@ -2,7 +2,7 @@ import sharp, { type OverlayOptions } from "sharp";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { completeVision } from "@/lib/llm-vision";
 import { safeJsonParse } from "@/lib/llm";
-import { generateBrandImage } from "@/lib/integrations/openai-images";
+import { generateBrandImage, IMAGE_TIMEOUT_MS } from "@/lib/integrations/openai-images";
 import { storeToDriveStrict, isDriveConnected, downloadDriveFileByUrl } from "@/lib/google-drive";
 
 /** How long any single supporting asset may take before the render gives up. */
@@ -524,7 +524,13 @@ export async function generatePlanPosts(
   // and the founder saw an error instead of the two posts that HAD been made.
   // So no new frame starts after this point in the clock — whatever is done
   // gets reported, whatever isn't gets named, and the next click continues.
-  const BUDGET_MS = 240_000;
+  // The worst a frame can cost is two image tries (timeout + retry) plus
+  // checking and filing. The cutoff for STARTING a frame moves down as the
+  // configured image timeout moves up, so raising the provider's patience in
+  // .env can never push the whole request past the point where the connection
+  // dies — the ceiling stays fixed, only the split moves.
+  const WORST_FRAME_MS = 2 * IMAGE_TIMEOUT_MS + 60_000;
+  const BUDGET_MS = Math.min(240_000, 570_000 - WORST_FRAME_MS);
   const overBudget = () => Date.now() - t0 > BUDGET_MS;
   const unattempted: number[] = [];
   let paused = false;

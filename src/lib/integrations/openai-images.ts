@@ -6,7 +6,13 @@
  * it and the screen simply sat there spinning. Generation is genuinely slow, so
  * the limit is generous; describing an image is not, so it is tighter.
  */
-const IMAGE_TIMEOUT_MS = 120_000;
+/**
+ * How long one image generation may take. Settable from the server .env
+ * (IMAGE_TIMEOUT_MS) because the right number is about the provider's day,
+ * not about this code: the founder wants OpenAI's model even when it is
+ * crawling, and on those days more patience beats a faster stranger.
+ */
+export const IMAGE_TIMEOUT_MS = Math.max(30_000, Number(process.env.IMAGE_TIMEOUT_MS) || 120_000);
 const VISION_TIMEOUT_MS = 45_000;
 
 export interface OpenAIImageGenerationOptions {
