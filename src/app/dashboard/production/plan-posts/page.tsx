@@ -29,6 +29,7 @@ export default function PlanPostsPage() {
     imageModel?: string;
     styleCategory?: string | null;
     styleCounts?: Record<string, number>;
+    looksGeneric?: boolean;
     driveConnected?: boolean;
     driveError?: string | null;
     driveQuota?: { usedGb: number; limitGb: number | null; percent: number | null } | null;
@@ -208,6 +209,18 @@ export default function PlanPostsPage() {
 
       {analysis && !loading && (
         <>
+          {analysis.looksGeneric && (
+            <div className="bg-amber-950/25 border border-amber-900/60 rounded-xl p-4 text-xs text-amber-200 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                <b>These rows look like generated placeholders, not an authored plan</b> — every slot is
+                near-identical and none carries production direction. If you imported a plan for this month,
+                it was never saved: go to <Link href="/dashboard/planning" className="underline font-bold">Campaign Planning</Link>,
+                re-upload the file, and press <b>&ldquo;Keep my slots&rdquo;</b> (it saves immediately now).
+                Building from these rows would spend money on posts nobody designed.
+              </span>
+            </div>
+          )}
           {analysis.driveConnected === false && (
             <div className="bg-rose-950/20 border border-rose-900/50 rounded-xl p-3 text-xs text-rose-300 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />

@@ -497,6 +497,41 @@ export default function PlanningIndexPage() {
     }
   };
 
+  const [keepSaving, setKeepSaving] = useState(false);
+
+  /**
+   * Accepting imported rows writes them to the plan immediately.
+   *
+   * Until now the parsed plan lived only in browser memory until the wizard's
+   * final Save — anyone who imported, pressed Keep, and stopped there lost the
+   * whole import without a word, and 5b went on showing whatever the plan held
+   * before. The moment of acceptance is the moment of persistence.
+   */
+  const keepImportedSlots = async () => {
+    setKeepSaving(true);
+    try {
+      const response = await fetch("/api/planning/save-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: selectedClient,
+          month: selectedMonth,
+          strategySummary: strategySummary || "Imported plan",
+          contentPillars: pillars,
+          contentCalendar: calendarSlots,
+          budgetSummary: { allocations: budgetAllocations },
+          status: "draft",
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not save the imported slots");
+      setImportNote({ ok: true, text: `Your ${calendarSlots.length} slots are saved on the plan. The remaining wizard steps only add budget and details — closing the tab now loses nothing.` });
+      setWizardStep(2);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not save the imported slots — they are NOT stored yet.");
+    } finally { setKeepSaving(false); }
+  };
+
   // Step 4: Save plan to DB
   const handleSavePlan = async () => {
     setGenerating(true);
@@ -1008,10 +1043,12 @@ export default function PlanningIndexPage() {
                       {calendarSlots.length > 0 && (
                         <button
                           type="button"
-                          onClick={() => setWizardStep(2)}
-                          className="flex items-center space-x-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 px-4 rounded-xl cursor-pointer"
+                          disabled={keepSaving}
+                          onClick={keepImportedSlots}
+                          className="flex items-center space-x-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 px-4 rounded-xl cursor-pointer disabled:opacity-60"
                         >
-                          <span>Keep my {calendarSlots.length} slots</span>
+                          {keepSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                          <span>{keepSaving ? "Saving your slots…" : `Keep my ${calendarSlots.length} slots`}</span>
                           <ChevronRight className="w-4 h-4" />
                         </button>
                       )}

@@ -124,6 +124,22 @@ function splitForModel(text: string): { parts: string[]; complete: boolean } {
   return { parts, complete: true };
 }
 
+/**
+ * One format per row, decided the same way every time.
+ *
+ * "Static / 10-sec Reel" means the author will accept either — and a static is
+ * the one this pipeline can actually produce today, so static wins whenever
+ * both are on the table. Carousel outranks everything because slide copy only
+ * makes sense as a carousel.
+ */
+function normalizeFormat(raw: unknown): string {
+  const f = String(raw || "").toLowerCase();
+  if (f.includes("carousel")) return "carousel";
+  if (f.includes("static") || f.includes("image") || f.includes("photo") || f.includes("post only")) return "static";
+  if (/reel|video|film|bts|ugc|live/.test(f)) return "reel";
+  return "static";
+}
+
 function htmlToText(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -261,7 +277,7 @@ export async function POST(request: NextRequest) {
 - "hashtags" is the hashtag line exactly as written. "time" is the posting time as written ("7:30 PM").
 - "complianceNote" is any legal, compliance or "read before publishing" warning attached to that day. Empty string if none.
 - Normalize every date to "YYYY-MM-DD" within ${monthLabel}. If an item has no explicit date, spread it sensibly across the month.
-- Map format to one of: "static", "reel", "carousel" — treat any video, film or reel as "reel". Map platform to "instagram", "facebook", or "youtube".
+- Map format to one of: "static", "reel", "carousel" — treat any video, film or reel as "reel". If a row offers BOTH a static and a video option (e.g. "Static / 10-sec Reel"), choose "static": a static deliverable exists for it, and statics are producible immediately. Map platform to "instagram", "facebook", or "youtube".
 
 Also return "openQuestions": everything the author says is still missing, unconfirmed, awaited or blocking — the things they wrote down for themselves to chase. Copy each as a short phrase in their own words. Empty array if there are none. Never invent one.`;
 
@@ -315,9 +331,9 @@ Return ONLY valid JSON.`;
       // "Day 1 / Day 2" plan shrinks to nothing. Keep anything with content;
       // missing dates are spread across the month after the merge.
       if (Array.isArray(part.contentCalendar)) {
-        merged.contentCalendar.push(...part.contentCalendar.filter(
-          (s) => s && ((s.concept || "").trim() || (s.hook || "").trim() || (s.caption || "").trim())
-        ));
+        merged.contentCalendar.push(...part.contentCalendar
+          .filter((s) => s && ((s.concept || "").trim() || (s.hook || "").trim() || (s.caption || "").trim()))
+          .map((s) => ({ ...s, format: normalizeFormat(s.format) })));
       }
       if (Array.isArray(part.openQuestions)) merged.openQuestions.push(...part.openQuestions.map(String).filter(Boolean));
     }

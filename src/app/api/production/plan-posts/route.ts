@@ -45,6 +45,17 @@ export async function GET(request: NextRequest) {
     const styleCounts: Record<string, number> = {};
     for (const r of styleRows || []) styleCounts[r.category as string] = (styleCounts[r.category as string] || 0) + 1;
 
+    // A calendar of near-identical rows with no art direction is the fingerprint
+    // of the old wizard's filler, not of an authored plan. Building from it
+    // burns money on posts nobody designed — say so instead of proceeding
+    // politely. (The Shwetanki incident: 30 copies of "Creative product
+    // showcase" rendered while the real 26-post plan sat unimported.)
+    const { data: rawPlan } = await admin.from("monthly_plans").select("content_calendar").eq("id", planId).maybeSingle();
+    const cal = (rawPlan?.content_calendar as Array<{ concept?: string; hook?: string; productionNote?: string }> | null) || [];
+    const distinct = new Set(cal.map((r) => `${r.concept || ""}|${r.hook || ""}`.toLowerCase().trim()));
+    const directed = cal.filter((r) => (r.productionNote || "").trim().length > 10).length;
+    const looksGeneric = cal.length >= 5 && distinct.size <= 2 && directed === 0;
+
     const specs = await Promise.all(plan.specs.map(async (sp) => ({
       ...sp,
       imagePrompt: sp.kind === "generated" && sp.scenePrompt.trim()
@@ -60,6 +71,7 @@ export async function GET(request: NextRequest) {
       specs,
       styleCategory,
       styleCounts,
+      looksGeneric,
       imageModel: imageModelName(),
       photos: photos || [],
       alreadyMade: made || [],
