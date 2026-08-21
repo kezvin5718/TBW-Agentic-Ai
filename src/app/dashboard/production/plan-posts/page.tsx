@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { uploadDirect } from "@/lib/direct-upload";
 import {
   Sparkles, Loader2, CheckCircle2, AlertTriangle, UploadCloud, Images,
-  ArrowRight, Camera, Wand2,
+  ArrowRight, Camera, Wand2, RefreshCw,
 } from "lucide-react";
 
 interface SpecRow {
@@ -84,6 +84,12 @@ export default function PlanPostsPage() {
   }, [planId, styleSel]);
 
   useEffect(() => { analyse(); }, [analyse]);
+
+  useEffect(() => {
+    const onFocus = () => { if (planId) analyse(); };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [planId, analyse]);
 
   const addPhotos = async (files: FileList) => {
     setWorking("photos");
@@ -179,8 +185,12 @@ export default function PlanPostsPage() {
           </select>
         </div>
         <div>
-          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
-            Style {styleSel === null && analysis?.styleCategory ? <span className="text-indigo-400 normal-case">(client default)</span> : null}
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-2">
+            <span>Style {styleSel === null && analysis?.styleCategory ? <span className="text-indigo-400 normal-case">(client default)</span> : null}</span>
+            <button onClick={analyse} disabled={loading || !planId} title="Sync with Style Library — pull the latest uploaded looks"
+              className="p-1 rounded text-indigo-400 hover:text-indigo-300 cursor-pointer disabled:opacity-40">
+              <RefreshCw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
+            </button>
           </label>
           <select value={styleSel ?? analysis?.styleCategory ?? ""} onChange={(e) => setStyleSel(e.target.value)} disabled={!planId}
             className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white cursor-pointer focus:outline-none focus:border-indigo-500 disabled:opacity-50">
