@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import { uploadDirect } from "@/lib/direct-upload";
 import {
   Sparkles, Loader2, CheckCircle2, AlertTriangle, UploadCloud, Images,
   ArrowRight, Camera, Wand2, RefreshCw,
@@ -92,31 +91,35 @@ export default function PlanPostsPage() {
     return () => window.removeEventListener("focus", onFocus);
   }, [planId, analyse]);
 
+  // Straight to Drive, one file per request — the Supabase detour these used
+  // to take is the store that is nearly full, and it was eating the uploads.
   const addPhotos = async (files: FileList) => {
     setWorking("photos");
     setNotice(null);
+    const list = Array.from(files);
+    let added = 0, cleaned = 0;
+    const needsHuman: string[] = [];
+    const failures: string[] = [];
     try {
-      const uploaded: { url: string; fileName: string }[] = [];
-      const list = Array.from(files);
       for (let i = 0; i < list.length; i++) {
-        const up = await uploadDirect(list[i], "social", (p) =>
-          setUploadPct(Math.round(((i + p / 100) / list.length) * 100)));
-        uploaded.push({ url: up.url, fileName: up.fileName });
+        setUploadPct(Math.round((i / list.length) * 100));
+        const fd = new FormData();
+        fd.append("planId", planId);
+        fd.append("file", list[i]);
+        const res = await fetch("/api/production/plan-posts/photos", { method: "POST", body: fd });
+        const data = await res.json();
+        if (!res.ok) { failures.push(`${list[i].name}: ${data.error || "failed"}`); continue; }
+        added++;
+        if (data.cleaned) cleaned++;
+        if (data.needsHuman) needsHuman.push(list[i].name);
       }
-      const res = await fetch("/api/production/plan-posts", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planId, action: "photos", photos: uploaded }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not save the photos");
-      // Say plainly when a finished post was cropped back to the jewellery —
-      // otherwise the change is invisible and looks like a bug later.
-      const lines = [`${data.added} photo(s) added.`];
-      if (data.cleaned > 0) lines.push(`${data.cleaned} had branding cropped away to leave just the product.`);
-      if (data.needsHuman?.length) {
-        lines.push(`Text sits across the jewellery in: ${data.needsHuman.join(", ")}. Cropping cannot remove that — supply a clean photo for these.`);
+      const lines = [`${added} of ${list.length} photo(s) added — filed to Google Drive.`];
+      if (cleaned > 0) lines.push(`${cleaned} had branding cropped away to leave just the product.`);
+      if (needsHuman.length) {
+        lines.push(`Text sits across the jewellery in: ${needsHuman.join(", ")}. Cropping cannot remove that — supply a clean photo for these.`);
       }
-      setNotice({ ok: !(data.needsHuman?.length), text: lines.join("\n") });
+      if (failures.length) lines.push(`Failed: ${failures.join(" · ")}`);
+      setNotice({ ok: failures.length === 0 && needsHuman.length === 0, text: lines.join("\n") });
       await analyse();
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Failed" });
