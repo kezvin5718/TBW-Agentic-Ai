@@ -37,20 +37,41 @@ const esc = (s: string) =>
  * it can never run past the frame.
  */
 
-/** DejaVu Sans Bold, uppercase, averages a little over 0.6em per glyph. */
-const BOLD_ADVANCE = 0.62;
-const REG_ADVANCE = 0.55;
+/**
+ * Per-glyph advances for DejaVu Sans, as fractions of the font size. A flat
+ * average (0.62em bold) measured caps-heavy lines ~20% narrower than they
+ * drew, and the surplus ran off the right edge — "DIAMONDS" printed as
+ * "DIAMONI". DejaVu's capitals really average ~0.76em bold. These lean
+ * slightly wide on purpose: overestimating costs one size step down,
+ * underestimating clips letters.
+ */
+function glyphEm(ch: string, bold: boolean): number {
+  if ("MWmw".includes(ch)) return 1.05;
+  if ("ijl.,:;'’!| ".includes(ch)) return bold ? 0.40 : 0.34;
+  if ("Iftr-()".includes(ch)) return bold ? 0.48 : 0.42;
+  if (ch >= "a" && ch <= "z") return bold ? 0.70 : 0.62;
+  return bold ? 0.80 : 0.70;
+}
 
-function wrapAt(text: string, maxChars: number): string[] {
+/** Width of one line in ems at the given weight. */
+function lineEm(text: string, bold: boolean): number {
+  let w = 0;
+  for (const ch of text) w += glyphEm(ch, bold);
+  return w;
+}
+
+/** Word-wrap so no line draws wider than availPx at the given size. */
+function wrapToWidth(text: string, availPx: number, size: number, bold: boolean): string[] {
   const words = text.split(/\s+/).filter(Boolean);
   const lines: string[] = [];
   let line = "";
   for (const w of words) {
-    if ((line + " " + w).trim().length > maxChars && line) {
-      lines.push(line.trim());
+    const candidate = line ? `${line} ${w}` : w;
+    if (line && lineEm(candidate, bold) * size > availPx) {
+      lines.push(line);
       line = w;
     } else {
-      line = (line + " " + w).trim();
+      line = candidate;
     }
   }
   if (line) lines.push(line);
@@ -58,19 +79,17 @@ function wrapAt(text: string, maxChars: number): string[] {
 }
 
 /** Largest size at which the text fits the width in at most `maxLines`. */
-function fitText(text: string, availPx: number, startPx: number, maxLines: number, advance: number) {
+function fitText(text: string, availPx: number, startPx: number, maxLines: number, bold: boolean) {
   let size = startPx;
   for (let i = 0; i < 12; i++) {
-    const perLine = Math.max(6, Math.floor(availPx / (size * advance)));
-    const lines = wrapAt(text, perLine);
-    const longest = Math.max(...lines.map((l) => l.length), 1);
-    if (lines.length <= maxLines && longest * size * advance <= availPx) {
+    const lines = wrapToWidth(text, availPx, size, bold);
+    const widest = Math.max(...lines.map((l) => lineEm(l, bold)), 0) * size;
+    if (lines.length <= maxLines && widest <= availPx) {
       return { size, lines };
     }
     size = Math.round(size * 0.9);
   }
-  const perLine = Math.max(6, Math.floor(availPx / (size * advance)));
-  return { size, lines: wrapAt(text, perLine).slice(0, maxLines) };
+  return { size, lines: wrapToWidth(text, availPx, size, bold).slice(0, maxLines) };
 }
 
 /**
@@ -89,10 +108,10 @@ function textLayer(spec: PostSpec, width: number, height: number, bandTop: numbe
 
   /** One candidate layout at a given headline size. */
   const layoutAt = (startPx: number) => {
-    const head = fitText(spec.headline.toUpperCase(), avail, startPx, 3, BOLD_ADVANCE);
+    const head = fitText(spec.headline.toUpperCase(), avail, startPx, 3, true);
     const subSize = Math.max(18, Math.round(head.size * 0.38));
     const subLines = spec.subtext
-      ? fitText(spec.subtext, avail, subSize, 2, REG_ADVANCE)
+      ? fitText(spec.subtext, avail, subSize, 2, false)
       : { size: subSize, lines: [] as string[] };
     const ctaSize = Math.max(16, Math.round(head.size * 0.30));
     const headLead = Math.round(head.size * 1.14);
@@ -150,7 +169,7 @@ function textLayer(spec: PostSpec, width: number, height: number, bandTop: numbe
     y += Math.round(ctaSize * 0.8);
     const padX = Math.round(ctaSize * 0.95);
     const padY = Math.round(ctaSize * 0.55);
-    const textW = Math.round(spec.cta.length * ctaSize * REG_ADVANCE);
+    const textW = Math.round(lineEm(spec.cta, true) * ctaSize);
     parts.push(
       `<rect x="${marginX}" y="${y - ctaSize}" rx="${Math.round(ctaSize * 0.75)}" width="${Math.min(avail, textW + padX * 2)}" height="${ctaSize + padY * 2}" fill="${spec.accentHex}" />`,
       `<text x="${marginX + padX}" y="${y + Math.round(padY * 0.55)}" font-family="DejaVu Sans" font-size="${ctaSize}" font-weight="bold" fill="${spec.backgroundHex}">${esc(spec.cta)}</text>`
@@ -384,7 +403,11 @@ export async function renderFrame(
       hasImagery = true;
       base = await sharp(buffer).resize({ width, height, fit: "cover" }).png().toBuffer();
     } else {
-      note = `Image generation failed (${error}) — used a plain brand background.`;
+      // The old fallback composited the type over a flat colour and filed it
+      // anyway — five plain-background "creatives" for one carousel, every one
+      // failing QC and cluttering approvals. A scene post with no scene is a
+      // failed frame: pay nothing further, store nothing, say why.
+      throw new Error(`Image generation failed (${error}) — this frame wasn't saved. Click Build again to retry it.`);
     }
   }
 
@@ -495,7 +518,22 @@ export async function generatePlanPosts(
 
   const chosen = (wanted ? plan.specs.filter((s) => wanted.has(s.item)) : plan.specs).slice(0, limit);
 
+  // The batch has to finish answering before something upstream cuts the line.
+  // The Surat run proved what happens otherwise: slow image generations pushed
+  // the request past the six-minute mark, the connection died as a bare 502,
+  // and the founder saw an error instead of the two posts that HAD been made.
+  // So no new frame starts after this point in the clock — whatever is done
+  // gets reported, whatever isn't gets named, and the next click continues.
+  const BUDGET_MS = 240_000;
+  const overBudget = () => Date.now() - t0 > BUDGET_MS;
+  const unattempted: number[] = [];
+  let paused = false;
+
   for (const spec of chosen) {
+    if (paused) {
+      unattempted.push(spec.item + 1);
+      continue;
+    }
     const photos = photoByItem[String(spec.item)] || [];
     if (spec.kind === "product" && photos.length === 0) {
       notes.push(`Post ${spec.item + 1} (“${spec.headline}”) skipped — it needs a product photo.`);
@@ -511,6 +549,12 @@ export async function generatePlanPosts(
       : "";
 
     for (let frame = 0; frame < spec.frames; frame++) {
+      if (overBudget()) {
+        paused = true;
+        if (frame > 0) notes.push(`Post ${spec.item + 1}: paused after frame ${frame} of ${spec.frames} — the rest will be made on the next Build.`);
+        else unattempted.push(spec.item + 1);
+        break;
+      }
       try {
         console.log(`   ↳ post ${spec.item + 1} frame ${frame + 1}/${spec.frames}: rendering… (${since()})`);
         const { buffer, note, content } = await renderFrame(spec, photos[frame] || photos[0] || null, frame, client?.logo_url, styleBlock);
@@ -585,6 +629,12 @@ export async function generatePlanPosts(
     }
   }
 
-  console.log(`🎨 Studio: finished in ${since()} — ${created} created, ${failed} failed.`);
+  if (paused) {
+    notes.push(
+      `Paused after ${since()} so this run could report back safely${unattempted.length ? ` — post(s) ${unattempted.join(", ")} weren't attempted` : ""}. Click Build again to continue; posts already made are not remade.`
+    );
+  }
+
+  console.log(`🎨 Studio: finished in ${since()} — ${created} created, ${failed} failed${paused ? ", paused early" : ""}.`);
   return { created, failed, notes };
 }

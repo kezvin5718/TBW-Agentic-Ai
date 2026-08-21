@@ -132,32 +132,44 @@ export async function generateBrandImage(
         quality: "high",
       };
 
-  try {
-    const res = await fetch(endpoint, {
-      method: "POST",
-      signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS),
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      const raw = data.error?.message || `Image generation failed (${res.status})`;
-      // A retired or misspelled model is the likeliest cause and reads as an
-      // opaque 400, so name the setting that fixes it.
-      if (/model/i.test(raw) && /(not found|invalid|unknown|no endpoints)/i.test(raw)) {
-        return {
-          buffer: null,
-          error: `The image model "${model}" was rejected: ${raw}. Set IMAGE_MODEL in the server .env to a current one — openai/gpt-5-image, openai/gpt-5-image-mini, openai/gpt-5.4-image-2 or google/gemini-3-pro-image.`,
-        };
+  // One retry, and only for a timeout: the provider being slow for one call is
+  // the transient failure we actually see in production, and paying a second
+  // wait beats delivering a post with no picture. Every other failure repeats
+  // identically on retry, so it is returned straight away.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS),
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const raw = data.error?.message || `Image generation failed (${res.status})`;
+        // A retired or misspelled model is the likeliest cause and reads as an
+        // opaque 400, so name the setting that fixes it.
+        if (/model/i.test(raw) && /(not found|invalid|unknown|no endpoints)/i.test(raw)) {
+          return {
+            buffer: null,
+            error: `The image model "${model}" was rejected: ${raw}. Set IMAGE_MODEL in the server .env to a current one — openai/gpt-5-image, openai/gpt-5-image-mini, openai/gpt-5.4-image-2 or google/gemini-3-pro-image.`,
+          };
+        }
+        return { buffer: null, error: raw };
       }
-      return { buffer: null, error: raw };
-    }
 
-    const b64 = data.data?.[0]?.b64_json;
-    if (!b64) return { buffer: null, error: `No image came back from ${viaRouter ? "OpenRouter" : "OpenAI"}.` };
-    return { buffer: Buffer.from(b64, "base64") };
-  } catch (err: unknown) {
-    return { buffer: null, error: err instanceof Error ? err.message : String(err) };
+      const b64 = data.data?.[0]?.b64_json;
+      if (!b64) return { buffer: null, error: `No image came back from ${viaRouter ? "OpenRouter" : "OpenAI"}.` };
+      return { buffer: Buffer.from(b64, "base64") };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const timedOut = /abort|timeout/i.test(msg);
+      if (timedOut && attempt === 1) {
+        console.warn(`   · image generation timed out after ${IMAGE_TIMEOUT_MS / 1000}s — retrying once.`);
+        continue;
+      }
+      return { buffer: null, error: timedOut ? `the model took over ${IMAGE_TIMEOUT_MS / 1000}s twice in a row` : msg };
+    }
   }
 }
 
