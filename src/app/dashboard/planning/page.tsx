@@ -159,6 +159,31 @@ export default function PlanningIndexPage() {
   // Step 3 states (Budget)
   const [budgetAllocations, setBudgetAllocations] = useState<BudgetAllocation[]>([]);
 
+  // Deleting a plan is founder-only on the API; the button follows the same rule.
+  const [isFounder, setIsFounder] = useState(false);
+  const [deletingPlan, setDeletingPlan] = useState<string | null>(null);
+  useEffect(() => {
+    (async () => {
+      const { createClient } = await import("@/lib/supabase/client");
+      const { data: { user } } = await createClient().auth.getUser();
+      setIsFounder((user?.user_metadata?.role as string) === "founder");
+    })();
+  }, []);
+
+  const deletePlan = async (planId: string, label: string) => {
+    if (!window.confirm(`Delete ${label}?\n\nThe plan and its calendar are removed. Creatives already generated from it stay in Creative Approvals. This cannot be undone.`)) return;
+    setDeletingPlan(planId);
+    setError(null);
+    try {
+      const res = await fetch(`/api/planning/${planId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not delete the plan");
+      await fetchIndexData();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not delete the plan");
+    } finally { setDeletingPlan(null); }
+  };
+
   const fetchIndexData = useCallback(async () => {
     try {
       setLoading(true);
@@ -1337,6 +1362,21 @@ export default function PlanningIndexPage() {
                     }`}>
                       {plan.status === "internal_review" ? "Int. Approved" : plan.status}
                     </span>
+                    {isFounder && (
+                      <button
+                        type="button"
+                        disabled={deletingPlan === plan.id}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          deletePlan(plan.id, `${plan.clients?.name || "this client"}'s ${new Date(plan.month).toLocaleDateString("en-IN", { month: "long", year: "numeric" })} plan`);
+                        }}
+                        title="Delete this monthly plan (founder only)"
+                        className="p-1.5 rounded-lg text-slate-600 hover:text-rose-400 hover:bg-rose-950/30 cursor-pointer disabled:opacity-40"
+                      >
+                        {deletingPlan === plan.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                      </button>
+                    )}
                     <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-white transition-colors" />
                   </div>
                 </Link>
