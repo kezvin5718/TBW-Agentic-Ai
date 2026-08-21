@@ -43,6 +43,10 @@ export async function POST(request: Request) {
       contentCalendar,
       budgetSummary,
       status = "draft",
+      // True when the save is fired automatically right after an import
+      // parses. It saves without a click — but never silently over a plan
+      // someone authored: that replacement still takes the explicit button.
+      autoImport = false,
     } = body;
 
     if (!clientId || !month || !strategySummary) {
@@ -58,10 +62,23 @@ export async function POST(request: Request) {
     // 2. Check if a plan already exists for this client and month
     const { data: existingPlan } = await supabase
       .from("monthly_plans")
-      .select("id")
+      .select("id, content_calendar")
       .eq("client_id", clientId)
       .eq("month", formattedMonth)
       .maybeSingle();
+
+    if (autoImport && existingPlan) {
+      const cal = (existingPlan.content_calendar as Array<{ concept?: string; hook?: string; productionNote?: string }> | null) || [];
+      const distinct = new Set(cal.map((r) => `${r.concept || ""}|${r.hook || ""}`.toLowerCase().trim()));
+      const authored = cal.length >= 3 && (distinct.size > 2 || cal.some((r) => (r.productionNote || "").trim().length > 10));
+      if (authored) {
+        return NextResponse.json({
+          success: true,
+          saved: false,
+          reason: "A plan with authored rows already exists for this month — replacing it needs the explicit button.",
+        });
+      }
+    }
 
     let resultPlan;
     if (existingPlan) {
@@ -117,6 +134,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
+      saved: true,
       plan: resultPlan,
       deliverables,
       contract: client?.deliverables_per_month ?? null,

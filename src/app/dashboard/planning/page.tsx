@@ -503,6 +503,36 @@ export default function PlanningIndexPage() {
         setColorDraft(data.needs.brandGaps.colors ? ["#000000"] : []);
         setFontDraft("");
       }
+      // A clean parse is saved the moment it exists. Two imports in a row were
+      // lost to "surely someone will press the button" — nobody has to now.
+      // The server still refuses to auto-replace a plan with authored rows,
+      // so a wrong file can't quietly destroy real work.
+      let savedLine = "";
+      if (!data.truncated && !data.underExtracted && rows > 0) {
+        try {
+          const saveRes = await fetch("/api/planning/save-plan", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              clientId: selectedClient,
+              month: selectedMonth,
+              strategySummary: data.plan?.strategySummary || "Imported plan",
+              contentPillars: data.plan?.contentPillars || [],
+              contentCalendar: data.plan?.contentCalendar || [],
+              budgetSummary: data.plan?.budgetSummary || { allocations: [] },
+              status: "draft",
+              autoImport: true,
+            }),
+          });
+          const saveData = await saveRes.json();
+          savedLine = saveRes.ok && saveData.saved
+            ? " ✓ Saved to the plan — 5b can use it right now; the next steps only add budget and details."
+            : ` Not saved yet: ${saveData.reason || saveData.error || "press \"Keep my slots\" to store it."}`;
+        } catch {
+          savedLine = " Not saved yet — press \"Keep my slots\" to store it.";
+        }
+      }
+
       setImportNote({
         // Truncation and under-extraction used to be invisible: the plan
         // simply arrived short, with nothing to say why.
@@ -511,7 +541,7 @@ export default function PlanningIndexPage() {
           ? `Read ${rows} rows, but the file was too long — ${data.truncatedChars} characters at the end were not read. Split the plan into two files, or trim it, and import again.`
           : data.underExtracted
             ? `⚠ The file shows roughly ${data.dateSignals} dated entries but only ${rows} row${rows === 1 ? "" : "s"} came out — the file's structure is hiding content from the reader. Don't save this as your plan. Try: open the file in a browser → Print → Save as PDF (text), and import that instead.`
-            : `Read ${rows} rows, ${data.rowsWithDirection} of them with your production direction attached.`,
+            : `Read ${rows} rows, ${data.rowsWithDirection} of them with your production direction attached.${savedLine}`,
       });
       setWizardStep(1);
     } catch (err: unknown) {
