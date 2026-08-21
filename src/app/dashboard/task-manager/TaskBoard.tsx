@@ -59,6 +59,10 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [filterMember, setFilterMember] = useState("");
   const [filterClient, setFilterClient] = useState("");
+  // How the list is ordered. Due-soonest stays the default — it is the order
+  // you would actually work through — but a manager reviewing what landed
+  // this week wants newest-assigned first, so the choice is theirs.
+  const [sortBy, setSortBy] = useState<"due_asc" | "due_desc" | "assigned_desc" | "assigned_asc" | "priority">("due_asc");
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ title: "", clientId: "", assigneeName: "", type: "design", priority: "medium", deadline: "" });
   const [saving, setSaving] = useState(false);
@@ -322,11 +326,29 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
     );
   };
 
-  /** Late first, then soonest due — the order you'd actually work through. */
-  const byUrgency = useMemo(
-    () => [...filtered].sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime()),
-    [filtered]
-  );
+  const SORT_LABEL: Record<typeof sortBy, string> = {
+    due_asc: "Soonest due first",
+    due_desc: "Latest due first",
+    assigned_desc: "Newest assigned first",
+    assigned_asc: "Oldest assigned first",
+    priority: "Priority first",
+  };
+
+  const byUrgency = useMemo(() => {
+    const due = (t: Task) => new Date(t.deadline).getTime();
+    const made = (t: Task) => new Date(t.created_at).getTime();
+    const prio = (t: Task) => ({ urgent: 0, high: 1, medium: 2, low: 3 }[t.priority] ?? 2);
+    const cmp: Record<typeof sortBy, (a: Task, b: Task) => number> = {
+      due_asc: (a, b) => due(a) - due(b),
+      due_desc: (a, b) => due(b) - due(a),
+      assigned_desc: (a, b) => made(b) - made(a),
+      assigned_asc: (a, b) => made(a) - made(b),
+      // Equal priorities fall back to soonest due, so the top of the list is
+      // still the thing to do next rather than an arbitrary urgent item.
+      priority: (a, b) => prio(a) - prio(b) || due(a) - due(b),
+    };
+    return [...filtered].sort(cmp[sortBy]);
+  }, [filtered, sortBy]);
 
   return (
     <div className="space-y-5">
@@ -514,6 +536,14 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
           <option value="">All clients</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
+        <select value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)} title="Sort the list"
+          className="text-[10px] font-bold bg-slate-950 border border-slate-900 rounded-xl px-3 py-2.5 text-slate-300 cursor-pointer focus:outline-none">
+          <option value="due_asc">Due · soonest first</option>
+          <option value="due_desc">Due · latest first</option>
+          <option value="assigned_desc">Assigned · newest first</option>
+          <option value="assigned_asc">Assigned · oldest first</option>
+          <option value="priority">Priority</option>
+        </select>
         <span className="text-[10px] text-slate-600 font-mono ml-auto">{filtered.length} task(s)</span>
       </div>
 
@@ -533,7 +563,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
               <span>{tab === "done" ? "Completed" : "All pending tasks"}</span>
               <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{byUrgency.length}</span>
             </h3>
-            <span className="text-[10px] text-slate-600">Soonest due first</span>
+            <span className="text-[10px] text-slate-600">{SORT_LABEL[sortBy]}</span>
           </div>
           <div className="hidden md:grid grid-cols-12 gap-2 px-3 text-[9px] font-bold uppercase tracking-wider text-slate-600">
             <span className="col-span-4">Task</span>
