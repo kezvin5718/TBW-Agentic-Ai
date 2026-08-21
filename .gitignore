@@ -44,3 +44,4 @@ next-env.d.ts
 wa-reader/node_modules
 wa-reader/auth
 wa-reader/.env.runtime
+render-test.jpg
