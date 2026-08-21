@@ -1,6 +1,7 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { complete, safeJsonParse } from "@/lib/llm";
 import { MODEL_SMART } from "@/lib/llm-config";
+import { houseLookDigest } from "@/lib/style-library";
 
 /**
  * Reads a monthly plan and decides how each post should be made.
@@ -127,6 +128,12 @@ export async function analysePlan(planId: string): Promise<{
 
   const colors = ((brain?.colors as string[] | null) || []).filter(Boolean);
 
+  // What the founder's approved Style Library actually looks like — in the
+  // room BEFORE the design is chosen. Without this the director invented
+  // "pure black typographic slides" for a warm, soft-lit boutique brand.
+  const styleDefault = (plan.clients as { default_style_category?: string | null } | null)?.default_style_category || null;
+  const houseLook = await houseLookDigest(styleDefault);
+
   // Reels need footage, not a still — leave them for the video pipeline.
   const usable = calendar
     .map((item, i) => ({ item, i }))
@@ -137,7 +144,7 @@ export async function analysePlan(planId: string): Promise<{
   // fully known: the calendar and the brand brain. Hash them; when nothing
   // changed, the stored design IS the design. This is what lets the page
   // refresh freely — a cache hit is one database read.
-  const designHash = fnvHash(JSON.stringify([calendar, brain?.colors, brain?.caption_tone, brain?.design_preferences, brain?.brand_brief, brain?.feedback_log]));
+  const designHash = fnvHash(JSON.stringify([calendar, brain?.colors, brain?.caption_tone, brain?.design_preferences, brain?.brand_brief, brain?.feedback_log, houseLook]));
   const cached = plan.designed_hash === designHash && Array.isArray(plan.designed_specs) ? (plan.designed_specs as PostSpec[]) : null;
 
   // The founder's last corrections, in their own words. These are the whole
@@ -158,11 +165,15 @@ ${String(brain?.brand_brief || "Not recorded.").slice(0, 1500)}
 
 Brand colours available: ${colors.length ? colors.join(", ") : "none recorded — use tasteful neutrals"}.
 Caption tone: ${brain?.caption_tone || "warm, premium, plain-spoken"}.
+${houseLook ? `
+THE HOUSE LOOK. The founder has curated a Style Library of approved reference designs, and this is what they have in common:
+${houseLook}
+Every post you design lives inside this world — its warmth, its light, its palette. A concept can be minimal or bold, festive or quiet, but it is always recognisably this brand's look.` : ""}
 
 Corrections the founder has already given on this brand's work. These outrank your own taste — if one of them contradicts what you were about to do, they win:
 ${corrections || "None recorded yet."}
 
-THE MOST IMPORTANT RULE. Some rows carry a "productionNote" — the art direction the plan's author already wrote. Where it exists it is a brief you are executing, not a suggestion you are weighing. If it says "pure black frame, one point of light, no logo, no product", then the headline sits on black, there is no logo, and there is no product. Do not replace the author's idea with a nicer one of your own. Where a row has a "hook", those are the author's words for the big line — keep them unless they physically cannot fit.
+THE MOST IMPORTANT RULE. Some rows carry a "productionNote" — the art direction the plan's author already wrote. Its explicit words bind you: its prohibitions ("no logo", "no product", "no faces") are absolute, and if it names a colour or a treatment, that is the colour and the treatment. But do not ADD austerity it never asked for. "Typographic" or "minimal imagery" means the type carries the message on a quiet, textured backdrop in the house look — it does not mean a flat black void. Where the note is silent on colour, texture or light, the house look decides. Where a row has a "hook", those are the author's words for the big line — keep them unless they physically cannot fit.
 
 Classify each post as one of:
 - "product" — the post shows the client's actual merchandise. Anything described as a product showcase, a collection, a new arrival, a piece of jewellery.
@@ -175,8 +186,8 @@ Rules:
 - subtext: one short supporting line, or an empty string. Draw it from the row's caption or slide copy where there is one; do not invent a new claim.
 - cta: short, from the row's CTA if it has one.
 - scenePrompt must follow the row's productionNote wherever one exists, including its prohibitions ("no logo", "no product", "no faces").
-- backgroundHex / accentHex / textHex: real hex codes. Use the brand colours where given; make sure text contrasts strongly with the background.
-- scenePrompt: only for "generated" posts — describe the background scene, patterns, lighting and mood. Never describe jewellery, products, people wearing products, or any text. Empty string for "product" posts.
+- backgroundHex / accentHex / textHex: real hex codes. Use the brand colours and the house palette; make sure text contrasts strongly with the background. Never #000000 unless the productionNote itself demands black.
+- scenePrompt: only for "generated" posts — describe the background scene, surfaces, lighting and mood, in the house look. It is a photograph of a place or a surface, NEVER a layout: no slides, no text, no typography, no statistics, no numbers, no lettering of any kind — every word is set on top afterwards by the compositor, and any text the image model draws comes out garbled and gets the post rejected. Empty string for "product" posts.
 - frames: 1, except a carousel which is 3 to 5.`;
 
   const prompt = `Client: ${clientName}
@@ -231,7 +242,7 @@ Return STRICTLY:
       photosRequired: cached.filter((s) => s.kind === "product").reduce((n, s) => n + s.frames, 0),
       generated: cached.length - needPhotoC,
       skippedReels,
-      styleDefault: (plan.clients as { default_style_category?: string | null } | null)?.default_style_category || null,
+      styleDefault,
       specs: cached,
     };
   }
@@ -284,7 +295,7 @@ Return STRICTLY:
     photosRequired,
     generated: specs.length - needPhoto,
     skippedReels,
-    styleDefault: (plan.clients as { default_style_category?: string | null } | null)?.default_style_category || null,
+    styleDefault,
     specs,
   };
 }

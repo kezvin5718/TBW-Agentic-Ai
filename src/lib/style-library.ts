@@ -157,6 +157,62 @@ export async function extractPendingPresets(limit = 5): Promise<{ done: number; 
   return { done, failed, remaining: count || 0 };
 }
 
+/**
+ * The house look, digested from every approved preset — what the founder's
+ * chosen references have in common. This is handed to the ART DIRECTOR before
+ * any post is designed. The style block below already steered the image model,
+ * but by then the design was committed: when the director briefed "pure black
+ * typographic slides", no exemplar shown afterwards could un-choose the black.
+ * The library the founder curated has to be in the room when the choosing
+ * happens, not after.
+ */
+export async function houseLookDigest(category?: string | null): Promise<string> {
+  const admin = createServiceRoleClient();
+  let q = admin.from("style_presets").select("starred, prompt").eq("status", "approved").limit(200);
+  if (category) q = q.eq("category", category);
+  let { data } = await q;
+  // A default category with nothing approved should fall back to the whole
+  // library, not to no guidance at all.
+  if (category && (!data || data.length === 0)) {
+    ({ data } = await admin.from("style_presets").select("starred, prompt").eq("status", "approved").limit(200));
+  }
+  const rows = ((data || []) as { starred: boolean; prompt: StylePrompt | null }[])
+    .filter((r) => r.prompt)
+    .sort((a, b) => Number(b.starred) - Number(a.starred));
+  if (rows.length === 0) return "";
+
+  // Short phrases (moods, palettes, avoids) are counted across the library so
+  // the commonest ones surface; long prose fields are quoted verbatim from the
+  // best rows instead, because frequency-splitting a sentence yields confetti.
+  const gather = (field: keyof StylePrompt, top = 6): string => {
+    const seen = new Map<string, number>();
+    for (const r of rows) {
+      const v = r.prompt![field];
+      const items = Array.isArray(v) ? v : v ? [String(v)] : [];
+      for (const item of items) {
+        for (const part of String(item).split(/[,;]/)) {
+          const s = part.trim().toLowerCase();
+          if (s && s.length < 60) seen.set(s, (seen.get(s) || 0) + 1);
+        }
+      }
+    }
+    return [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, top).map(([s]) => s).join(", ");
+  };
+  const quote = (field: keyof StylePrompt, n: number): string =>
+    rows.map((r) => r.prompt![field]).filter((v): v is string => typeof v === "string" && !!v).slice(0, n).join(" · ");
+
+  const lines = [
+    ["Mood", gather("mood")],
+    ["Palette", gather("color_palette")],
+    ["Lighting", quote("lighting", 1)],
+    ["Backgrounds", quote("background", 2)],
+    ["Never", gather("avoid", 8)],
+  ].filter(([, v]) => v);
+  if (lines.length === 0) return "";
+
+  return lines.map(([k, v]) => `${k}: ${v}`).join("\n");
+}
+
 /** Words worth matching between a plan slot and a preset's tags/subject. */
 function keywords(spec: PostSpec): string[] {
   const text = `${spec.scenePrompt} ${spec.headline} ${spec.subtext}`.toLowerCase();
