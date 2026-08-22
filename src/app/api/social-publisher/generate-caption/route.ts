@@ -147,6 +147,8 @@ The 📍 and 📞 lines are mandatory and must both appear, exactly as given her
 📍 ${addr!.address}
 📞 ${addr!.phone}
 
+The address and phone number appear EXACTLY ONCE in the whole caption — only in those two lines. Never mention the address, the location, or the phone number anywhere else: not in the hook, not in the body, not in the closing line.
+
 Output only the caption, nothing else.`,
     }],
     model: chosenModel,
@@ -157,12 +159,18 @@ Output only the caption, nothing else.`,
 
   const text = caption.trim();
 
-  // The contact block is the one part that cannot be quietly dropped, and a
-  // model told to include something will occasionally not. Appending it is safer
-  // than returning a caption the team assumes is complete.
-  const withContact = text.includes(addr!.address!) && text.includes(addr!.phone!)
-    ? text
-    : `${text}\n\n📍 ${addr!.address}\n📞 ${addr!.phone}`;
+  // The contact block must appear exactly once — no more, no fewer. The old
+  // check appended it whenever the model's wording didn't match the stored text
+  // character-for-character, so a restyled phone number meant the founder saw
+  // the address twice. Rebuilding is surer than matching: strip every 📍/📞
+  // line the model wrote, then place the canonical block once, where the
+  // format says it goes — after the body, before the keywords.
+  const contactBlock = `📍 ${addr!.address}\n📞 ${addr!.phone}`;
+  const kept = text.split("\n").filter((l) => !/^\s*[📍📞]/u.test(l));
+  const tail = kept.findIndex((l) => /^\s*(🏷️|#)/u.test(l));
+  if (tail === -1) kept.push("", contactBlock);
+  else kept.splice(tail, 0, contactBlock, "");
+  const withContact = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 
   // Reported so a caption that came back far short of the brief is visible
   // rather than being discovered at posting time.
