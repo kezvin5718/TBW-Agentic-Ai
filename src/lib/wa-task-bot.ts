@@ -143,6 +143,7 @@ export async function runWhatsAppTaskBot(): Promise<BotResult> {
       let drafts: DraftedTask[] = [];
       try {
         const raw = await complete({
+          purpose: "whatsapp-tasks",
           system:
             "You turn a marketing agency's client WhatsApp conversations into tasks for their staff. " +
             "The messages are one short conversation — read them together, not separately. " +

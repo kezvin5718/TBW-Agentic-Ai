@@ -71,6 +71,7 @@ Keep the content highly actionable, under 800 words, and formatted in clean, pro
 
     // 4. Run LLM call
     const brief = await complete({
+      purpose: "brand-brain",
       model: MODEL_SMART,
       system: systemPrompt,
       messages: [{ role: "user", content: userMessage }],

@@ -197,6 +197,7 @@ async function compress(notes: ManagerNotes): Promise<string> {
 
   try {
     const brief = await complete({
+      purpose: "manager-brief",
       model: MODEL_SMART,
       system: `You are Ochrester, the main manager of TBW Advertising's agent team. Four managers hand you their morning notes. Compress them into ONE founder-ready brief:
 1. Start with "TOP PRIORITIES TODAY:" and the 3 most urgent items (fewer if fewer exist) — one line each, client names kept, numbers kept.

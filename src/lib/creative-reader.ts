@@ -126,7 +126,7 @@ export async function readCreative(url: string, mediaType: string): Promise<Crea
 
     for (const imageDataUrl of images) {
       try {
-        const raw = await completeVision({ system: READ_SYSTEM, prompt: READ_PROMPT, imageDataUrl });
+        const raw = await completeVision({ system: READ_SYSTEM, prompt: READ_PROMPT, imageDataUrl, purpose: "creative-reading" });
         const v = safeJsonParse<{ description?: string; on_creative_text?: string }>(raw, {});
         if (v.description) descriptions.push(String(v.description).trim());
         if (v.on_creative_text) texts.push(String(v.on_creative_text).trim());

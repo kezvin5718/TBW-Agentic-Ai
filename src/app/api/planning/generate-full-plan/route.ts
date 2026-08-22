@@ -94,6 +94,7 @@ Return a JSON object with EXACTLY this shape:
 Return ONLY valid JSON.`;
 
     const raw = await complete({
+      purpose: "planning",
       system,
       messages: [{ role: "user", content: userPrompt }],
       model: MODEL_CHATGPT,

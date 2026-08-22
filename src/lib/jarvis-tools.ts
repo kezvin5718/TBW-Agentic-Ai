@@ -210,6 +210,7 @@ Campaign Results Log: ${JSON.stringify(brain.results_log)}
   // Use LLM to extract/search the query inside brand brain
   try {
     const searchRes = await complete({
+      purpose: "bron-assistant",
       model: MODEL_SMART,
       system: `You are the Brand Brain search indexer. Analyze the brand parameters and answer query: "${query}". Keep answers under 80 words.`,
       messages: [{ role: "user", content: brainText }],
@@ -240,6 +241,7 @@ export async function draft_client_reply(supabase: SupabaseClient, clientName: s
 
   try {
     const reply = await complete({
+      purpose: "bron-assistant",
       model: MODEL_SMART,
       system: `You are the Client Liaison Bot. Draft a warm, encouraging response for client: "${client.name}". Tone guidelines: "${tone}". Keep it under 60 words.`,
       messages: [{ role: "user", content: `Draft reply to client message: "${message}"` }],

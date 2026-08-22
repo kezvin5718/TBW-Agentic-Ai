@@ -311,6 +311,7 @@ ${chunks[i]}
 Return ONLY valid JSON.`;
 
       const raw = await complete({
+        purpose: "plan-import",
         system,
         messages: [{ role: "user", content: userPrompt }],
         model: MODEL_CHATGPT,

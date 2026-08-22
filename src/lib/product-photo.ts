@@ -64,6 +64,7 @@ export async function cleanProductPhoto(input: Buffer): Promise<CleanedPhoto> {
   try {
     const small = await sharp(working).resize({ width: 768, withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
     const raw = await completeVision({
+      purpose: "photo-cleaning",
       system: "You locate products in advertising images and answer only in JSON.",
       prompt: `This image may be a finished social media post rather than a plain product photograph. It can contain a decorative border, a brand logo, a shop name, a tagline or other text.
 

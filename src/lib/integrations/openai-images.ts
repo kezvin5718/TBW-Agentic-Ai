@@ -1,3 +1,5 @@
+import { logUsage } from "@/lib/usage-log";
+
 /**
  * Ceilings on how long a provider may take before the call is abandoned.
  *
@@ -72,14 +74,24 @@ export async function describeImageViaVision(imageUrl: string, instruction: stri
             ]
           }
         ],
-        max_tokens: 150
+        max_tokens: 150,
+        usage: { include: true }
       })
     });
 
     const data = await res.json();
+    await logUsage({
+      model,
+      purpose: "image-descriptions",
+      kind: "vision",
+      promptTokens: data.usage?.prompt_tokens ?? null,
+      completionTokens: data.usage?.completion_tokens ?? null,
+      cost: data.usage?.cost ?? null,
+    });
     return data.choices?.[0]?.message?.content || "";
   } catch (err) {
     console.error("[OpenAI Vision] API call failed:", err);
+    await logUsage({ model, purpose: "image-descriptions", kind: "vision", ok: false });
     return "";
   }
 }
@@ -166,6 +178,7 @@ export async function generateBrandImage(
 
       const b64 = data.data?.[0]?.b64_json;
       if (!b64) return { buffer: null, error: `No image came back from ${viaRouter ? "OpenRouter" : "OpenAI"}.` };
+      await logUsage({ model, purpose: "image-generation", kind: "image", cost: data.usage?.cost ?? null });
       return { buffer: Buffer.from(b64, "base64") };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -174,6 +187,7 @@ export async function generateBrandImage(
         console.warn(`   · image generation timed out after ${IMAGE_TIMEOUT_MS / 1000}s — retrying once.`);
         continue;
       }
+      await logUsage({ model, purpose: "image-generation", kind: "image", ok: false });
       return { buffer: null, error: timedOut ? `the model took over ${IMAGE_TIMEOUT_MS / 1000}s twice in a row` : msg };
     }
   }

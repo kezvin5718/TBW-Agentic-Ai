@@ -1,4 +1,5 @@
 import { MODEL_FAST } from "./llm-config";
+import { logUsage } from "./usage-log";
 
 export interface LLMMessage {
   role: "user" | "assistant" | "system" | "model";
@@ -11,6 +12,8 @@ export interface CompleteParams {
   jsonSchema?: unknown;
   model?: string;
   maxTokens?: number;
+  /** What this call is for, in Credit Logs terms — "captions", "post-design (5b)", … */
+  purpose?: string;
 }
 
 /**
@@ -57,6 +60,7 @@ export async function complete({
   jsonSchema,
   model,
   maxTokens,
+  purpose,
 }: CompleteParams): Promise<string> {
   const apiKey = process.env.OPENROUTER_API_KEY;
 
@@ -113,6 +117,8 @@ export async function complete({
     model: model || MODEL_FAST,
     messages: openRouterMessages,
     max_tokens: maxTokens || 2000, // Enforce safety token limit to bypass credit reservation checks
+    // Ask OpenRouter to report what this exact call cost, for Credit Logs.
+    usage: { include: true },
   };
 
   if (jsonSchema) {
@@ -146,6 +152,7 @@ export async function complete({
           content?: string;
         };
       }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
     };
 
     const text = data.choices?.[0]?.message?.content;
@@ -153,9 +160,19 @@ export async function complete({
       throw new Error("OpenRouter API returned an empty response content");
     }
 
+    await logUsage({
+      model: model || MODEL_FAST,
+      purpose,
+      kind: "chat",
+      promptTokens: data.usage?.prompt_tokens ?? null,
+      completionTokens: data.usage?.completion_tokens ?? null,
+      cost: data.usage?.cost ?? null,
+    });
+
     return text;
   } catch (error) {
     console.error("OpenRouter wrapper encountered an error:", error);
+    await logUsage({ model: model || MODEL_FAST, purpose, kind: "chat", ok: false });
     throw error;
   }
 }

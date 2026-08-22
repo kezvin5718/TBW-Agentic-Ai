@@ -217,6 +217,7 @@ Return STRICTLY:
   let raw = "";
   if (!cached) {
     raw = await complete({
+      purpose: "post-design (5b)",
       model: MODEL_SMART,
       system,
       messages: [{ role: "user", content: prompt }],

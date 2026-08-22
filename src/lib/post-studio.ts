@@ -443,6 +443,7 @@ export async function critique(image: Buffer, spec: PostSpec): Promise<Verdict> 
   try {
     const small = await sharp(image).resize({ width: 768, withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer();
     const raw = await completeVision({
+      purpose: "qc-critic (5b)",
       system: "You check advertising creatives against the brief they were made from. Be strict but fair, and answer only in JSON.",
       prompt: `This creative was built to this brief:
 - Headline that must appear: "${spec.headline}"

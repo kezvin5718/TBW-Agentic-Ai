@@ -193,6 +193,7 @@ Return STRICTLY this JSON:
 { "tasks": [ { "title": "...", "description": "...", "task_type": "...", "priority": "...", "suggested_assignee": "name or null", "client_name": "client name or null", "quote": "the words this came from" } ] }`;
 
   const raw = await complete({
+    purpose: "call-notes",
     model: MODEL_SMART,
     system,
     messages: [{ role: "user", content: prompt }],

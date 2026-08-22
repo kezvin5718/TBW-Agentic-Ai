@@ -243,6 +243,7 @@ Generate a JSON object: { "classification": "category" }`;
     let classification = "other";
     try {
       const aiResponse = await complete({
+        purpose: "whatsapp-bot",
         model: MODEL_FAST,
         system: systemPrompt,
         messages: [{ role: "user", content: userMessage }],
@@ -435,6 +436,7 @@ Generate a JSON object: { "classification": "category" }`;
 
         try {
           const draftText = await complete({
+            purpose: "whatsapp-bot",
             model: MODEL_FAST,
             system: "You are the Client Liaison Bot. Write client communications.",
             messages: [{ role: "user", content: draftPrompt }],

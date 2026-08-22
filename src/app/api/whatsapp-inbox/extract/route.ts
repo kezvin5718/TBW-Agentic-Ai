@@ -41,6 +41,7 @@ export async function POST() {
     if (text.trim()) {
       try {
         const raw = await complete({
+          purpose: "whatsapp-bot",
           system: "You triage a marketing agency's client WhatsApp group messages into a staff task board. Output only JSON.",
           messages: [{
             role: "user",

@@ -97,6 +97,7 @@ export async function POST(request: NextRequest) {
   const chosenModel = model === "gemini" ? MODEL_FAST : MODEL_CHATGPT;
 
   const caption = await complete({
+    purpose: "captions",
     system:
       "You are the senior social media copywriter at TBW Advertising. Write ONE ready-to-post caption grounded in the actual creative and the brand's own corrected rules — never invent product details, offers, or prices. Output ONLY the caption text — no options, no quotes, no explanations.",
     messages: [{

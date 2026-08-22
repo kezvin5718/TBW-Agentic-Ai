@@ -103,6 +103,7 @@ export async function extractPendingPresets(limit = 5): Promise<{ done: number; 
       const isPdf = (row.mime || "").includes("pdf") || /\.pdf$/i.test(row.file_name || "");
       const base64 = buf.toString("base64");
       const raw = await completeVision({
+        purpose: "style-extraction",
         system: EXTRACT_SYSTEM,
         prompt: EXTRACT_PROMPT,
         ...(isPdf

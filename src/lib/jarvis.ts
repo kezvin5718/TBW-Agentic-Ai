@@ -73,6 +73,7 @@ You MUST respond in JSON format matching this schema:
   try {
     // Turn 1: Classify and request tool
     const rawRes = await complete({
+      purpose: "bron-assistant",
       model: MODEL_SMART,
       system: systemPrompt,
       messages: [{ role: "user", content: messageBody }],
@@ -176,6 +177,7 @@ You MUST respond in JSON format matching this schema:
 
     // Format tool results to final mobile-friendly text
     const finalResponse = await complete({
+      purpose: "bron-assistant",
       model: MODEL_SMART,
       system: `You are Bron, formatting tool answers.
 Guidelines:

@@ -73,6 +73,7 @@ Write exactly ONE message. Guidelines:
 `;
 
   const briefingText = await complete({
+    purpose: "daily-briefing",
     model: MODEL_SMART,
     system: "You are Bron, the founder assistant. You compose brief daily daily briefings.",
     messages: [{ role: "user", content: prompt }],
@@ -348,6 +349,7 @@ Only output the JSON object.`;
     } else {
       try {
         refinedData = await complete({
+          purpose: "automation",
           model: MODEL_SMART,
           system: systemPrompt,
           messages: [{ role: "user", content: userPrompt }],
@@ -490,6 +492,7 @@ Output JSON array strictly.`;
 
         try {
           const responseTextGeneral = await complete({
+            purpose: "automation",
             model: MODEL_SMART,
             system: systemPromptGeneral,
             messages: [{ role: "user", content: userPromptGeneral }],

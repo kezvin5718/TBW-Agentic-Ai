@@ -105,6 +105,7 @@ export async function POST(request: NextRequest) {
       // out on Holi — the branding can be perfectly correct while the greeting
       // is the wrong one entirely.
       const raw = await completeVision({
+        purpose: "qc-checks",
         system: "You are a brand-QC checker for an ad agency. Look at the creative and identify which brand it belongs to using visible logos, brand names, product labels and text. Output ONLY JSON.",
         prompt: `This creative was uploaded for the brand: "${uploadedFor}".
 Known agency brands: ${brandNames.join(", ")}.

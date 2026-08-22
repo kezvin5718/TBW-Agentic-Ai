@@ -66,6 +66,7 @@ Strict Output Rules:
 4. Output only the condensed style block raw text. No intro, no explanation, no markdown code block formatting.`;
 
     const response = await complete({
+      purpose: "video-prompts",
       model: MODEL_SMART,
       system: "You are a brand brief synthesizer. You output highly condensed style blocks under 100 words.",
       messages: [{ role: "user", content: promptText }],

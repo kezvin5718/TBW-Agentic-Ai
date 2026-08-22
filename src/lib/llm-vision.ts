@@ -1,4 +1,5 @@
 import { MODEL_FAST } from "./llm-config";
+import { logUsage } from "./usage-log";
 
 /**
  * Vision completion via OpenRouter (image + text → text). Used by the Content
@@ -13,6 +14,7 @@ export async function completeVision({
   fileName,
   model,
   maxTokens,
+  purpose,
 }: {
   system?: string;
   prompt: string;
@@ -23,6 +25,8 @@ export async function completeVision({
   fileName?: string;
   model?: string;
   maxTokens?: number;
+  /** What this call is for, in Credit Logs terms. */
+  purpose?: string;
 }): Promise<string> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey || apiKey === "mock" || apiKey.startsWith("mock_")) {
@@ -51,9 +55,23 @@ export async function completeVision({
       "X-Title": "tbw-os",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ model: model || MODEL_FAST, messages, max_tokens: maxTokens || 300 }),
+    body: JSON.stringify({ model: model || MODEL_FAST, messages, max_tokens: maxTokens || 300, usage: { include: true } }),
   });
-  if (!res.ok) throw new Error(`OpenRouter vision error ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  if (!res.ok) {
+    await logUsage({ model: model || MODEL_FAST, purpose, kind: "vision", ok: false });
+    throw new Error(`OpenRouter vision error ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+  const data = (await res.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
+  };
+  await logUsage({
+    model: model || MODEL_FAST,
+    purpose,
+    kind: "vision",
+    promptTokens: data.usage?.prompt_tokens ?? null,
+    completionTokens: data.usage?.completion_tokens ?? null,
+    cost: data.usage?.cost ?? null,
+  });
   return data.choices?.[0]?.message?.content || "";
 }

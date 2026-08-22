@@ -126,6 +126,7 @@ export async function POST(request: Request) {
       let reportSummary = "";
       try {
         reportSummary = await complete({
+          purpose: "reporting",
           model: MODEL_SMART,
           system: systemPrompt,
           messages: [{ role: "user", content: userPrompt }],

@@ -35,7 +35,8 @@ import {
   ListTodo,
   Wand2,
   Phone,
-  IndianRupee
+  IndianRupee,
+  Wallet
 } from "lucide-react";
 
 export default async function DashboardLayout({
@@ -95,6 +96,7 @@ export default async function DashboardLayout({
     { name: "Integrations", href: "/dashboard/settings/integrations", icon: Settings, roles: ["founder"], section: "Assistant & System" },
 
     { name: "Accounting", href: "/dashboard/founder-zone/accounting", icon: IndianRupee, roles: ["founder"], section: "Founder Zone" },
+    { name: "Credit Logs", href: "/dashboard/credit-logs", icon: Wallet, roles: ["founder"], section: "Founder Zone" },
   ];
 
   const filteredNavItems = allNavItems.filter((item) => {

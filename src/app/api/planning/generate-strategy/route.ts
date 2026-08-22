@@ -87,6 +87,7 @@ Generate a JSON object containing:
     };
 
     const aiResponse = await complete({
+      purpose: "planning",
       model: MODEL_SMART,
       system: systemPrompt,
       messages: [{ role: "user", content: userMessage }],

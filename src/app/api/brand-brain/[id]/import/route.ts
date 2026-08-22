@@ -196,6 +196,7 @@ ${body}`;
       const perChunk = await Promise.all(
         usedChunks.map(async (chunk) => {
           const responseText = await complete({
+            purpose: "brand-brain",
             model: MODEL_SMART,
             system: systemPrompt,
             messages: [{ role: "user", content: promptFor(chunk) }],
@@ -431,6 +432,7 @@ Keep the content highly actionable, under 800 words, and formatted in clean, pro
 
         try {
           brief = await complete({
+            purpose: "brand-brain",
             model: MODEL_SMART,
             system: systemPrompt,
             messages: [{ role: "user", content: userMessage }],

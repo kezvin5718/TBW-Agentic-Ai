@@ -114,6 +114,7 @@ export async function runCreativeQCCheck(creativeId: string): Promise<{ success:
   let report: QCReport | null = null;
   try {
     const response = await complete({
+      purpose: "qc-checks",
       model: MODEL_FAST,
       system: systemPrompt,
       messages: [{ role: "user", content: userPrompt }],

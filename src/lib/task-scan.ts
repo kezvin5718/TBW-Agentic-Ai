@@ -66,6 +66,7 @@ Rules:
 
 export async function scanJobSheet(imageDataUrl: string): Promise<ScanResult> {
   const raw = await completeVision({
+    purpose: "task-scan",
     system: SYSTEM,
     prompt: PROMPT,
     imageDataUrl,

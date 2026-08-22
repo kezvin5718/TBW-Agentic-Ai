@@ -123,6 +123,7 @@ ${agencyBrainDigest}`;
     let generatedContent = {};
     try {
       const response = await complete({
+        purpose: "task-drafts",
         model: MODEL_FAST,
         system: systemPrompt,
         messages: [{ role: "user", content: draftPrompt }],
