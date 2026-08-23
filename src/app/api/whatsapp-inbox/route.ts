@@ -6,7 +6,8 @@ export const dynamic = "force-dynamic";
 // GET — list inbox items (newest first). ?status=new|assigned|done|dismissed
 // Group chatter buries the few messages that matter, so the list can be narrowed to
 // direct messages (?dm=1) and/or messages carrying an attachment (?media=1).
-// ?before=<ISO received_at> walks further back through the same filtered list.
+// ?before=<ISO received_at> walks further back through the same filtered list —
+// or forward through it, when ?sort=oldest turns the list around.
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -17,16 +18,19 @@ export async function GET(request: NextRequest) {
   const dmOnly = params.get("dm") === "1";
   const mediaOnly = params.get("media") === "1";
   const before = params.get("before");
+  const oldestFirst = params.get("sort") === "oldest";
 
   let q = supabase
     .from("wa_inbox")
     .select("*, clients(name), profiles:assigned_to(name)")
-    .order("received_at", { ascending: false })
+    .order("received_at", { ascending: oldestFirst })
     .limit(100);
   if (status) q = q.eq("status", status);
   if (dmOnly) q = q.eq("is_dm", true);
   if (mediaOnly) q = q.not("media_url", "is", null);
-  if (before) q = q.lt("received_at", before);
+  // The cursor always means "past the last row you were shown", which is later in time
+  // when the list runs oldest-first and earlier when it runs newest-first.
+  if (before) q = oldestFirst ? q.gt("received_at", before) : q.lt("received_at", before);
 
   const { data, error } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

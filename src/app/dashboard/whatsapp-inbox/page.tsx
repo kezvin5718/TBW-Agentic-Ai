@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { fmtIST } from "@/lib/time";
 import { createClient } from "@/lib/supabase/client";
 import { MessageSquare, RefreshCw, Loader2, UserPlus, Check, X, AlertTriangle, ListTodo, Paperclip, ChevronDown } from "lucide-react";
@@ -33,6 +33,17 @@ const URG: Record<string, string> = {
   medium: "bg-amber-950/40 border-amber-900 text-amber-400",
   low: "bg-slate-900 border-slate-800 text-slate-500",
 };
+const URG_RANK: Record<string, number> = { high: 3, medium: 2, low: 1 };
+
+// Two of these the database answers ("newest"/"oldest"); two are rearrangements of what
+// is already on screen, so picking them costs no round trip.
+type Sort = "newest" | "oldest" | "urgent" | "media";
+const SORTS: { value: Sort; label: string }[] = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "urgent", label: "Urgent first" },
+  { value: "media", label: "Photos & files first" },
+];
 
 export default function WhatsAppInboxPage() {
   const [tab, setTab] = useState<"new" | "assigned" | "done">("new");
@@ -47,14 +58,19 @@ export default function WhatsAppInboxPage() {
   const [mediaOnly, setMediaOnly] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [sort, setSort] = useState<Sort>("newest");
 
+  // Only "oldest" reaches the server; the other sorts all ride on the newest-first list,
+  // so switching into them leaves this URL — and therefore the fetch — untouched.
+  const oldestFirst = sort === "oldest";
   const url = useCallback((status: string, before?: string) => {
     const p = new URLSearchParams({ status });
     if (dmOnly) p.set("dm", "1");
     if (mediaOnly) p.set("media", "1");
+    if (oldestFirst) p.set("sort", "oldest");
     if (before) p.set("before", before);
     return `/api/whatsapp-inbox?${p.toString()}`;
-  }, [dmOnly, mediaOnly]);
+  }, [dmOnly, mediaOnly, oldestFirst]);
 
   // A full page back means there is almost certainly more behind it — group chats run to thousands.
   const fetchItems = useCallback(async (status: string) => {
@@ -70,6 +86,8 @@ export default function WhatsAppInboxPage() {
   }, [url]);
 
   const loadMore = async () => {
+    // items holds the rows in the order the server sent them, whatever the screen shows,
+    // so its tail is still the cursor the next page hangs off.
     const last = items[items.length - 1];
     if (!last) return;
     setLoadingMore(true);
@@ -82,6 +100,16 @@ export default function WhatsAppInboxPage() {
       }
     } catch { /* ignore */ } finally { setLoadingMore(false); }
   };
+
+  // A sorted copy, never the state itself, so appended pages fall into place on the next render.
+  const shown = useMemo(() => {
+    if (sort !== "urgent" && sort !== "media") return items;
+    const newestFirst = (a: Item, b: Item) => (a.received_at < b.received_at ? 1 : a.received_at > b.received_at ? -1 : 0);
+    const rank = sort === "urgent"
+      ? (i: Item) => URG_RANK[i.urgency || ""] || 0
+      : (i: Item) => (i.media_url ? 1 : 0);
+    return [...items].sort((a, b) => rank(b) - rank(a) || newestFirst(a, b));
+  }, [items, sort]);
 
   useEffect(() => {
     (async () => {
@@ -142,6 +170,9 @@ export default function WhatsAppInboxPage() {
         <button onClick={() => setMediaOnly((v) => !v)} className={`px-4 py-2.5 rounded-xl border cursor-pointer transition-all flex items-center gap-1.5 ${mediaOnly ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-900 text-slate-400 hover:text-white"}`}>
           <Paperclip className="w-3 h-3" /><span>Photos &amp; files</span>
         </button>
+        <select value={sort} onChange={(e) => setSort(e.target.value as Sort)} className={`px-4 py-2.5 rounded-xl border cursor-pointer transition-all focus:outline-none ${sort === "newest" ? "bg-slate-950 border-slate-900 text-slate-400 hover:text-white" : "bg-slate-950 border-indigo-600 text-white"}`}>
+          {SORTS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+        </select>
       </div>
 
       {loading ? (
@@ -150,7 +181,7 @@ export default function WhatsAppInboxPage() {
         <p className="text-xs text-slate-600 py-16 text-center">Nothing here. New client messages — groups and direct — appear once the WhatsApp reader is running and you click <span className="text-slate-300 font-semibold">Scan new</span>.</p>
       ) : (
         <div className="space-y-3">
-          {items.map((i) => (
+          {shown.map((i) => (
             <div key={i.id} className="bg-slate-950/60 border border-slate-900 rounded-2xl p-4 space-y-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 text-[11px] text-slate-500">
