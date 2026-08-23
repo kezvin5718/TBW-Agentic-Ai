@@ -82,6 +82,23 @@ or phone number — the portal adds those automatically from its own records.
 **Slide copy.** Carousels only: one line per slide, in order, separated by ` | `.
 Without it, every slide repeats the cover line.
 
+**Say plainly whether the post shows real jewellery.** The portal sorts every
+post into one of two kinds, by reading the concept and the production note:
+
+- **Product post** — shows the client's actual merchandise, composited from a
+  real photograph the agency uploads. The portal NEVER draws jewellery itself,
+  because inventing a piece the client doesn't sell is the one unacceptable
+  mistake. For these, name the piece in the concept and open the production
+  note with "Product photo of …" (e.g. "Product photo of the bridal polki
+  necklace set, on the model, warm light").
+- **Mood post** — statistics, quotes, festival greetings, offers, teasers,
+  store announcements. These get a designed background with the words set on
+  top, and no jewellery appears in them at all. That is correct, not a fault.
+
+If a post is meant to show a piece and you don't say so, it comes back as a
+beautiful empty background. Aim for a real mix: mood posts build the story,
+product posts sell.
+
 **Production note.** This is binding art direction — the portal obeys it
 literally when designing the image. Write what a designer would need: surface,
 light, mood, framing, what to avoid. Two cautions:
