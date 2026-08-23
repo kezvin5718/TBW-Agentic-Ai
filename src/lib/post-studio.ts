@@ -101,6 +101,12 @@ function fitText(text: string, availPx: number, startPx: number, maxLines: numbe
  * wrong look for a jewellery brand.
  */
 function textLayer(spec: PostSpec, width: number, height: number, bandTop: number, centerBlock = false): Buffer {
+  // DejaVu Sans bold caps was the only font in the container, so every brand —
+  // including the ornate serif ones — came out in the same industrial sans.
+  // The CTA pill stays sans: it is a button, not display type. Widths are still
+  // measured off the bold-sans table, and serif advances are narrower, so the
+  // estimate only ever errs toward a size step down — never toward clipping.
+  const display = spec.typeStyle === "serif" ? "Cormorant Garamond, DejaVu Serif" : "DejaVu Sans";
   const marginX = Math.round(width * 0.08);
   const avail = width - marginX * 2;
   const portrait = height > width;
@@ -150,7 +156,7 @@ function textLayer(spec: PostSpec, width: number, height: number, bandTop: numbe
   const parts: string[] = [];
   for (const line of head.lines) {
     parts.push(
-      `<text x="${marginX}" y="${y}" font-family="DejaVu Sans" font-size="${head.size}" font-weight="bold" fill="${spec.textHex}">${esc(line)}</text>`
+      `<text x="${marginX}" y="${y}" font-family="${display}" font-size="${head.size}" font-weight="bold" fill="${spec.textHex}">${esc(line)}</text>`
     );
     y += headLead;
   }
@@ -159,7 +165,7 @@ function textLayer(spec: PostSpec, width: number, height: number, bandTop: numbe
     y += Math.round(subLines.size * 0.6);
     for (const line of subLines.lines) {
       parts.push(
-        `<text x="${marginX}" y="${y}" font-family="DejaVu Sans" font-size="${subLines.size}" fill="${spec.textHex}" opacity="0.88">${esc(line)}</text>`
+        `<text x="${marginX}" y="${y}" font-family="${display}" font-size="${subLines.size}" fill="${spec.textHex}" opacity="0.88">${esc(line)}</text>`
       );
       y += subLead;
     }
@@ -209,8 +215,14 @@ async function canvas(spec: PostSpec, width: number, height: number): Promise<Bu
  * what is sent rather than a paraphrase of it.
  */
 export function buildScenePrompt(spec: PostSpec, styleBlock = ""): string {
+  // The plan's palette was never spoken to the image model — the compositor put
+  // the founder's colours on top of a scene drawn in whatever colours the model
+  // liked, which is how a dusty-rose plan came back charcoal.
+  const colourWorld = spec.palette?.length
+    ? `\nColour world — the scene lives in tints and shades of exactly these: ${spec.palette.join(", ")}. No other colour family may dominate.`
+    : "";
   return `${spec.scenePrompt}
-${styleBlock}
+${styleBlock}${colourWorld}
 Style: premium Indian advertising background for a jewellery brand. Rich but uncluttered, with clear empty space across the lower half where text will be placed afterwards.
 Absolutely no text, no letters, no numbers, no logos, no watermarks, no people, and no jewellery or products of any kind. Background scene only.`;
 }
@@ -554,7 +566,7 @@ export async function generatePlanPosts(
     // The proven-look exemplars for this post, when a category was chosen.
     // Empty string when the library has nothing — old behaviour, unchanged.
     const styleBlock = options.styleCategory && spec.kind === "generated"
-      ? await styleBlockFor(spec, options.styleCategory)
+      ? await styleBlockFor(spec, options.styleCategory, plan.clientId)
       : "";
 
     for (let frame = 0; frame < spec.frames; frame++) {

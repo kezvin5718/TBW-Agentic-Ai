@@ -51,6 +51,15 @@ export interface PostSpec {
   backgroundHex: string;
   accentHex: string;
   textHex: string;
+  /**
+   * The colour world this post lives in — the plan's fixed palette, or the
+   * brand's. Carried onto the spec so the image prompt can name it: the scene
+   * used to be drawn in whatever palette the model fancied while the compositor
+   * laid correct brand colours on top of it.
+   */
+  palette?: string[];
+  /** Display type for headline and subtext. Serif is the editorial jewellery look. */
+  typeStyle?: "serif" | "sans";
   /** For generated posts only — the scene, never containing a real product. */
   scenePrompt: string;
   /**
@@ -64,6 +73,16 @@ export interface PostSpec {
 }
 
 const SQUARE_PLATFORMS = ["instagram", "facebook", "linkedin", "pinterest"];
+
+/**
+ * Bumped by hand whenever the rules below change.
+ *
+ * The design cache keys on its inputs, and the prompt was not one of them: a
+ * plan designed under the old palette rules kept serving the old brief no
+ * matter how the rules were rewritten. Changing this re-designs every plan on
+ * its next visit.
+ */
+const PROMPT_VERSION = "design-v2";
 
 /** 9:16 for stories, 1:1 for everything else. */
 export function shapeFor(spec: PostSpec): "square" | "portrait" {
@@ -143,7 +162,9 @@ export async function analysePlan(planId: string, styleOverride?: string | null)
     (plan.style_category as string | null) ||
     (plan.clients as { default_style_category?: string | null } | null)?.default_style_category ||
     null;
-  const houseLook = await houseLookDigest(styleDefault);
+  // This brand's own references first, when the founder has uploaded any —
+  // otherwise a warm floral label is described by other brands' moods.
+  const houseLook = await houseLookDigest(styleDefault, plan.client_id as string);
 
   // Reels need footage, not a still — leave them for the video pipeline.
   const usable = calendar
@@ -155,7 +176,7 @@ export async function analysePlan(planId: string, styleOverride?: string | null)
   // fully known: the calendar and the brand brain. Hash them; when nothing
   // changed, the stored design IS the design. This is what lets the page
   // refresh freely — a cache hit is one database read.
-  const designHash = fnvHash(JSON.stringify([calendar, colors, brain?.caption_tone, brain?.design_preferences, brain?.brand_brief, brain?.feedback_log, styleDefault, houseLook]));
+  const designHash = fnvHash(JSON.stringify([PROMPT_VERSION, calendar, colors, brain?.caption_tone, brain?.design_preferences, brain?.brand_brief, brain?.feedback_log, styleDefault, houseLook]));
   const cached = plan.designed_hash === designHash && Array.isArray(plan.designed_specs) ? (plan.designed_specs as PostSpec[]) : null;
 
   // The founder's last corrections, in their own words. These are the whole
@@ -175,8 +196,14 @@ Who this brand is:
 ${String(brain?.brand_brief || "Not recorded.").slice(0, 1500)}
 
 ${planColors.length
-    ? `COLOURS FIXED FOR THIS PLAN. The founder chose this exact palette when the plan was imported — every backgroundHex, accentHex and textHex you write comes from these codes or harmonises directly with them, and no other palette overrides them: ${planColors.join(", ")}.`
+    ? `COLOURS FIXED FOR THIS PLAN: ${planColors.join(", ")}. The founder chose this exact palette when the plan was imported. These are mechanical rules, not taste:
+- backgroundHex MUST be one of those codes, or a light tint of one — the same hue with lightness raised (e.g. #ab6364 may become a blush #e8c8c9, or a warm ivory #f3ece4 derived from it). The background IS the creative; getting it from anywhere else is the one failure that ruins the whole grid.
+- Dark, black or charcoal backgrounds are FORBIDDEN unless the row's own productionNote demands dark.
+- textHex must be a deep shade of a plan colour, or near-black used ONLY as lettering — never as a ground.
+- accentHex comes from the list.
+- scenePrompt must name this colour world in plain words AND in hex codes, so the picture is drawn in it rather than merely captioned by it.`
     : `Brand colours available: ${colors.length ? colors.join(", ") : "none recorded — use tasteful neutrals"}.`}
+Hex codes quoted inside style notes, the house look or past corrections are examples from OLD work, not this plan's palette — the palette above overrides every one of them.
 Caption tone: ${brain?.caption_tone || "warm, premium, plain-spoken"}.
 ${houseLook ? `
 THE HOUSE LOOK. The founder has curated a Style Library of approved reference designs, and this is what they have in common:
@@ -201,7 +228,8 @@ Rules:
 - scenePrompt must follow the row's productionNote wherever one exists, including its prohibitions ("no logo", "no product", "no faces").
 - backgroundHex / accentHex / textHex: real hex codes. Use the brand colours and the house palette; make sure text contrasts strongly with the background. Never #000000 unless the productionNote itself demands black.
 - scenePrompt: only for "generated" posts — describe the background scene, surfaces, lighting and mood, in the house look. It is a photograph of a place or a surface, NEVER a layout: no slides, no text, no typography, no statistics, no numbers, no lettering of any kind — every word is set on top afterwards by the compositor, and any text the image model draws comes out garbled and gets the post rejected. Empty string for "product" posts.
-- frames: 1, except a carousel which is 3 to 5.`;
+- frames: 1, except a carousel which is 3 to 5.
+- typeStyle: "serif" or "sans" — how the words are set. The house look decides: editorial, bridal, heritage or boutique jewellery references are "serif"; a stark contemporary or tech-leaning look is "sans". When in doubt for a jewellery brand, choose "serif".`;
 
   const prompt = `Client: ${clientName}
 Plan month: ${plan.month}
@@ -225,7 +253,7 @@ ${usable
   .join("\n")}
 
 Return STRICTLY:
-{ "posts": [ { "item": <the index number given above>, "kind": "product" | "generated", "contentType": "post" | "story" | "carousel", "frames": 1, "headline": "...", "subtext": "...", "cta": "...", "backgroundHex": "#RRGGBB", "accentHex": "#RRGGBB", "textHex": "#RRGGBB", "scenePrompt": "...", "reason": "one short line" } ] }`;
+{ "posts": [ { "item": <the index number given above>, "kind": "product" | "generated", "contentType": "post" | "story" | "carousel", "frames": 1, "headline": "...", "subtext": "...", "cta": "...", "backgroundHex": "#RRGGBB", "accentHex": "#RRGGBB", "textHex": "#RRGGBB", "typeStyle": "serif" | "sans", "scenePrompt": "...", "reason": "one short line" } ] }`;
 
   let raw = "";
   if (!cached) {
@@ -288,6 +316,10 @@ Return STRICTLY:
       backgroundHex: hexOr(got?.backgroundHex, colors[0] || "#1c1917"),
       accentHex: hexOr(got?.accentHex, colors[1] || "#d4af37"),
       textHex: hexOr(got?.textHex, "#ffffff"),
+      // Taken from the plan, never echoed back by the model — asking it to
+      // repeat the hexes is one more place they can drift.
+      palette: colors.length ? colors : undefined,
+      typeStyle: got?.typeStyle === "serif" ? "serif" : "sans",
       scenePrompt: String(got?.scenePrompt || ""),
       slideCopy,
       reason: String(got?.reason || ""),

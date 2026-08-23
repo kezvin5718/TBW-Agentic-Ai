@@ -84,6 +84,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Pick a valid category first." }, { status: 400 });
   }
 
+  // Optional: these references belong to ONE brand and steer only its posts.
+  // Empty means the shared shelf, which is every previous upload's behaviour.
+  const clientId = String(form.get("clientId") || "").trim() || null;
+
   const files = form.getAll("files").filter((f): f is File => f instanceof File);
   if (files.length === 0) return NextResponse.json({ error: "No files in the upload." }, { status: 400 });
 
@@ -140,6 +144,7 @@ export async function POST(request: NextRequest) {
 
         const { error: dbErr } = await admin.from("style_presets").insert({
           category: isAuto ? null : category,
+          client_id: clientId,
           image_url: url,
           file_name: piece.name,
           mime: piece.mime,

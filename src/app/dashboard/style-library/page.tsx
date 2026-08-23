@@ -38,6 +38,7 @@ export default function StyleLibraryPage() {
   const [uploading, setUploading] = useState(false);
   // "" = each file is one design; otherwise each file is a grid composite to slice.
   const [gridMode, setGridMode] = useState("");
+  const [forClient, setForClient] = useState("");
   const [extracting, setExtracting] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showClients, setShowClients] = useState(false);
@@ -96,6 +97,7 @@ export default function StyleLibraryPage() {
       const form = new FormData();
       form.append("category", tab);
       if (gridMode) form.append("split", gridMode);
+      if (forClient) form.append("clientId", forClient);
       for (const f of list) form.append("files", f);
       const res = await fetch("/api/style-library/upload", { method: "POST", body: form });
       const data = await res.json();
@@ -237,6 +239,22 @@ export default function StyleLibraryPage() {
           </button>
         ))}
         {gridMode && <span className="text-[10px] text-slate-500">each file is sliced into tiles — every tile becomes its own design</span>}
+      </div>
+
+      {/* Whose look this is. A brand's own frames describe that brand; the shared
+          shelf describes every other brand the agency has worked for. */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mr-1">For client only</span>
+        <select value={forClient} onChange={(e) => setForClient(e.target.value)}
+          className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-slate-300 cursor-pointer focus:outline-none focus:border-indigo-600">
+          <option value="">All brands (shared shelf)</option>
+          {clients.map((cl) => <option key={cl.id} value={cl.id}>{cl.name}</option>)}
+        </select>
+        <span className="text-[10px] text-slate-500">
+          {forClient
+            ? "these designs steer only this client's posts — and outrank the shared shelf for them"
+            : "optional — leave as-is unless these are one brand's own reference frames"}
+        </span>
       </div>
 
       {/* Upload dropzone */}

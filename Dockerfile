@@ -19,6 +19,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# The serif display face for jewellery-editorial posts (OFL, vendored in fonts/).
+# Copied in before fc-cache below so the cache is built with it present.
+COPY fonts/ /usr/share/fonts/truetype/cormorant/
+
 # Fonts + fontconfig so sharp/librsvg can render SVG <text> (the branding address
 # strip). ffmpeg extracts video frames for the Content Hub brand-QC.
 # tzdata so the container can actually resolve Asia/Kolkata (Alpine ships none).

@@ -167,17 +167,27 @@ export async function extractPendingPresets(limit = 5): Promise<{ done: number; 
  * The library the founder curated has to be in the room when the choosing
  * happens, not after.
  */
-export async function houseLookDigest(category?: string | null): Promise<string> {
+export async function houseLookDigest(category?: string | null, clientId?: string | null): Promise<string> {
   const admin = createServiceRoleClient();
-  let q = admin.from("style_presets").select("starred, prompt").eq("status", "approved").limit(200);
-  if (category) q = q.eq("category", category);
-  let { data } = await q;
+  const fetchRows = async (opts: { client?: string | null; category?: string | null }) => {
+    let q = admin.from("style_presets").select("starred, prompt").eq("status", "approved").limit(200);
+    if (opts.client) q = q.eq("client_id", opts.client);
+    if (opts.category) q = q.eq("category", opts.category);
+    const { data } = await q;
+    return (data || []) as { starred: boolean; prompt: StylePrompt | null }[];
+  };
+
+  // References uploaded FOR this brand describe this brand. The shared shelf
+  // describes every other brand the agency has worked for, which is how a warm
+  // floral label was briefed "moody, rich shadows, avoid bright colours".
+  let data = clientId ? await fetchRows({ client: clientId, category }) : [];
+  if (data.length === 0 && clientId && category) data = await fetchRows({ client: clientId });
+  if (data.length === 0) data = await fetchRows({ category });
   // A default category with nothing approved should fall back to the whole
   // library, not to no guidance at all.
-  if (category && (!data || data.length === 0)) {
-    ({ data } = await admin.from("style_presets").select("starred, prompt").eq("status", "approved").limit(200));
-  }
-  const rows = ((data || []) as { starred: boolean; prompt: StylePrompt | null }[])
+  if (data.length === 0 && category) data = await fetchRows({});
+
+  const rows = data
     .filter((r) => r.prompt)
     .sort((a, b) => Number(b.starred) - Number(a.starred));
   if (rows.length === 0) return "";
@@ -236,16 +246,25 @@ function scorePreset(p: PresetRow, kws: string[]): number {
  * field, the runner-up fills its gaps). Returns "" when the category has
  * nothing approved, so 5b degrades to exactly its old behaviour.
  */
-export async function styleBlockFor(spec: PostSpec, category: string): Promise<string> {
+export async function styleBlockFor(spec: PostSpec, category: string, clientId?: string | null): Promise<string> {
   if (!category) return "";
   const admin = createServiceRoleClient();
-  const { data } = await admin
-    .from("style_presets")
-    .select("subject, tags, starred, prompt")
-    .eq("category", category)
-    .eq("status", "approved")
-    .limit(200);
-  const rows = (data || []) as PresetRow[];
+  const fetchRows = async (client?: string | null) => {
+    let q = admin
+      .from("style_presets")
+      .select("subject, tags, starred, prompt")
+      .eq("category", category)
+      .eq("status", "approved")
+      .limit(200);
+    if (client) q = q.eq("client_id", client);
+    const { data } = await q;
+    return (data || []) as PresetRow[];
+  };
+
+  // This brand's own approved references win outright; the shared shelf is the
+  // fallback, not the default.
+  const ownRows = clientId ? await fetchRows(clientId) : [];
+  const rows = ownRows.length > 0 ? ownRows : await fetchRows();
   if (rows.length === 0) return "";
 
   const kws = keywords(spec);
@@ -274,5 +293,6 @@ export async function styleBlockFor(spec: PostSpec, category: string): Promise<s
   ].filter(([, v]) => v);
   if (lines.length === 0) return "";
 
-  return `\nSTYLE REFERENCE — "${category}" (from this agency's proven designs; follow this visual language exactly):\n${lines.map(([k, v]) => `${k}: ${v}`).join("\n")}`;
+  const source = ownRows.length > 0 ? "this brand's own approved references" : "this agency's proven designs";
+  return `\nSTYLE REFERENCE — "${category}" (from ${source}; follow this visual language exactly):\n${lines.map(([k, v]) => `${k}: ${v}`).join("\n")}`;
 }

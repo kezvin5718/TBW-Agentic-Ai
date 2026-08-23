@@ -61,7 +61,7 @@ export async function GET(request: NextRequest) {
     const specs = await Promise.all(plan.specs.map(async (sp) => ({
       ...sp,
       imagePrompt: sp.kind === "generated" && sp.scenePrompt.trim()
-        ? buildScenePrompt(sp, styleCategory ? await styleBlockFor(sp, styleCategory) : "")
+        ? buildScenePrompt(sp, styleCategory ? await styleBlockFor(sp, styleCategory, plan.clientId) : "")
         : null,
     })));
 
