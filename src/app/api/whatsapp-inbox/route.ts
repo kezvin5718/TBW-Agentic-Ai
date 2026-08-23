@@ -4,18 +4,29 @@ import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 export const dynamic = "force-dynamic";
 
 // GET — list inbox items (newest first). ?status=new|assigned|done|dismissed
+// Group chatter buries the few messages that matter, so the list can be narrowed to
+// direct messages (?dm=1) and/or messages carrying an attachment (?media=1).
+// ?before=<ISO received_at> walks further back through the same filtered list.
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const status = new URL(request.url).searchParams.get("status");
+  const params = new URL(request.url).searchParams;
+  const status = params.get("status");
+  const dmOnly = params.get("dm") === "1";
+  const mediaOnly = params.get("media") === "1";
+  const before = params.get("before");
+
   let q = supabase
     .from("wa_inbox")
     .select("*, clients(name), profiles:assigned_to(name)")
     .order("received_at", { ascending: false })
     .limit(100);
   if (status) q = q.eq("status", status);
+  if (dmOnly) q = q.eq("is_dm", true);
+  if (mediaOnly) q = q.not("media_url", "is", null);
+  if (before) q = q.lt("received_at", before);
 
   const { data, error } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

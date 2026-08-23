@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { fmtIST } from "@/lib/time";
 import { createClient } from "@/lib/supabase/client";
-import { MessageSquare, RefreshCw, Loader2, UserPlus, Check, X, AlertTriangle, ListTodo } from "lucide-react";
+import { MessageSquare, RefreshCw, Loader2, UserPlus, Check, X, AlertTriangle, ListTodo, Paperclip, ChevronDown } from "lucide-react";
 import TaskDrafts from "./TaskDrafts";
 
 interface Item {
@@ -43,14 +43,45 @@ export default function WhatsAppInboxPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [me, setMe] = useState<string | null>(null);
   const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
+  const [dmOnly, setDmOnly] = useState(false);
+  const [mediaOnly, setMediaOnly] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
+  const url = useCallback((status: string, before?: string) => {
+    const p = new URLSearchParams({ status });
+    if (dmOnly) p.set("dm", "1");
+    if (mediaOnly) p.set("media", "1");
+    if (before) p.set("before", before);
+    return `/api/whatsapp-inbox?${p.toString()}`;
+  }, [dmOnly, mediaOnly]);
+
+  // A full page back means there is almost certainly more behind it — group chats run to thousands.
   const fetchItems = useCallback(async (status: string) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/whatsapp-inbox?status=${status}`);
-      if (res.ok) setItems((await res.json()).items || []);
+      const res = await fetch(url(status));
+      if (res.ok) {
+        const list: Item[] = (await res.json()).items || [];
+        setItems(list);
+        setHasMore(list.length === 100);
+      }
     } catch { /* ignore */ } finally { setLoading(false); }
-  }, []);
+  }, [url]);
+
+  const loadMore = async () => {
+    const last = items[items.length - 1];
+    if (!last) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetch(url(tab, last.received_at));
+      if (res.ok) {
+        const list: Item[] = (await res.json()).items || [];
+        setItems((prev) => [...prev, ...list]);
+        setHasMore(list.length === 100);
+      }
+    } catch { /* ignore */ } finally { setLoadingMore(false); }
+  };
 
   useEffect(() => {
     (async () => {
@@ -96,12 +127,21 @@ export default function WhatsAppInboxPage() {
       {/* Bot drafts — framed from whole conversations, waiting for approval */}
       <TaskDrafts clients={clients} staff={staff} onApproved={() => fetchItems(tab)} />
 
-      <div className="flex bg-slate-950 border border-slate-900 rounded-xl p-1 text-[10px] font-bold uppercase tracking-wider w-fit">
-        {(["new", "assigned", "done"] as const).map((t) => (
-          <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 rounded-lg cursor-pointer transition-all ${tab === t ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>
-            {t === "new" ? "New" : t === "assigned" ? "Assigned" : "Done"}
-          </button>
-        ))}
+      <div className="flex items-center gap-2 flex-wrap text-[10px] font-bold uppercase tracking-wider">
+        <div className="flex bg-slate-950 border border-slate-900 rounded-xl p-1 w-fit">
+          {(["new", "assigned", "done"] as const).map((t) => (
+            <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 rounded-lg cursor-pointer transition-all ${tab === t ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>
+              {t === "new" ? "New" : t === "assigned" ? "Assigned" : "Done"}
+            </button>
+          ))}
+        </div>
+        {/* The founder's own messages are four rows in a thousand — these chips dig them out. */}
+        <button onClick={() => setDmOnly((v) => !v)} className={`px-4 py-2.5 rounded-xl border cursor-pointer transition-all flex items-center gap-1.5 ${dmOnly ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-900 text-slate-400 hover:text-white"}`}>
+          <MessageSquare className="w-3 h-3" /><span>Direct messages</span>
+        </button>
+        <button onClick={() => setMediaOnly((v) => !v)} className={`px-4 py-2.5 rounded-xl border cursor-pointer transition-all flex items-center gap-1.5 ${mediaOnly ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-950 border-slate-900 text-slate-400 hover:text-white"}`}>
+          <Paperclip className="w-3 h-3" /><span>Photos &amp; files</span>
+        </button>
       </div>
 
       {loading ? (
@@ -178,6 +218,12 @@ export default function WhatsAppInboxPage() {
               </div>
             </div>
           ))}
+
+          {hasMore && (
+            <button onClick={loadMore} disabled={loadingMore} className="w-full px-4 py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-wider bg-slate-950 border border-slate-900 hover:border-indigo-600 text-slate-400 hover:text-white flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60">
+              {loadingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ChevronDown className="w-3.5 h-3.5" />}<span>Load more</span>
+            </button>
+          )}
         </div>
       )}
     </div>
