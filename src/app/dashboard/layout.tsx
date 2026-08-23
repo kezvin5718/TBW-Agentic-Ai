@@ -74,7 +74,7 @@ export default async function DashboardLayout({
     { name: "3 · Campaign Planning", href: "/dashboard/planning", icon: ClipboardList, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "4 · Approvals Flow", href: "/dashboard/approvals", icon: CheckSquare, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "Task Manager", href: "/dashboard/task-manager", icon: ListTodo, roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "Call Notes", href: "/dashboard/calls", icon: Phone, roles: ["founder", "employee"], section: "Client Workflow" },
+    { name: "Call Notes", href: "/dashboard/calls", icon: Phone, roles: ["founder"], section: "Client Workflow" },
     { name: "5 · Style Library", href: "/dashboard/style-library", icon: Palette, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "5b · Plan → Posts", href: "/dashboard/production/plan-posts", icon: Wand2, roles: ["founder", "employee"], section: "Client Workflow" },
     { name: "6 · Image Studio", href: "/dashboard/image-studio", icon: Image, roles: ["founder", "employee"], section: "Client Workflow" },

@@ -6,12 +6,15 @@ export const dynamic = "force-dynamic";
 // Transcribing an hour of audio and reading it back takes a while.
 export const maxDuration = 300;
 
-async function requireStaff() {
+// Calls are the founder's own: they carry client conversations nobody else on the
+// team is meant to read back. The per-owner branches below stay as they are, so
+// letting staff in again later is this one line.
+async function requireFounder() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const role = (user?.user_metadata?.role as string) || "client";
   if (!user) return { error: NextResponse.json({ error: "Your session has expired. Please sign in again." }, { status: 401 }) };
-  if (!["founder", "employee"].includes(role)) return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
+  if (role !== "founder") return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
   return { user, isFounder: role === "founder" };
 }
 
@@ -20,7 +23,7 @@ async function requireStaff() {
  * the whole picture; a manager sees only their own.
  */
 export async function GET() {
-  const guard = await requireStaff();
+  const guard = await requireFounder();
   if (guard.error) return guard.error;
 
   const admin = createServiceRoleClient();
@@ -50,7 +53,7 @@ export async function GET() {
  * all over again.
  */
 export async function POST(request: NextRequest) {
-  const guard = await requireStaff();
+  const guard = await requireFounder();
   if (guard.error) return guard.error;
 
   const body = await request.json();
@@ -99,7 +102,7 @@ export async function POST(request: NextRequest) {
 
 /** DELETE — remove a recording and any drafts still waiting on it. */
 export async function DELETE(request: NextRequest) {
-  const guard = await requireStaff();
+  const guard = await requireFounder();
   if (guard.error) return guard.error;
 
   const body = await request.json().catch(() => ({}));

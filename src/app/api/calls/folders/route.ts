@@ -6,12 +6,15 @@ import { sweepCallFolders } from "@/lib/call-watcher";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+// Founder-only, same as /api/calls — a watched folder is a way into the calls.
+// The per-owner branches below are left standing so staff can be let back in
+// by loosening this one line.
 async function me() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const role = (user?.user_metadata?.role as string) || "client";
   if (!user) return { error: NextResponse.json({ error: "Your session has expired. Please sign in again." }, { status: 401 }) };
-  if (!["founder", "employee"].includes(role)) return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
+  if (role !== "founder") return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
   return { user, isFounder: role === "founder" };
 }
 
