@@ -14,6 +14,14 @@ interface SpecRow {
   imagePrompt?: string | null;
 }
 interface PhotoRow { id: string; seq: number; image_url: string; file_name: string | null; description: string | null }
+/** What the running build reports about itself. Counts, never a guess. */
+interface BuildProgress {
+  startedAt: string; updatedAt: string; totalFrames: number; doneFrames: number;
+  step: string; finished: boolean; note: string;
+}
+/** A slow image model is two attempts and minutes of honest waiting, so silence
+ *  is not proof of death — past this, say so without claiming the run is dead. */
+const STALE_MS = 90_000;
 
 export default function PlanPostsPage() {
   const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
@@ -41,6 +49,10 @@ export default function PlanPostsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [working, setWorking] = useState<"" | "photos" | "generate">("");
   const [uploadPct, setUploadPct] = useState(0);
+  const [progress, setProgress] = useState<BuildProgress | null>(null);
+  // Its own second hand: elapsed and the stale warning have to keep counting
+  // when the server has gone quiet, which is precisely when they matter.
+  const [nowMs, setNowMs] = useState(Date.now());
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   // Nothing is selected to begin with. While the templates are still being
   // judged, building the whole month by accident is the expensive mistake.
@@ -95,6 +107,27 @@ export default function PlanPostsPage() {
   }, [planId, styleSel]);
 
   useEffect(() => { analyse(); }, [analyse]);
+
+  // While a build is in flight, ask it where it has got to. The request answers
+  // once, minutes later; this is the only way the page can say anything true in
+  // between. A missed poll is not news — the next one is two seconds away.
+  useEffect(() => {
+    if (working !== "generate" || !planId) { setProgress(null); return; }
+    let alive = true;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/production/plan-posts/progress?planId=${planId}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (alive) setProgress(data.progress || null);
+      } catch { /* ignore */ }
+    };
+    poll();
+    setNowMs(Date.now());
+    const pollId = setInterval(poll, 2000);
+    const tickId = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => { alive = false; clearInterval(pollId); clearInterval(tickId); };
+  }, [working, planId]);
 
   // Returning to the tab refreshes quietly — but not more than once a minute;
   // window focus fires on every alt-tab and each analyse is a real request.
@@ -166,6 +199,16 @@ export default function PlanPostsPage() {
   };
 
   const shortOfPhotos = analysis ? Math.max(0, analysis.photosRequired - analysis.photos.length) : 0;
+
+  // Real counts only. The bar moves when a frame is finished and at no other
+  // time — a bar that animates itself would keep crawling forward through a run
+  // that had already died, which is worse than the spinner it replaces.
+  const buildPct = progress && progress.totalFrames > 0
+    ? Math.round((progress.doneFrames / progress.totalFrames) * 100)
+    : 0;
+  const elapsedS = progress ? Math.max(0, Math.round((nowMs - Date.parse(progress.startedAt)) / 1000)) : 0;
+  const quietS = progress ? Math.max(0, Math.round((nowMs - Date.parse(progress.updatedAt)) / 1000)) : 0;
+  const stalled = !!progress && !progress.finished && quietS * 1000 > STALE_MS;
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -409,13 +452,34 @@ export default function PlanPostsPage() {
                 {working === "generate" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
                 <span>
                   {working === "generate"
-                    ? "Building…"
+                    ? progress && progress.totalFrames > 0 ? `Building… ${buildPct}%` : "Building…"
                     : picked.length === 0
                     ? "Pick a post to build"
                     : `Build ${picked.length} post${picked.length === 1 ? "" : "s"}`}
                 </span>
               </button>
             </div>
+
+            {/* What the build itself says it is doing. The server log always knew;
+                this is the first time the founder can see it. */}
+            {working === "generate" && (
+              <div className="space-y-1.5 pt-1">
+                <div className="h-1 bg-slate-900 rounded-full overflow-hidden">
+                  <div className="h-full bg-[var(--yellow)] transition-all duration-200" style={{ width: `${buildPct}%` }} />
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  {progress
+                    ? `${progress.doneFrames} of ${progress.totalFrames || "?"} frame${progress.totalFrames === 1 ? "" : "s"} · ${buildPct}% · ${progress.step}`
+                    : "Starting the build…"}
+                  {` · ${elapsedS}s elapsed`}
+                </p>
+                {stalled && (
+                  <p className="text-[11px] text-amber-300">
+                    No movement for {quietS}s — the image model may be slow, or this run may have stopped. The page will say when it finishes.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         </>
       )}

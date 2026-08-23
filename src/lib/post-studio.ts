@@ -392,6 +392,19 @@ function frameLayout(spec: PostSpec, frame: number, width: number, height: numbe
   return { bandTop: Math.round(height * 0.94), content: { ...spec, headline: "", subtext: "", cta: "" } };
 }
 
+/** What a running build writes to monthly_plans.build_progress as it works. */
+export interface BuildProgress {
+  startedAt: string;
+  updatedAt: string;
+  /** Frames this run set out to make, and how many it has got through. */
+  totalFrames: number;
+  doneFrames: number;
+  /** Where it is right now, in the founder's words rather than the log's. */
+  step: string;
+  finished: boolean;
+  note: string;
+}
+
 export interface RenderedPost {
   buffer: Buffer;
   note: string;
@@ -519,10 +532,43 @@ export async function generatePlanPosts(
 ): Promise<{ created: number; failed: number; notes: string[] }> {
   const admin = createServiceRoleClient();
 
+  // The run's own account of where it has got to, written as it goes.
+  //
+  // A build answers once, four minutes later. Until now the only place its
+  // truth existed was the server log — which says exactly where it is and is
+  // never seen — so the founder watched a spinner and could not tell a working
+  // batch from a hung one. Every write below sits beside the console.log it
+  // mirrors, so the two cannot drift apart.
+  //
+  // Like logUsage, this must never take down the work it describes: a failed
+  // write is swallowed and the build carries on.
+  const progress: BuildProgress = {
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    totalFrames: 0,
+    doneFrames: 0,
+    step: "Starting…",
+    finished: false,
+    note: "",
+  };
+  const report = async (patch: Partial<BuildProgress>): Promise<void> => {
+    Object.assign(progress, patch, { updatedAt: new Date().toISOString() });
+    try {
+      await admin.from("monthly_plans").update({ build_progress: progress }).eq("id", planId);
+    } catch {
+      // Never let bookkeeping take down the build being booked.
+    }
+  };
+
   // Check the destination before making anything. Rendering and generating cost
   // real money, and there is no point spending it on posts that have nowhere to
   // be saved.
   if (!(await isDriveConnected())) {
+    await report({
+      step: "Google Drive isn't connected",
+      finished: true,
+      note: "Nothing was built — reconnect Drive under Integrations and run this again.",
+    });
     return {
       created: 0,
       failed: 0,
@@ -537,6 +583,9 @@ export async function generatePlanPosts(
   const t0 = Date.now();
   const since = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
   console.log(`🎨 Studio: analysing plan ${planId}…`);
+  // Written before the design pass, which is itself a slow model call on a
+  // cache miss — that silence was the worst of the wait.
+  await report({ step: "Designing the posts…" });
 
   // Design under the same style the page was showing, or the build quietly
   // makes something other than what was previewed.
@@ -560,6 +609,14 @@ export async function generatePlanPosts(
 
   const chosen = (wanted ? plan.specs.filter((s) => wanted.has(s.item)) : plan.specs).slice(0, limit);
 
+  // The denominator is every frame this run set out to make. A product post
+  // skipped for want of a photo still counts toward it — the skip note in the
+  // result explains the shortfall, and a denominator that shifts under the bar
+  // is exactly the dishonesty this is meant to end.
+  const totalFrames = chosen.reduce((n, s) => n + s.frames, 0);
+  let doneFrames = 0;
+  await report({ totalFrames, step: `${chosen.length} post(s) to build · ${totalFrames} frame(s)` });
+
   // The batch has to finish answering before something upstream cuts the line.
   // The Surat run proved what happens otherwise: slow image generations pushed
   // the request past the six-minute mark, the connection died as a bare 502,
@@ -576,8 +633,13 @@ export async function generatePlanPosts(
   const overBudget = () => Date.now() - t0 > BUDGET_MS;
   const unattempted: number[] = [];
   let paused = false;
+  let postNo = 0;
 
   for (const spec of chosen) {
+    // Position in this run, not the calendar row number: building posts 6 and 9
+    // on their own should read "Post 1 of 2", not "Post 6 of 2".
+    postNo++;
+    const where = (frame: number) => `Post ${postNo} of ${chosen.length} · frame ${frame + 1} of ${spec.frames}`;
     if (paused) {
       unattempted.push(spec.item + 1);
       continue;
@@ -585,6 +647,10 @@ export async function generatePlanPosts(
     const photos = photoByItem[String(spec.item)] || [];
     if (spec.kind === "product" && photos.length === 0) {
       notes.push(`Post ${spec.item + 1} (“${spec.headline}”) skipped — it needs a product photo.`);
+      // Its frames were counted in the total, so credit them here or a healthy
+      // run finishes at 80% and the bar teaches the founder to distrust it.
+      doneFrames += spec.frames;
+      await report({ doneFrames });
       continue;
     }
 
@@ -605,8 +671,10 @@ export async function generatePlanPosts(
       }
       try {
         console.log(`   ↳ post ${spec.item + 1} frame ${frame + 1}/${spec.frames}: rendering… (${since()})`);
+        await report({ step: `${where(frame)} · rendering` });
         const { buffer, note, content } = await renderFrame(spec, photos[frame] || photos[0] || null, frame, client?.logo_url, styleBlock);
         console.log(`   ↳ post ${spec.item + 1} frame ${frame + 1}: rendered, checking and filing… (${since()})`);
+        await report({ step: `${where(frame)} · checking and filing` });
 
         // Judge the frame and file it at the same time. Both only need the
         // finished buffer and neither depends on the other, but running them in
@@ -637,6 +705,7 @@ export async function generatePlanPosts(
           // stored — the first four failures cost four generations for nothing.
           if (/not connected|rejected the saved|out of space/i.test(storeErr || "")) {
             notes.push("Stopped here — every remaining post would fail the same way.");
+            await report({ step: "Stopped — Google Drive refused the upload", finished: true, note: "Every remaining post would have failed the same way." });
             return { created, failed, notes };
           }
           continue;
@@ -673,6 +742,12 @@ export async function generatePlanPosts(
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`   ❌ post ${spec.item + 1} frame ${frame + 1} failed after ${since()}: ${msg}`);
         notes.push(`Post ${spec.item + 1}: ${msg}`);
+      } finally {
+        // Done means attempted. A frame that failed is still a frame nobody is
+        // waiting on any more, and counting only the successes would leave the
+        // bar short of the end on a run that had finished.
+        doneFrames++;
+        await report({ doneFrames });
       }
     }
   }
@@ -684,5 +759,10 @@ export async function generatePlanPosts(
   }
 
   console.log(`🎨 Studio: finished in ${since()} — ${created} created, ${failed} failed${paused ? ", paused early" : ""}.`);
+  await report({
+    step: `Finished — ${created} made${failed ? `, ${failed} failed` : ""}`,
+    finished: true,
+    note: paused ? "Paused — click Build again to continue." : "",
+  });
   return { created, failed, notes };
 }
