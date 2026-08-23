@@ -584,6 +584,45 @@ export default function PlanningIndexPage() {
    * whole import without a word, and 5b went on showing whatever the plan held
    * before. The moment of acceptance is the moment of persistence.
    */
+  /**
+   * Saves just the style and colours onto the already-imported plan.
+   *
+   * A clean import auto-saves and jumps the wizard forward — which also
+   * carried the founder away from the only controls that set style and
+   * colour. This gives the art-direction panel its own Apply, so the choice
+   * can be made (or changed) at the moment the panel is actually read.
+   */
+  const [applyingStyle, setApplyingStyle] = useState(false);
+  const applyStyleColours = async () => {
+    setApplyingStyle(true);
+    try {
+      const response = await fetch("/api/planning/save-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: selectedClient,
+          month: selectedMonth,
+          strategySummary: strategySummary || "Imported plan",
+          contentPillars: pillars,
+          contentCalendar: calendarSlots,
+          budgetSummary: { allocations: budgetAllocations },
+          styleCategory: importStyle,
+          colorPalette: parsePalette(importColors),
+          status: "draft",
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not save the style and colours");
+      const chips = parsePalette(importColors);
+      setImportNote({
+        ok: true,
+        text: `Style ${importStyle ? `"${importStyle}"` : "(client default)"}${chips.length ? ` and colours ${chips.join(", ")}` : ""} saved — 5b will design every prompt under them.`,
+      });
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not save the style and colours");
+    } finally { setApplyingStyle(false); }
+  };
+
   const keepImportedSlots = async () => {
     setKeepSaving(true);
     try {
@@ -754,6 +793,43 @@ export default function PlanningIndexPage() {
           {artDirection.styleClash && (
             <p className="text-[11px] text-amber-200">⚠ {artDirection.styleClash}</p>
           )}
+          {/* The import jumps the wizard forward the moment it saves — these
+              controls follow the founder here so the choice isn't stranded on
+              the step they were just moved off. */}
+          <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-900">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Style &amp; colours for this plan</span>
+            <select
+              value={importStyle}
+              onChange={(e) => setImportStyle(e.target.value)}
+              className="bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white text-[10px] focus:outline-none"
+            >
+              <option value="">Style: client default</option>
+              <option value="traditional">Traditional</option>
+              <option value="modern">Modern</option>
+              <option value="surreal">Surreal</option>
+              <option value="boutique">Boutique</option>
+            </select>
+            <input
+              type="text"
+              value={importColors}
+              onChange={(e) => setImportColors(e.target.value)}
+              placeholder="#1A1A2E, #D4AF37 (optional)"
+              className="flex-1 min-w-[180px] bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-white text-[10px] placeholder-slate-600 focus:outline-none"
+            />
+            <div className="flex items-center gap-1">
+              {parsePalette(importColors).map((hex, i) => (
+                <span key={`${hex}-${i}`} title={hex} className="inline-block w-4 h-4 rounded border border-slate-700" style={{ backgroundColor: hex }} />
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={applyStyleColours}
+              disabled={applyingStyle}
+              className="text-[10px] font-bold px-3 py-1.5 rounded-lg border bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-500 cursor-pointer disabled:opacity-50"
+            >
+              {applyingStyle ? "Saving…" : "Save style & colours"}
+            </button>
+          </div>
         </div>
       )}
 
