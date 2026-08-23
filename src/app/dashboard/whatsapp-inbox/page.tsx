@@ -18,6 +18,7 @@ interface Item {
   status: string;
   extracted: boolean;
   task_id: string | null;
+  draft_id: string | null;
   is_dm: boolean | null;
   sender_number: string | null;
   media_url: string | null;
@@ -201,6 +202,7 @@ export default function WhatsAppInboxPage() {
                 </div>
                 <div className="flex items-center gap-1.5">
                   {i.is_task && <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-indigo-950/40 border border-indigo-900 text-indigo-400">TASK</span>}
+                  {i.draft_id && <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-emerald-950/40 border border-emerald-900 text-emerald-400">🧵 READ AS ONE CONVERSATION</span>}
                   {i.urgency && <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${URG[i.urgency]}`}>{i.urgency.toUpperCase()}</span>}
                   {!i.extracted && <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-slate-500 flex items-center space-x-1"><AlertTriangle className="w-2.5 h-2.5" /><span>UNSCANNED</span></span>}
                 </div>

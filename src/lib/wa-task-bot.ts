@@ -33,6 +33,8 @@ interface InboxRow {
   media_note?: string | null;
   media_kind?: string | null;
   from_me?: boolean | null;
+  is_dm?: boolean | null;
+  sender_number?: string | null;
   sender_name: string | null;
   message_text: string | null;
   received_at: string;
@@ -87,7 +89,7 @@ export async function runWhatsAppTaskBot(): Promise<BotResult> {
   // without a draft, and must not come back round on the next run.
   const { data: rows, error } = await admin
     .from("wa_inbox")
-    .select("id, group_jid, group_name, sender_name, message_text, received_at, client_id, media_url, media_note, media_kind, from_me")
+    .select("id, group_jid, group_name, sender_name, message_text, received_at, client_id, media_url, media_note, media_kind, from_me, is_dm, sender_number")
     .is("clustered_at", null)
     .order("received_at", { ascending: true })
     .limit(300);
@@ -123,6 +125,12 @@ export async function runWhatsAppTaskBot(): Promise<BotResult> {
       out.clusters++;
       const ids = cluster.map((c) => c.id);
       const groupName = cluster[0].group_name || "";
+      // A one-to-one chat has no group to name; calling it `group: ""` was reading
+      // to the model as a conversation with nobody in it.
+      const isDm = cluster[0].is_dm === true || !cluster[0].group_name;
+      const header = isDm
+        ? `Direct chat with "${cluster[0].sender_name || cluster[0].sender_number || "unknown number"}"`
+        : `WhatsApp group: "${groupName}"`;
       // A filed creative or transcribed voice note is often the whole point of
       // the conversation — the task must carry it, not say "[media]".
       const transcript = cluster
@@ -141,6 +149,7 @@ export async function runWhatsAppTaskBot(): Promise<BotResult> {
       }
 
       let drafts: DraftedTask[] = [];
+      let summary = "";
       try {
         const raw = await complete({
           purpose: "whatsapp-tasks",
@@ -149,15 +158,22 @@ export async function runWhatsAppTaskBot(): Promise<BotResult> {
             "The messages are one short conversation — read them together, not separately. " +
             "Only create a task when the client is actually asking the agency to do, change or deliver something. " +
             "Chit-chat, thanks, greetings and approvals ('nice', 'ok', 'good work') are NOT tasks. " +
+            "A client sending a photo, video or file IS a request, even if they wrote only 'check this' or nothing at all — " +
+            "in an agency a creative arrives to be reviewed, used, scheduled or actioned. " +
+            "The transcript describes what each attachment actually shows: use that description to say concretely what was sent. " +
+            "When there is media and you cannot tell what they want done with it, CREATE the task " +
+            "(e.g. \"Review the creative <client> sent\") rather than returning none. " +
             "If the conversation contains two genuinely separate requests, return two tasks. Output only JSON.",
           messages: [{
             role: "user",
             content:
               `Known clients: ${clientList || "(none)"}\n` +
               `Team members: ${teamList || "(none)"}\n` +
-              `WhatsApp group: "${groupName}"\n\n` +
+              `${header}\n\n` +
               `Conversation:\n"""\n${transcript}\n"""\n\n` +
-              `Return JSON: { "tasks": [ { ` +
+              `Return JSON: { ` +
+              `"summary": "<one plain-English line saying what this whole conversation is about>", ` +
+              `"tasks": [ { ` +
               `"title": "<short imperative task title>", ` +
               `"description": "<what exactly is being asked, including any numbers, prices or names mentioned>", ` +
               `"client": "<exact client name from the known list, or empty if you cannot tell>", ` +
@@ -166,16 +182,25 @@ export async function runWhatsAppTaskBot(): Promise<BotResult> {
               `"priority": "<one of: ${PRIORITIES.join(", ")}>", ` +
               `"assignee": "<the team member best suited from the list, or empty>" ` +
               `} ] }\n` +
-              `Return { "tasks": [] } if nothing is being asked of the agency.`,
+              `Always fill in "summary", even when there is no task. ` +
+              `Return "tasks": [] if nothing is being asked of the agency.`,
           }],
           model: MODEL_SMART,
           jsonSchema: { type: "object" },
           maxTokens: 700,
         });
-        drafts = safeJsonParse<{ tasks: DraftedTask[] }>(raw, { tasks: [] }).tasks || [];
+        const read = safeJsonParse<{ tasks: DraftedTask[]; summary?: string }>(raw, { tasks: [] });
+        drafts = read.tasks || [];
+        summary = (read.summary || "").trim();
       } catch (err) {
         out.errors.push(`${groupName || "group"}: ${err instanceof Error ? err.message : String(err)}`);
         continue; // leave the messages unclaimed so the next run retries them
+      }
+
+      // The model read the whole conversation; every card in it now says what that
+      // conversation was about, instead of showing one fragment nobody can follow.
+      if (summary) {
+        await admin.from("wa_inbox").update({ ai_summary: summary.slice(0, 500) }).in("id", ids);
       }
 
       if (drafts.length === 0) {
