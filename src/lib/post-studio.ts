@@ -499,7 +499,9 @@ export async function generatePlanPosts(
   const since = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
   console.log(`🎨 Studio: analysing plan ${planId}…`);
 
-  const plan = await analysePlan(planId);
+  // Design under the same style the page was showing, or the build quietly
+  // makes something other than what was previewed.
+  const plan = await analysePlan(planId, options.styleCategory || undefined);
   console.log(`🎨 Studio: plan analysed at ${since()} — ${plan.specs.length} post(s) designed.`);
   const limit = options.limit ?? 30;
   // Building one or two posts at a time is the sane way to judge whether the

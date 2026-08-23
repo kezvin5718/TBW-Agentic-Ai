@@ -181,6 +181,21 @@ function parseWithRepair(raw: string, fallback: FullPlan): FullPlan {
   return direct;
 }
 
+/** Notes that ask for a black or near-black frame. */
+const DARK_DIRECTION = /black|dark|charcoal|noir|moody/i;
+
+/**
+ * One word for what each Style Library shelf looks like, used only to say why
+ * a chosen style and the plan's own notes disagree. A shelf whose word is
+ * itself dark can't clash with a dark note, so it never raises the warning.
+ */
+const STYLE_TONE: Record<string, string> = {
+  traditional: "warm",
+  modern: "bright",
+  surreal: "moody",
+  boutique: "warm",
+};
+
 /** Rough count of how many dated entries the author's file visibly contains. */
 function countDateSignals(text: string): number {
   const patterns = [
@@ -217,6 +232,10 @@ export async function POST(request: NextRequest) {
     const file = form.get("file") as File | null;
     const clientId = form.get("clientId") as string | null;
     const month = form.get("month") as string | null;
+    // The Style Library shelf the founder picked before uploading. Nothing is
+    // generated from it here — it is only compared against what the plan's own
+    // notes demand, so a clash is found now rather than in the creatives.
+    const style = ((form.get("style") as string | null) || "").trim();
     if (!file) return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     if (!clientId || !month) return NextResponse.json({ error: "clientId and month are required" }, { status: 400 });
 
@@ -367,6 +386,18 @@ Return ONLY valid JSON.`;
 
     const withDirection = merged.contentCalendar.filter((s) => (s.productionNote || "").trim()).length;
 
+    // What the plan itself asks for, read straight off the rows. A "black
+    // teaser week" written into the notes is a decision about the month, and
+    // the founder should meet it here — not in a batch of finished creatives.
+    const notes = merged.contentCalendar.map((s) => (s.productionNote || "").trim()).filter(Boolean);
+    const sample = Array.from(new Set(notes)).slice(0, 5).map((n) => n.slice(0, 110));
+    const darkCount = notes.filter((n) => DARK_DIRECTION.test(n)).length;
+    const styleTone = STYLE_TONE[style] || "";
+    const styleClash =
+      style && darkCount > 0 && !DARK_DIRECTION.test(styleTone)
+        ? `${darkCount} row(s) call for dark/black frames, but the chosen style is "${style}"${styleTone ? ` (${styleTone})` : ""}. The plan's notes win where explicit — expect those posts to come out dark unless the notes are edited.`
+        : null;
+
     // What the creative pipeline will be missing when it builds these posts.
     // Colours in particular are silently substituted with "tasteful neutrals"
     // when absent, so the gap never surfaces — it just produces off-brand work.
@@ -391,6 +422,7 @@ Return ONLY valid JSON.`;
       truncatedChars: readWholeFile ? 0 : Math.max(0, text.length - coveredChars),
       chunks: chunks.length,
       rowsWithDirection: withDirection,
+      artDirection: { directed: withDirection, sample, darkCount, styleClash },
       dateSignals,
       underExtracted,
       // Everything the wizard should ask about before this plan is produced.

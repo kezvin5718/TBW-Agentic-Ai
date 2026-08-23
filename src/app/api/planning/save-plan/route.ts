@@ -43,6 +43,14 @@ export async function POST(request: Request) {
       contentCalendar,
       budgetSummary,
       status = "draft",
+      // The Style Library shelf picked at import. Left out entirely by older
+      // callers — and an absent field must never wipe a choice someone made,
+      // so only a field that was actually sent is written. "" clears it.
+      styleCategory,
+      // The colours this month is to be built in, same only-when-provided
+      // rule. An empty array is the founder saying "back to the brand brain",
+      // so it clears the override rather than storing nothing.
+      colorPalette,
       // True when the save is fired automatically right after an import
       // parses. It saves without a click — but never silently over a plan
       // someone authored: that replacement still takes the explicit button.
@@ -92,6 +100,8 @@ export async function POST(request: Request) {
           budget_summary: budgetSummary || {},
           deliverables,
           status: status,
+          ...(styleCategory !== undefined ? { style_category: styleCategory || null } : {}),
+          ...(colorPalette !== undefined ? { color_palette: Array.isArray(colorPalette) && colorPalette.length > 0 ? colorPalette : null } : {}),
         })
         .eq("id", existingPlan.id)
         .select()
@@ -114,6 +124,8 @@ export async function POST(request: Request) {
           budget_summary: budgetSummary || {},
           deliverables,
           status: status,
+          ...(styleCategory !== undefined ? { style_category: styleCategory || null } : {}),
+          ...(colorPalette !== undefined ? { color_palette: Array.isArray(colorPalette) && colorPalette.length > 0 ? colorPalette : null } : {}),
         })
         .select()
         .single();

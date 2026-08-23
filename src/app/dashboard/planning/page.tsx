@@ -83,6 +83,16 @@ export default function PlanningIndexPage() {
   const [calendarSlots, setCalendarSlots] = useState<CalendarSlot[]>([]);
   // What the importer actually managed to read, said out loud.
   const [importNote, setImportNote] = useState<{ ok: boolean; text: string } | null>(null);
+  // The Style Library shelf this plan is imported under. Empty = the client's
+  // own default. It rides along with the import and is stored on the plan, so
+  // 5b designs every prompt under the style chosen here.
+  const [importStyle, setImportStyle] = useState<string>("");
+  // Colours for this month, typed as the founder has them to hand. Whatever
+  // isn't a colour code is dropped rather than guessed at, and what survives
+  // is shown back as chips before anything is saved.
+  const [importColors, setImportColors] = useState<string>("");
+  // What the plan's own production notes demand, read at import.
+  const [artDirection, setArtDirection] = useState<{ directed: number; sample: string[]; darkCount: number; styleClash: string | null } | null>(null);
   // Plan promises N, contract says M — shown until acted on or dismissed.
   const [deliverableGap, setDeliverableGap] = useState<{ clientId: string; clientName: string; planned: number; contract: number; breakdown: string } | null>(null);
   const [gapSaving, setGapSaving] = useState(false);
@@ -104,6 +114,14 @@ export default function PlanningIndexPage() {
 
   const needsAnything = (n: PlanNeeds | null) =>
     !!n && (n.placeholders.length > 0 || n.openQuestions.length > 0 || n.brandGaps.colors || n.brandGaps.fonts);
+
+  /** Colour codes out of whatever was typed — a missing "#" is forgiven, anything else is dropped. */
+  const parsePalette = (raw: string): string[] =>
+    raw
+      .split(/[\s,]+/)
+      .filter(Boolean)
+      .map((token) => (token.startsWith("#") ? token : `#${token}`))
+      .filter((token) => /^#[0-9a-fA-F]{6}$/.test(token));
 
   /** Put the answers into the rows and the brand brain, then close the panel. */
   const resolveNeeds = async () => {
@@ -492,10 +510,12 @@ export default function PlanningIndexPage() {
       fd.append("file", file);
       fd.append("clientId", selectedClient);
       fd.append("month", selectedMonth);
+      fd.append("style", importStyle);
       const res = await fetch("/api/planning/import", { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || "Failed to import plan");
       applyPlan(data.plan);
+      setArtDirection(data.artDirection || null);
       const rows = (data.plan?.contentCalendar || []).length;
       if (needsAnything(data.needs)) {
         setNeeds(data.needs);
@@ -520,6 +540,8 @@ export default function PlanningIndexPage() {
               contentPillars: data.plan?.contentPillars || [],
               contentCalendar: data.plan?.contentCalendar || [],
               budgetSummary: data.plan?.budgetSummary || { allocations: [] },
+              styleCategory: importStyle,
+              colorPalette: parsePalette(importColors),
               status: "draft",
               autoImport: true,
             }),
@@ -575,6 +597,8 @@ export default function PlanningIndexPage() {
           contentPillars: pillars,
           contentCalendar: calendarSlots,
           budgetSummary: { allocations: budgetAllocations },
+          styleCategory: importStyle,
+          colorPalette: parsePalette(importColors),
           status: "draft",
         }),
       });
@@ -708,6 +732,28 @@ export default function PlanningIndexPage() {
       {importNote && (
         <div className={`p-4 rounded-xl border text-xs flex items-start space-x-2 ${importNote.ok ? "bg-emerald-950/20 border-emerald-900/50 text-emerald-200" : "bg-amber-950/20 border-amber-900/50 text-amber-200"}`}>
           <span>{importNote.text}</span>
+        </div>
+      )}
+
+      {/* The art direction the plan itself carries. Shown at import so a month
+          of black teasers is a decision made here, not a surprise in the
+          finished creatives. */}
+      {artDirection && (
+        <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 space-y-2 text-xs">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Art direction in this plan</p>
+          <p className="text-slate-300">
+            {artDirection.directed} row{artDirection.directed === 1 ? "" : "s"} carry your production direction.
+          </p>
+          {artDirection.sample.length > 0 && (
+            <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-500">
+              {artDirection.sample.map((note, i) => (
+                <li key={i}>{note}</li>
+              ))}
+            </ul>
+          )}
+          {artDirection.styleClash && (
+            <p className="text-[11px] text-amber-200">⚠ {artDirection.styleClash}</p>
+          )}
         </div>
       )}
 
@@ -901,14 +947,51 @@ export default function PlanningIndexPage() {
                         <Wand2 className="w-3.5 h-3.5" />
                         <span>Generate Full Plan (GPT-4o)</span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="flex items-center justify-center space-x-2 bg-slate-900 border border-slate-800 hover:border-indigo-600 text-white font-bold py-2.5 px-4 rounded-xl text-xs cursor-pointer"
-                      >
-                        <Upload className="w-3.5 h-3.5" />
-                        <span>Import Plan (HTML / PDF)</span>
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="flex-1 flex items-center justify-center space-x-2 bg-slate-900 border border-slate-800 hover:border-indigo-600 text-white font-bold py-2.5 px-4 rounded-xl text-xs cursor-pointer"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Import Plan (HTML / PDF)</span>
+                        </button>
+                        {/* Chosen before the upload, because it is stored on the
+                            plan and every image prompt 5b writes obeys it. */}
+                        <select
+                          value={importStyle}
+                          onChange={(e) => setImportStyle(e.target.value)}
+                          className="bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-[10px] focus:outline-none"
+                        >
+                          <option value="">Style: client default</option>
+                          <option value="traditional">Traditional</option>
+                          <option value="modern">Modern</option>
+                          <option value="surreal">Surreal</option>
+                          <option value="boutique">Boutique</option>
+                        </select>
+                      </div>
+                    </div>
+                    {/* Colours stored on the plan outrank the brand brain for
+                        this month — a festive week in maroon and gold is set
+                        here rather than argued with afterwards. */}
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={importColors}
+                        onChange={(e) => setImportColors(e.target.value)}
+                        placeholder="#1A1A2E, #D4AF37 — colours for this plan (optional)"
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-white text-[10px] placeholder-slate-600 focus:outline-none"
+                      />
+                      <div className="flex items-center gap-1">
+                        {parsePalette(importColors).map((hex, i) => (
+                          <span
+                            key={`${hex}-${i}`}
+                            title={hex}
+                            className="inline-block w-4 h-4 rounded border border-slate-700"
+                            style={{ backgroundColor: hex }}
+                          />
+                        ))}
+                      </div>
                     </div>
                     <input
                       ref={fileInputRef}

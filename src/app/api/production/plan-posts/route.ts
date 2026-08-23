@@ -30,10 +30,12 @@ export async function GET(request: NextRequest) {
   if (!planId) return NextResponse.json({ error: "planId required" }, { status: 400 });
 
   try {
-    const plan = await analysePlan(planId);
-    const admin = createServiceRoleClient();
-    // ?style= overrides; otherwise the client's default category applies.
+    // ?style= overrides; otherwise the plan's own choice, then the client's
+    // default. The override goes into the design pass too, so the prompts
+    // shown here are the ones this style actually produces.
     const styleParam = url.searchParams.get("style");
+    const plan = await analysePlan(planId, styleParam || undefined);
+    const admin = createServiceRoleClient();
     const styleCategory = styleParam !== null ? (styleParam || null) : plan.styleDefault;
 
     const [{ data: photos }, { data: made }, { data: styleRows }] = await Promise.all([

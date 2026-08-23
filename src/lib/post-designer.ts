@@ -90,7 +90,7 @@ function normaliseType(format?: string, platform?: string): string {
  * producing a static image for a row that asked for video would be a lie the
  * reviewer has to catch.
  */
-export async function analysePlan(planId: string): Promise<{
+export async function analysePlan(planId: string, styleOverride?: string | null): Promise<{
   clientId: string;
   clientName: string;
   month: string;
@@ -99,14 +99,14 @@ export async function analysePlan(planId: string): Promise<{
   photosRequired: number;
   generated: number;
   skippedReels: number;
-  /** The client's default Style Library category — 5b pre-selects it. */
+  /** The style this plan was designed under — caller's pick, else the plan's import-time choice, else the client default. 5b pre-selects it. */
   styleDefault: string | null;
   specs: PostSpec[];
 }> {
   const admin = createServiceRoleClient();
   const { data: plan } = await admin
     .from("monthly_plans")
-    .select("id, client_id, month, content_calendar, strategy_summary, designed_specs, designed_hash, clients(name, default_style_category)")
+    .select("id, client_id, month, content_calendar, strategy_summary, designed_specs, designed_hash, style_category, color_palette, clients(name, default_style_category)")
     .eq("id", planId)
     .single();
   if (!plan) throw new Error("Plan not found.");
@@ -126,12 +126,23 @@ export async function analysePlan(planId: string): Promise<{
     .eq("client_id", plan.client_id)
     .maybeSingle();
 
-  const colors = ((brain?.colors as string[] | null) || []).filter(Boolean);
+  // Colours the founder fixed for THIS plan at import outrank the brand's
+  // recorded palette — this is how one campaign goes warm ivory while the
+  // brand card still says black-and-gold, without editing Brand Brain.
+  const planColors = (Array.isArray(plan.color_palette) ? (plan.color_palette as unknown[]) : [])
+    .filter((c): c is string => typeof c === "string" && /^#[0-9a-fA-F]{6}$/.test(c));
+  const colors = planColors.length > 0 ? planColors : ((brain?.colors as string[] | null) || []).filter(Boolean);
 
   // What the founder's approved Style Library actually looks like — in the
   // room BEFORE the design is chosen. Without this the director invented
   // "pure black typographic slides" for a warm, soft-lit boutique brand.
-  const styleDefault = (plan.clients as { default_style_category?: string | null } | null)?.default_style_category || null;
+  // Resolution order: the caller's explicit pick (5b's dropdown), then the
+  // style chosen when the plan was imported, then the client's default.
+  const styleDefault =
+    styleOverride ||
+    (plan.style_category as string | null) ||
+    (plan.clients as { default_style_category?: string | null } | null)?.default_style_category ||
+    null;
   const houseLook = await houseLookDigest(styleDefault);
 
   // Reels need footage, not a still — leave them for the video pipeline.
@@ -144,7 +155,7 @@ export async function analysePlan(planId: string): Promise<{
   // fully known: the calendar and the brand brain. Hash them; when nothing
   // changed, the stored design IS the design. This is what lets the page
   // refresh freely — a cache hit is one database read.
-  const designHash = fnvHash(JSON.stringify([calendar, brain?.colors, brain?.caption_tone, brain?.design_preferences, brain?.brand_brief, brain?.feedback_log, houseLook]));
+  const designHash = fnvHash(JSON.stringify([calendar, colors, brain?.caption_tone, brain?.design_preferences, brain?.brand_brief, brain?.feedback_log, styleDefault, houseLook]));
   const cached = plan.designed_hash === designHash && Array.isArray(plan.designed_specs) ? (plan.designed_specs as PostSpec[]) : null;
 
   // The founder's last corrections, in their own words. These are the whole
@@ -163,7 +174,9 @@ For each row of the content calendar, produce a brief. You are deciding how a po
 Who this brand is:
 ${String(brain?.brand_brief || "Not recorded.").slice(0, 1500)}
 
-Brand colours available: ${colors.length ? colors.join(", ") : "none recorded — use tasteful neutrals"}.
+${planColors.length
+    ? `COLOURS FIXED FOR THIS PLAN. The founder chose this exact palette when the plan was imported — every backgroundHex, accentHex and textHex you write comes from these codes or harmonises directly with them, and no other palette overrides them: ${planColors.join(", ")}.`
+    : `Brand colours available: ${colors.length ? colors.join(", ") : "none recorded — use tasteful neutrals"}.`}
 Caption tone: ${brain?.caption_tone || "warm, premium, plain-spoken"}.
 ${houseLook ? `
 THE HOUSE LOOK. The founder has curated a Style Library of approved reference designs, and this is what they have in common:
