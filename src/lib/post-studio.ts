@@ -107,7 +107,13 @@ function textLayer(spec: PostSpec, width: number, height: number, bandTop: numbe
   // measured off the bold-sans table, and serif advances are narrower, so the
   // estimate only ever errs toward a size step down — never toward clipping.
   const display = spec.typeStyle === "serif" ? "Cormorant Garamond, DejaVu Serif" : "DejaVu Sans";
+  // An editorial brand centres its axis — mark at the top middle, every line
+  // hung off the same centre. Ranging it all left is a magazine sidebar, not
+  // the founder's grid. The sans layout is untouched.
+  const centred = spec.typeStyle === "serif";
   const marginX = Math.round(width * 0.08);
+  const textX = centred ? Math.round(width / 2) : marginX;
+  const anchor = centred ? ` text-anchor="middle"` : "";
   const avail = width - marginX * 2;
   const portrait = height > width;
   const bandH = height - bandTop;
@@ -156,7 +162,7 @@ function textLayer(spec: PostSpec, width: number, height: number, bandTop: numbe
   const parts: string[] = [];
   for (const line of head.lines) {
     parts.push(
-      `<text x="${marginX}" y="${y}" font-family="${display}" font-size="${head.size}" font-weight="bold" fill="${spec.textHex}">${esc(line)}</text>`
+      `<text x="${textX}" y="${y}"${anchor} font-family="${display}" font-size="${head.size}" font-weight="bold" fill="${spec.textHex}">${esc(line)}</text>`
     );
     y += headLead;
   }
@@ -165,7 +171,7 @@ function textLayer(spec: PostSpec, width: number, height: number, bandTop: numbe
     y += Math.round(subLines.size * 0.6);
     for (const line of subLines.lines) {
       parts.push(
-        `<text x="${marginX}" y="${y}" font-family="${display}" font-size="${subLines.size}" fill="${spec.textHex}" opacity="0.88">${esc(line)}</text>`
+        `<text x="${textX}" y="${y}"${anchor} font-family="${display}" font-size="${subLines.size}" fill="${spec.textHex}" opacity="0.88">${esc(line)}</text>`
       );
       y += subLead;
     }
@@ -176,9 +182,11 @@ function textLayer(spec: PostSpec, width: number, height: number, bandTop: numbe
     const padX = Math.round(ctaSize * 0.95);
     const padY = Math.round(ctaSize * 0.55);
     const textW = Math.round(lineEm(spec.cta, true) * ctaSize);
+    const pillW = Math.min(avail, textW + padX * 2);
+    const pillX = centred ? Math.round((width - pillW) / 2) : marginX;
     parts.push(
-      `<rect x="${marginX}" y="${y - ctaSize}" rx="${Math.round(ctaSize * 0.75)}" width="${Math.min(avail, textW + padX * 2)}" height="${ctaSize + padY * 2}" fill="${spec.accentHex}" />`,
-      `<text x="${marginX + padX}" y="${y + Math.round(padY * 0.55)}" font-family="DejaVu Sans" font-size="${ctaSize}" font-weight="bold" fill="${spec.backgroundHex}">${esc(spec.cta)}</text>`
+      `<rect x="${pillX}" y="${y - ctaSize}" rx="${Math.round(ctaSize * 0.75)}" width="${pillW}" height="${ctaSize + padY * 2}" fill="${spec.accentHex}" />`,
+      `<text x="${centred ? textX : pillX + padX}" y="${y + Math.round(padY * 0.55)}"${anchor} font-family="DejaVu Sans" font-size="${ctaSize}" font-weight="bold" fill="${spec.backgroundHex}">${esc(spec.cta)}</text>`
     );
   }
 
@@ -266,17 +274,34 @@ async function productBase(photoUrl: string, width: number, areaH: number): Prom
 }
 
 /**
- * The client's logo, in a soft white chip in the top-left corner.
+ * clients.logo_url is a bucket-relative path ("logos/1786….png"), not a URL.
+ * Handing that straight to a fetch failed quietly, and every creative shipped
+ * without the brand mark on it. Anything already carrying a scheme is left
+ * exactly as it is.
+ */
+function resolveLogoUrl(path?: string | null): string | null {
+  if (!path) return null;
+  if (/^https?:\/\//i.test(path)) return path;
+  const base = (process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+  if (!base) return null;
+  return `${base}/storage/v1/object/public/brand-assets/${path.replace(/^\/+/, "")}`;
+}
+
+/**
+ * The client's logo, in a soft white chip at the top of the frame — the corner
+ * for a sans layout, dead centre for a serif one, where the founder's own grid
+ * puts its mark.
  *
  * A designer never ships a post without the mark on it; the pipeline was
  * skipping it entirely. The chip is there so the logo stays legible over a
  * dark photo just as reliably as a light one, and it is small on purpose —
- * this is a corner credit, not a second headline.
+ * this is a credit, not a second headline.
  */
-async function logoLayer(logoUrl: string | null | undefined, width: number, height: number): Promise<OverlayOptions[]> {
-  if (!logoUrl) return [];
+async function logoLayer(logoUrl: string | null | undefined, width: number, height: number, centred = false): Promise<OverlayOptions[]> {
+  const resolved = resolveLogoUrl(logoUrl);
+  if (!resolved) return [];
   try {
-    const buf = await fetchImageBytes(logoUrl);
+    const buf = await fetchImageBytes(resolved);
     if (!buf) return [];
     const maxW = Math.round(width * 0.2);
     const maxH = Math.round(height * 0.07);
@@ -297,9 +322,11 @@ async function logoLayer(logoUrl: string | null | undefined, width: number, heig
       </svg>`
     );
 
+    const chipLeft = centred ? Math.round((width - (lw + pad * 2)) / 2) : margin;
+
     return [
-      { input: chip, top: margin, left: margin },
-      { input: resized, top: margin + pad, left: margin + pad },
+      { input: chip, top: margin, left: chipLeft },
+      { input: resized, top: margin + pad, left: chipLeft + pad },
     ];
   } catch {
     return [];
@@ -425,7 +452,7 @@ export async function renderFrame(
 
   if (!base) base = await canvas(spec, width, height);
 
-  const logo = await logoLayer(logoUrl, width, height);
+  const logo = await logoLayer(logoUrl, width, height, spec.typeStyle === "serif");
 
   const composed = await sharp(base)
     .composite([

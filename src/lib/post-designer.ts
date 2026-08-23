@@ -82,7 +82,7 @@ const SQUARE_PLATFORMS = ["instagram", "facebook", "linkedin", "pinterest"];
  * matter how the rules were rewritten. Changing this re-designs every plan on
  * its next visit.
  */
-const PROMPT_VERSION = "design-v2";
+const PROMPT_VERSION = "design-v3";
 
 /** 9:16 for stories, 1:1 for everything else. */
 export function shapeFor(spec: PostSpec): "square" | "portrait" {
@@ -223,7 +223,7 @@ Be conservative: if a post could plausibly need a real product photograph, call 
 
 Rules:
 - headline: 3-7 words, the words that go large on the image. No hashtags, no emoji. If the row has a "hook", that IS the headline — trim it to fit rather than rewriting it into something blander.
-- subtext: one short supporting line, or an empty string. Draw it from the row's caption or slide copy where there is one; do not invent a new claim.
+- subtext: one short supporting line, or an empty string. Draw it from the row's caption or slide copy where there is one; do not invent a new claim. It must ADD something the headline does not already say — never repeat the headline, and never paraphrase it in other words. If there is nothing to add, return an empty string: the same sentence printed twice is worse than one.
 - cta: short, from the row's CTA if it has one.
 - scenePrompt must follow the row's productionNote wherever one exists, including its prohibitions ("no logo", "no product", "no faces").
 - backgroundHex / accentHex / textHex: real hex codes. Use the brand colours and the house palette; make sure text contrasts strongly with the background. Never #000000 unless the productionNote itself demands black.
@@ -301,6 +301,12 @@ Return STRICTLY:
       contentType !== "carousel" ? 1
       : slideCopy.length >= 2 ? slideCopy.length
       : Math.min(5, Math.max(3, Number(got?.frames) || 3));
+    // The rules forbid a subtext that only says the headline again; this is what
+    // makes it true. A frame shipped with one sentence set twice, large then
+    // small, and no reviewer should have to catch that.
+    const headline = String(got?.headline || item.concept || "").slice(0, 80);
+    const subtextSaid = String(got?.subtext || "").slice(0, 120);
+    const subtext = echoes(subtextSaid, headline) ? "" : subtextSaid;
     specs.push({
       item: i,
       date: item.date || null,
@@ -310,8 +316,8 @@ Return STRICTLY:
       // matters is inventing a product, not asking for a picture we didn't need.
       kind: got?.kind === "generated" ? "generated" : "product",
       frames,
-      headline: String(got?.headline || item.concept || "").slice(0, 80),
-      subtext: String(got?.subtext || "").slice(0, 120),
+      headline,
+      subtext,
       cta: String(got?.cta || item.CTA || "").slice(0, 60),
       backgroundHex: hexOr(got?.backgroundHex, colors[0] || "#1c1917"),
       accentHex: hexOr(got?.accentHex, colors[1] || "#d4af37"),
@@ -354,6 +360,15 @@ function fnvHash(text: string): string {
     h = Math.imul(h, 0x01000193);
   }
   return (h >>> 0).toString(16);
+}
+
+/** Same words as the headline, whatever the casing or punctuation. */
+function echoes(subtext: string, headline: string): boolean {
+  const flat = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const a = flat(subtext);
+  const b = flat(headline);
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
 }
 
 function hexOr(value: unknown, fallback: string): string {
