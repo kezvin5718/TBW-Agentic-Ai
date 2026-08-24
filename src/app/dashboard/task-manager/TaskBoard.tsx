@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Avatar from "../Avatar";
+import { fmtIST, fmtISTDate } from "@/lib/time";
 import {
   Loader2, Plus, X, Check, Users, Rows3,
-  Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2, Pencil, ScanLine,
+  Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2, Pencil, ScanLine, ChevronDown,
 } from "lucide-react";
 
 interface Task {
@@ -34,6 +35,11 @@ const TYPE_LABEL: Record<string, string> = {
 const PRIORITY_DOT: Record<string, string> = {
   urgent: "bg-red-500", high: "bg-rose-400", medium: "bg-amber-400", low: "bg-slate-600",
 };
+/** Where a task came from, in the words a manager uses for it. */
+const SOURCE_LABEL: Record<string, string> = {
+  manual: "Manager", whatsapp: "WhatsApp", call: "Call",
+  excel_import: "Excel import", sheet_scan: "Job sheet", plan: "Plan",
+};
 const STATUS_STYLE: Record<string, string> = {
   todo: "bg-slate-900 border-slate-800 text-slate-400",
   in_progress: "bg-blue-950/40 border-blue-900 text-blue-400",
@@ -57,6 +63,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   const [busy, setBusy] = useState<string | null>(null);
   const [tab, setTab] = useState<"open" | "done">("open");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [filterMember, setFilterMember] = useState("");
   const [filterClient, setFilterClient] = useState("");
   // How the list is ordered. Due-soonest stays the default — it is the order
@@ -263,17 +270,60 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
    * bottom in one pass — task, client, who has it, when it landed, when it is
    * due — and fills the empty space under the shorter columns.
    */
+  const toggleExpanded = (id: string) => setExpanded((p) => ({ ...p, [id]: !p[id] }));
+
+  const metaChip = (label: string, value: string) => (
+    <span key={label} className="text-[9px] bg-slate-900/60 border border-slate-800 rounded px-1.5 py-0.5 whitespace-nowrap">
+      <span className="font-bold uppercase tracking-wider text-slate-600">{label}</span>
+      <span className="ml-1 font-semibold text-slate-300 capitalize">{value}</span>
+    </span>
+  );
+
+  /**
+   * The whole task, opened in place.
+   *
+   * A row can only ever carry a truncated title, and at review time the
+   * description is the part that decides anything — it was written, stored and
+   * never shown. Read-only on purpose: changing a task still goes through the
+   * pencil, so nothing is edited by accident while reading.
+   */
+  const taskDetail = (t: Task) => (
+    <div className="px-3 pb-3 pt-2 space-y-2 border-t border-slate-900/70">
+      <p className="text-xs font-semibold text-white break-words">{t.title || "Untitled task"}</p>
+      {t.description?.trim()
+        ? <p className="text-[11px] text-slate-400 leading-relaxed whitespace-pre-wrap break-words">{t.description}</p>
+        : <p className="text-[11px] text-slate-600 italic">No description was written.</p>}
+      <div className="flex flex-wrap gap-1">
+        {metaChip("Type", TYPE_LABEL[t.type] || t.type || "Task")}
+        {metaChip("Priority", t.priority || "medium")}
+        {metaChip("Client", t.clients?.name || "—")}
+        {metaChip("Due", fmtISTDate(t.deadline))}
+        {metaChip("Assigned", fmtIST(t.created_at))}
+        {metaChip("From", SOURCE_LABEL[t.source] || t.source || "Manager")}
+      </div>
+    </div>
+  );
+
   const oneLine = (t: Task) => {
+    const isOpen = !!expanded[t.id];
     const overdue = new Date(t.deadline).getTime() < now && t.status !== "done";
     const assignedOn = new Date(t.created_at);
     const ageDays = Math.floor((now - assignedOn.getTime()) / 86400000);
     const member = team.find((m) => m.name.toLowerCase() === (t.assignee_name || "").toLowerCase());
     return (
       <div key={t.id}
-        className="grid grid-cols-12 gap-2 items-center px-3 py-2 rounded-lg border border-slate-900 bg-slate-950/60 hover:border-slate-800 transition-colors">
+        className="rounded-lg border border-slate-900 bg-slate-950/60 hover:border-slate-800 transition-colors">
+      <div className="grid grid-cols-12 gap-2 items-center px-3 py-2">
         <div className="col-span-12 md:col-span-4 flex items-center gap-2 min-w-0">
+          <button onClick={() => toggleExpanded(t.id)} title={isOpen ? "Hide the full task" : "Show the full task"}
+            className="shrink-0 -ml-1 p-1 rounded text-slate-600 hover:text-indigo-400 cursor-pointer">
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+          </button>
           <span className={`shrink-0 w-2 h-2 rounded-full ${PRIORITY_DOT[t.priority] || PRIORITY_DOT.medium}`} title={`Priority: ${t.priority}`} />
-          <span className="text-xs font-semibold text-white truncate" title={t.title || ""}>{t.title || "Untitled task"}</span>
+          <button onClick={() => toggleExpanded(t.id)} title={t.title || ""}
+            className="min-w-0 text-left text-xs font-semibold text-white truncate py-1.5 -my-1.5 hover:text-indigo-300 cursor-pointer">
+            {t.title || "Untitled task"}
+          </button>
           {t.source === "whatsapp" && <MessageSquare className="w-3 h-3 shrink-0 text-emerald-500" aria-label="From WhatsApp" />}
           {t.source === "call" && <MessageSquare className="w-3 h-3 shrink-0 text-indigo-400" aria-label="From a call" />}
           {t.source === "excel_import" && <FileSpreadsheet className="w-3 h-3 shrink-0 text-slate-600" aria-label="Imported" />}
@@ -322,6 +372,8 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
             </>
           )}
         </div>
+      </div>
+      {isOpen && taskDetail(t)}
       </div>
     );
   };
@@ -611,10 +663,21 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                   <div className="px-2.5 pb-2.5 space-y-1">
                     {col.items.map((t) => {
                       const overdue = new Date(t.deadline).getTime() < now && t.status !== "done";
+                      const isOpen = !!expanded[t.id];
                       return (
-                        <div key={t.id} className="flex items-center gap-2 text-[10px] bg-slate-950/60 border border-slate-900/70 rounded-lg px-2 py-1.5">
+                        <div key={t.id} className="bg-slate-950/60 border border-slate-900/70 rounded-lg">
+                        <div className="flex items-center gap-2 text-[10px] px-2 py-1.5">
+                          <button onClick={() => toggleExpanded(t.id)} title={isOpen ? "Hide the full task" : "Show the full task"}
+                            className="shrink-0 -ml-1 p-1 rounded text-slate-600 hover:text-indigo-400 cursor-pointer">
+                            <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+                          </button>
                           <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${PRIORITY_DOT[t.priority] || PRIORITY_DOT.medium}`} />
-                          <span className="text-slate-300 truncate flex-1" title={t.title || ""}>{t.title || "Untitled"}</span>
+                          {/* A floor on the title: in a w-72 column the date, status
+                              and buttons would otherwise squeeze it out of the row. */}
+                          <button onClick={() => toggleExpanded(t.id)} title={t.title || ""}
+                            className="min-w-[64px] flex-1 text-left text-slate-300 truncate py-1.5 -my-1.5 hover:text-indigo-300 cursor-pointer">
+                            {t.title || "Untitled"}
+                          </button>
                           {t.clients?.name && <span className="text-slate-600 truncate max-w-[80px]">{t.clients.name}</span>}
                           <span className={`font-mono shrink-0 ${overdue ? "text-rose-400 font-bold" : "text-slate-500"}`}>
                             {new Date(t.deadline).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
@@ -636,6 +699,8 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                               <Trash2 className="w-3 h-3" />
                             </button>
                           )}
+                        </div>
+                        {isOpen && taskDetail(t)}
                         </div>
                       );
                     })}
