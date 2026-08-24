@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { fmtISTDate } from "@/lib/time";
-import { Loader2, Plus, Check, Trash2, Undo2, Sparkles, Search, X } from "lucide-react";
+import { Loader2, Plus, Check, Trash2, Sparkles, Search, X } from "lucide-react";
 
 interface FestivalRow { id: string; name: string; scheduled_at: string }
 interface Member { id: string; name: string; role_title: string | null }
@@ -19,6 +19,19 @@ interface FestivalTask {
   completed_at: string | null;
   clients?: { name: string } | null;
 }
+
+/** The stages a festival creative moves through, in the order it moves. */
+type Stage = "todo" | "review" | "approved";
+const STAGES: Stage[] = ["todo", "review", "approved"];
+const STATUS_LABEL: Record<Stage, string> = { todo: "To Do", review: "Review", approved: "Approved" };
+const STATUS_STYLE: Record<Stage, string> = {
+  todo: "bg-slate-900 border-slate-800 text-slate-400",
+  review: "bg-amber-950/40 border-amber-900 text-amber-400",
+  approved: "bg-emerald-950/40 border-emerald-900 text-emerald-400",
+};
+/** Rows written before the stages existed read as To Do rather than as nothing. */
+const stageOf = (t: { status: string }): Stage =>
+  (STAGES as string[]).includes(t.status) ? (t.status as Stage) : "todo";
 
 /**
  * Who is making which brand's festival creative.
@@ -92,9 +105,9 @@ export default function FestivalBoard() {
     } finally { setBusy(null); }
   };
 
-  /** Finishing (or reopening) moves the row between sections before the round trip. */
-  const setStatus = async (t: FestivalTask, status: "complete" | "pending") => {
-    setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, status, completed_at: status === "complete" ? new Date().toISOString() : null } : x)));
+  /** Moving a stage moves the row between sections before the round trip. */
+  const setStatus = async (t: FestivalTask, status: Stage) => {
+    setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, status, completed_at: status === "approved" ? new Date().toISOString() : null } : x)));
     await patch(t.id, { status });
   };
 
@@ -131,13 +144,20 @@ export default function FestivalBoard() {
   const onFestival = useMemo(() => new Set(tasks.map((t) => t.client_id)), [tasks]);
   const byName = (a: FestivalTask, b: FestivalTask) =>
     (a.clients?.name || "").localeCompare(b.clients?.name || "");
-  const pending = useMemo(() => tasks.filter((t) => t.status !== "complete").sort(byName), [tasks]);
-  const complete = useMemo(() => tasks.filter((t) => t.status === "complete").sort(byName), [tasks]);
+  // Anything waiting on a manager's eye comes before work still being made.
+  const pending = useMemo(
+    () => tasks.filter((t) => stageOf(t) !== "approved")
+      .sort((a, b) => (stageOf(a) === stageOf(b) ? byName(a, b) : stageOf(a) === "review" ? -1 : 1)),
+    [tasks]
+  );
+  const approved = useMemo(() => tasks.filter((t) => stageOf(t) === "approved").sort(byName), [tasks]);
+  const inReview = pending.filter((t) => stageOf(t) === "review").length;
 
   const searchable = clients.filter((c) => c.name.toLowerCase().includes(search.toLowerCase().trim()));
 
   const row = (t: FestivalTask) => {
-    const done = t.status === "complete";
+    const stage = stageOf(t);
+    const done = stage === "approved";
     return (
       <div key={t.id}
         className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg border border-slate-900 bg-slate-950/60 hover:border-slate-800 transition-colors">
@@ -167,17 +187,10 @@ export default function FestivalBoard() {
 
         {busy === t.id ? <Loader2 className="w-4 h-4 animate-spin text-indigo-400" /> : (
           <>
-            {done ? (
-              <button onClick={() => setStatus(t, "pending")} title="Put this back on the list"
-                className="flex items-center gap-1 min-h-10 px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">
-                <Undo2 className="w-3 h-3" /><span>Reopen</span>
-              </button>
-            ) : (
-              <button onClick={() => setStatus(t, "complete")} title="Mark this client's creative done"
-                className="flex items-center gap-1 min-h-10 px-3 py-2 rounded-lg bg-emerald-950/40 border border-emerald-900 text-[10px] font-bold text-emerald-300 hover:bg-emerald-900/40 cursor-pointer">
-                <Check className="w-3 h-3" /><span>Done</span>
-              </button>
-            )}
+            <select value={stage} onChange={(e) => setStatus(t, e.target.value as Stage)} title="Where this creative has got to"
+              className={`min-h-10 text-[10px] font-bold rounded-lg px-2 py-2 border cursor-pointer focus:outline-none ${STATUS_STYLE[stage]}`}>
+              {STAGES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
+            </select>
             <button onClick={() => remove(t.id)} title="Remove from this festival"
               className="w-10 h-10 flex items-center justify-center rounded-lg text-slate-700 hover:text-rose-400 cursor-pointer">
               <Trash2 className="w-3.5 h-3.5" />
@@ -262,20 +275,25 @@ export default function FestivalBoard() {
               <Sparkles className="w-3.5 h-3.5 text-[var(--yellow)]" />
               <span>Pending</span>
               <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{pending.length}</span>
+              {inReview > 0 && (
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-950/40 border border-amber-900 text-amber-400">
+                  {inReview} in review
+                </span>
+              )}
             </h3>
             {pending.length === 0
-              ? <p className="text-[11px] text-emerald-400">Every client on this festival is done.</p>
+              ? <p className="text-[11px] text-emerald-400">Every client on this festival is approved.</p>
               : <div className="space-y-1.5">{pending.map(row)}</div>}
           </div>
 
-          {complete.length > 0 && (
+          {approved.length > 0 && (
             <div className="space-y-2">
               <h3 className="text-xs font-bold text-slate-400 flex items-center gap-2">
                 <Check className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Complete</span>
-                <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{complete.length}</span>
+                <span>Approved</span>
+                <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{approved.length}</span>
               </h3>
-              <div className="space-y-1.5">{complete.map(row)}</div>
+              <div className="space-y-1.5">{approved.map(row)}</div>
             </div>
           )}
         </div>

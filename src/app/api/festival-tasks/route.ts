@@ -3,6 +3,9 @@ import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
+/** The stages a festival creative moves through. Approved is the end of it. */
+const STATUSES = ["todo", "review", "approved"];
+
 async function requireStaff() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -29,9 +32,10 @@ export async function GET(request: NextRequest) {
   if (!festivalId) return NextResponse.json({ error: "festivalId required" }, { status: 400 });
 
   const admin = createServiceRoleClient();
-  // "pending" sorts after "complete" alphabetically, so descending is what puts
-  // the outstanding work on top. Ordering by the client's name belongs to the
-  // embedded table and cannot order these rows, so the board sorts by name.
+  // Descending status happens to read todo → review → approved, so the
+  // outstanding work arrives first even before the board arranges it. Ordering
+  // by the client's name belongs to the embedded table and cannot order these
+  // rows, so the board sorts by name itself.
   const { data, error } = await admin
     .from("festival_tasks")
     .select("*, clients(name)")
@@ -62,7 +66,7 @@ export async function POST(request: NextRequest) {
   const { data, error } = await admin
     .from("festival_tasks")
     .upsert(
-      ids.map((clientId) => ({ festival_id: festivalId, client_id: clientId, status: "pending" })),
+      ids.map((clientId) => ({ festival_id: festivalId, client_id: clientId, status: "todo" })),
       { onConflict: "festival_id,client_id", ignoreDuplicates: true }
     )
     .select("id");
@@ -91,11 +95,15 @@ export async function PATCH(request: NextRequest) {
   if (teamMemberId !== undefined) patch.team_member_id = teamMemberId || null;
   if (assigneeName !== undefined) patch.assignee_name = String(assigneeName || "").trim().slice(0, 120) || null;
   if (status !== undefined) {
-    // Finishing stamps the hour it was finished; reopening takes the stamp away
-    // again, so "completed_at" never describes a task that is back in the list.
-    const done = status === "complete";
-    patch.status = done ? "complete" : "pending";
-    patch.completed_at = done ? new Date().toISOString() : null;
+    if (!STATUSES.includes(String(status))) {
+      return NextResponse.json({ error: `status must be one of: ${STATUSES.join(", ")}` }, { status: 400 });
+    }
+    // Approving stamps the hour it was approved; moving back down the stages
+    // takes the stamp away again, so "completed_at" never describes a creative
+    // that is still being worked on.
+    const approved = status === "approved";
+    patch.status = status;
+    patch.completed_at = approved ? new Date().toISOString() : null;
   }
   if (Object.keys(patch).length === 0) return NextResponse.json({ error: "Nothing to change" }, { status: 400 });
 
