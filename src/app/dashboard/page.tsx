@@ -3,13 +3,13 @@ import { fmtISTDate, istDateOffset } from "@/lib/time";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import MyTaskCard from "./MyTaskCard";
+import CronHealthCard from "./CronHealthCard";
 import {
   Sparkles,
   ChevronRight,
   TrendingUp,
   Award,
   Video,
-  Settings,
   Users,
   Eye,
   FileCheck2,
@@ -314,12 +314,9 @@ export default async function DashboardPage() {
           </p>
         </div>
         
-        {role === "founder" && (
-          <div className="flex items-center space-x-3 bg-slate-950/40 border border-slate-900 p-3 rounded-xl text-[10px] text-slate-400 font-medium">
-            <Settings className="w-4 h-4 text-indigo-400 animate-spin" style={{ animationDuration: '6s' }} />
-            <span>Systems online. Vercel Cron status: <strong className="text-emerald-400 font-extrabold">ACTIVE</strong></span>
-          </div>
-        )}
+        {/* "Cron status: ACTIVE" used to be printed here as a constant — green,
+            confident, and true only by coincidence. The Background jobs card
+            below reports what actually ran, which is the whole point of it. */}
       </div>
 
       {/* ================= FOUNDER DASHBOARD ================= */}
@@ -472,6 +469,9 @@ export default async function DashboardPage() {
                   </div>
                 )}
               </div>
+
+              {/* Are the nine background jobs still alive? Nothing here used to say. */}
+              <CronHealthCard />
 
             </div>
           </div>
