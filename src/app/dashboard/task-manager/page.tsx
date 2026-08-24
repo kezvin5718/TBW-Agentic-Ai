@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ListTodo, Users, MessageSquare } from "lucide-react";
+import { ListTodo, Users, MessageSquare, PartyPopper } from "lucide-react";
 import TaskBoard from "./TaskBoard";
+import FestivalBoard from "./FestivalBoard";
 import WhatsAppApprovals from "../whatsapp-inbox/page";
 
-type Tab = "board" | "team" | "whatsapp";
+type Tab = "board" | "team" | "festivals" | "whatsapp";
 
 export default function TaskManagerPage() {
   const [tab, setTab] = useState<Tab>("board");
@@ -26,6 +27,7 @@ export default function TaskManagerPage() {
   const tabs: { key: Tab; label: string; icon: typeof ListTodo; badge?: number | null }[] = [
     { key: "board", label: "Task Board", icon: ListTodo },
     { key: "team", label: "Team Tasks", icon: Users },
+    { key: "festivals", label: "Festivals", icon: PartyPopper },
     { key: "whatsapp", label: "WhatsApp Approvals", icon: MessageSquare, badge: waPending },
   ];
 
@@ -67,6 +69,7 @@ export default function TaskManagerPage() {
 
       {tab === "board" && <TaskBoard mode="board" />}
       {tab === "team" && <TaskBoard mode="team" />}
+      {tab === "festivals" && <FestivalBoard />}
       {tab === "whatsapp" && <WhatsAppApprovals />}
     </div>
   );
