@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import GlobalErrorMonitor from "./GlobalErrorMonitor";
 import SidebarNav from "./SidebarNav";
+import AccountControls from "./AccountControls";
 import { sectionKeyForPath } from "@/lib/sections";
 
 export default async function DashboardLayout({
@@ -105,6 +106,14 @@ export default async function DashboardLayout({
         <div className="absolute top-[-12%] left-[-8%] w-[45%] h-[45%] rounded-full blur-[90px] pointer-events-none z-0" style={{ background: "radial-gradient(circle, rgba(255,212,0,0.13), transparent 65%)" }} />
         <div className="absolute bottom-[-12%] right-[-6%] w-[42%] h-[42%] rounded-full blur-[90px] pointer-events-none z-0" style={{ background: "radial-gradient(circle, rgba(0,229,255,0.08), transparent 65%)" }} />
         <div className="tbw-grid-layer" />
+
+        {/* Account strip — a row of its own, not an overlay. Many pages already
+            put their own controls in the top-right corner (Scan new, Refresh,
+            tab strips); an absolutely positioned cluster would sit on top of
+            them. Below lg these controls live in the mobile top bar instead. */}
+        <div className="hidden lg:flex justify-end items-center h-12 px-10 shrink-0 relative z-10">
+          <AccountControls />
+        </div>
 
         {/* Content wrapper */}
         <div className="flex-1 p-4 sm:p-6 md:p-10 z-10 overflow-y-auto relative">

@@ -5,11 +5,10 @@ import Link from "next/link";
 import BrandLogo from "./BrandLogo";
 import Avatar from "./Avatar";
 import PendingSignupsBadge from "./PendingSignupsBadge";
-import ThemeToggle from "./ThemeToggle";
+import AccountControls from "./AccountControls";
 import {
   Sparkles,
   LayoutDashboard,
-  LogOut,
   UserPlus,
   BrainCircuit,
   ClipboardList,
@@ -149,19 +148,6 @@ export default function SidebarNav({ navItems, name, email, designation, avatarU
         })}
       </nav>
 
-      {/* Sidebar Footer / Theme + Signout */}
-      <div className="p-4 border-t border-slate-900">
-        <ThemeToggle />
-        <form action="/auth/signout" method="POST">
-          <button
-            type="submit"
-            className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 rounded-lg border border-slate-950 text-slate-400 hover:text-red-400 hover:bg-red-950/20 hover:border-red-950/50 text-sm font-semibold transition-all cursor-pointer group"
-          >
-            <LogOut className="w-4 h-4 text-slate-500 group-hover:text-red-400 transition-colors" />
-            <span>Logout Console</span>
-          </button>
-        </form>
-      </div>
     </>
   );
 
@@ -169,17 +155,20 @@ export default function SidebarNav({ navItems, name, email, designation, avatarU
     <>
       {/* Below lg — the bar that replaces the full-page menu */}
       <div className="lg:hidden flex items-center justify-between h-14 px-4 bg-slate-950/60 backdrop-blur-md border-b border-slate-900 shrink-0">
-        <Link href="/dashboard" className="flex items-center group">
+        <Link href="/dashboard" className="flex items-center group min-w-0">
           <BrandLogo />
         </Link>
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          aria-label="Open menu"
-          className="w-11 h-11 -mr-2 flex items-center justify-center rounded-lg text-slate-400 hover:text-white cursor-pointer"
-        >
-          <Menu className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          <AccountControls />
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            aria-label="Open menu"
+            className="w-11 h-11 -mr-2 flex items-center justify-center rounded-lg text-slate-400 hover:text-white cursor-pointer"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+        </div>
       </div>
 
       {/* Below lg — the drawer itself */}
