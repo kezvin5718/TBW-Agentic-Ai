@@ -20,18 +20,27 @@ interface FestivalTask {
   clients?: { name: string } | null;
 }
 
-/** The stages a festival creative moves through, in the order it moves. */
-type Stage = "todo" | "review" | "approved";
-const STAGES: Stage[] = ["todo", "review", "approved"];
-const STATUS_LABEL: Record<Stage, string> = { todo: "To Do", review: "Review", approved: "Approved" };
+/**
+ * The task board's stages, because the task row behind each of these IS the
+ * status. "Approved" is the founder's word for a finished festival creative;
+ * on the task board the same row reads "Done".
+ */
+type Stage = "todo" | "in_progress" | "review" | "done";
+const STAGES: Stage[] = ["todo", "in_progress", "review", "done"];
+const STATUS_LABEL: Record<Stage, string> = {
+  todo: "To Do", in_progress: "In Progress", review: "Review", done: "Approved",
+};
 const STATUS_STYLE: Record<Stage, string> = {
   todo: "bg-slate-900 border-slate-800 text-slate-400",
+  in_progress: "bg-blue-950/40 border-blue-900 text-blue-400",
   review: "bg-amber-950/40 border-amber-900 text-amber-400",
-  approved: "bg-emerald-950/40 border-emerald-900 text-emerald-400",
+  done: "bg-emerald-950/40 border-emerald-900 text-emerald-400",
 };
-/** Rows written before the stages existed read as To Do rather than as nothing. */
+/** Anything unrecognised reads as To Do rather than as nothing. */
 const stageOf = (t: { status: string }): Stage =>
   (STAGES as string[]).includes(t.status) ? (t.status as Stage) : "todo";
+/** Waiting on an eye first, then work under way, then work not started. */
+const PENDING_ORDER: Record<string, number> = { review: 0, in_progress: 1, todo: 2 };
 
 /**
  * Who is making which brand's festival creative.
@@ -107,7 +116,7 @@ export default function FestivalBoard() {
 
   /** Moving a stage moves the row between sections before the round trip. */
   const setStatus = async (t: FestivalTask, status: Stage) => {
-    setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, status, completed_at: status === "approved" ? new Date().toISOString() : null } : x)));
+    setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, status, completed_at: status === "done" ? new Date().toISOString() : null } : x)));
     await patch(t.id, { status });
   };
 
@@ -146,18 +155,18 @@ export default function FestivalBoard() {
     (a.clients?.name || "").localeCompare(b.clients?.name || "");
   // Anything waiting on a manager's eye comes before work still being made.
   const pending = useMemo(
-    () => tasks.filter((t) => stageOf(t) !== "approved")
-      .sort((a, b) => (stageOf(a) === stageOf(b) ? byName(a, b) : stageOf(a) === "review" ? -1 : 1)),
+    () => tasks.filter((t) => stageOf(t) !== "done")
+      .sort((a, b) => (PENDING_ORDER[stageOf(a)] - PENDING_ORDER[stageOf(b)]) || byName(a, b)),
     [tasks]
   );
-  const approved = useMemo(() => tasks.filter((t) => stageOf(t) === "approved").sort(byName), [tasks]);
+  const approved = useMemo(() => tasks.filter((t) => stageOf(t) === "done").sort(byName), [tasks]);
   const inReview = pending.filter((t) => stageOf(t) === "review").length;
 
   const searchable = clients.filter((c) => c.name.toLowerCase().includes(search.toLowerCase().trim()));
 
   const row = (t: FestivalTask) => {
     const stage = stageOf(t);
-    const done = stage === "approved";
+    const done = stage === "done";
     return (
       <div key={t.id}
         className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg border border-slate-900 bg-slate-950/60 hover:border-slate-800 transition-colors">

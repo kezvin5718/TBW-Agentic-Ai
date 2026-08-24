@@ -39,6 +39,7 @@ const PRIORITY_DOT: Record<string, string> = {
 const SOURCE_LABEL: Record<string, string> = {
   manual: "Manager", whatsapp: "WhatsApp", call: "Call",
   excel_import: "Excel import", sheet_scan: "Job sheet", plan: "Plan",
+  festival: "Festival",
 };
 const STATUS_STYLE: Record<string, string> = {
   todo: "bg-slate-900 border-slate-800 text-slate-400",
