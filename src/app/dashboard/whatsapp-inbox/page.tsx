@@ -212,7 +212,7 @@ export default function WhatsAppInboxPage() {
               {i.message_text && <p className="text-[11px] text-slate-500 whitespace-pre-wrap break-words">{i.message_text}</p>}
 
               {i.media_url && (
-                <div className="flex items-start gap-3 bg-slate-950/60 border border-slate-900 rounded-xl p-2">
+                <div className="flex flex-col sm:flex-row items-start gap-3 bg-slate-950/60 border border-slate-900 rounded-xl p-2">
                   {i.media_kind === "image" ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={i.media_url} alt={i.media_note || "attachment"} className="w-24 h-24 object-cover rounded-lg border border-slate-800" loading="lazy" />

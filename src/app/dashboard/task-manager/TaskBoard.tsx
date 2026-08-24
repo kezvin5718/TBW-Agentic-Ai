@@ -578,12 +578,14 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
 
       {/* Team tab: who is carrying what — every member's whole plate, full width. */}
       {!loading && mode === "team" && (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
+        // Below md the columns swipe sideways instead of stacking into one
+        // endless scroll; from md it is today's grid, untouched.
+        <div className="flex overflow-x-auto snap-x snap-mandatory md:overflow-visible md:grid md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
           {columns.map((col) => {
             const late = col.items.filter((t) => new Date(t.deadline).getTime() < now && t.status !== "done").length;
             const isCollapsed = !!collapsed[col.name];
             return (
-              <div key={col.name} className={`border rounded-2xl bg-slate-950/50 ${late > 0 ? "border-rose-900/50" : "border-slate-900"}`}>
+              <div key={col.name} className={`w-72 shrink-0 snap-start md:w-auto border rounded-2xl bg-slate-950/50 ${late > 0 ? "border-rose-900/50" : "border-slate-900"}`}>
                 <button onClick={() => setCollapsed((p) => ({ ...p, [col.name]: !p[col.name] }))}
                   title={isCollapsed ? "Show tasks" : "Hide tasks"}
                   className="w-full flex items-center justify-between px-3.5 py-2.5 cursor-pointer hover:bg-slate-900/40 rounded-2xl">

@@ -40,7 +40,7 @@ export default function TaskManagerPage() {
         </p>
       </div>
 
-      <div className="flex bg-slate-950 border border-slate-900 rounded-xl p-1 text-[10px] font-bold uppercase tracking-wider w-fit">
+      <div className="flex flex-wrap bg-slate-950 border border-slate-900 rounded-xl p-1 text-[10px] font-bold uppercase tracking-wider w-fit max-w-full">
         {tabs.map((t) => {
           const Icon = t.icon;
           return (

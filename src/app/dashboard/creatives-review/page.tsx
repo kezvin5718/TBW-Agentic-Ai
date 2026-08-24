@@ -137,7 +137,7 @@ export default function FounderCreativesReviewPage() {
     <div className="max-w-2xl mx-auto space-y-6">
       
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-slate-900 pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-900 pb-4">
         <div>
           <div className="flex items-center space-x-1.5 text-indigo-400 text-xs font-semibold uppercase tracking-wider mb-1">
             <ShieldCheck className="w-4 h-4" />
@@ -375,7 +375,7 @@ export default function FounderCreativesReviewPage() {
       {/* Reject notes modal */}
       {showRejectModal && (
         <div className="fixed inset-0 bg-black/75 z-55 flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-slate-950 border border-slate-900 p-6 rounded-3xl space-y-4.5">
+          <div className="w-full max-w-sm max-h-[85vh] overflow-y-auto bg-slate-950 border border-slate-900 p-6 rounded-3xl space-y-4.5">
             <div>
               <h4 className="text-sm font-bold text-white mb-1">Decline Creative Draft</h4>
               <p className="text-[10px] text-slate-500 font-sans">Provide revision notes. This reopens the assignee&apos;s task and alerts them.</p>

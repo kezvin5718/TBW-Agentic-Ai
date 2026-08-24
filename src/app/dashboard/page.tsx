@@ -384,7 +384,7 @@ export default async function DashboardPage() {
                     </div>
                   </div>
 
-                  <div className="bg-slate-900/10 border border-slate-900/40 p-4 rounded-xl flex items-center justify-between transition-colors hover:bg-slate-900/20">
+                  <div className="bg-slate-900/10 border border-slate-900/40 p-4 rounded-xl flex flex-wrap items-center justify-between gap-2 transition-colors hover:bg-slate-900/20">
                     <div className="space-y-0.5">
                       <span className="text-xs font-bold text-slate-200">Blended Ad Account ROAS</span>
                       <p className="text-[9.5px] text-slate-500">Calculated on lead valuations</p>
