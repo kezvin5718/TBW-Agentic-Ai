@@ -61,7 +61,7 @@ export async function writeCaptionForClient(input: CaptionInput): Promise<Captio
   if (!client) return { ok: false, error: "Client not found", code: "no_client" };
   const { data: brain } = await admin
     .from("brand_brain")
-    .select("brand_brief, caption_tone, design_preferences, feedback_log, addresses")
+    .select("brand_brief, caption_tone, design_preferences, feedback_log, addresses, caption_signature")
     .eq("client_id", clientId)
     .maybeSingle();
 
@@ -167,6 +167,8 @@ The 📍 and 📞 lines are mandatory and must both appear, exactly as given her
 
 The address and phone number appear EXACTLY ONCE in the whole caption — only in those two lines. Never mention the address, the location, or the phone number anywhere else: not in the hook, not in the body, not in the closing line.
 
+Do not write "follow @…" or cross-account promotion lines — those are appended automatically.
+
 Output only the caption, nothing else.`,
     }],
     model: chosenModel,
@@ -183,18 +185,32 @@ Output only the caption, nothing else.`,
   // the address twice. Rebuilding is surer than matching: strip every 📍/📞
   // line the model wrote, then place the canonical block once, where the
   // format says it goes — after the body, before the keywords.
+  //
+  // A brand may also end every caption with a fixed sign-off — the follow-lines
+  // for its other accounts. It is placed here rather than asked of the model for
+  // the same reason as the address: written by hand it comes out verbatim and
+  // once, and the model is told not to write follow-lines at all.
+  const signature = String(brain?.caption_signature || "").trim();
+  const signatureLines = new Set(signature.split("\n").map((l) => l.trim()).filter(Boolean));
   const contactBlock = `📍 ${addr!.address}\n📞 ${addr!.phone}`;
-  const kept = text.split("\n").filter((l) => !/^\s*[📍📞]/u.test(l));
+  const block = signature ? `${contactBlock}\n\n${signature}` : contactBlock;
+  // A model that has seen this brand's past captions may reproduce a follow-line
+  // itself; an exact repeat of one is dropped so the sign-off cannot double.
+  const kept = text
+    .split("\n")
+    .filter((l) => !/^\s*[📍📞]/u.test(l) && !signatureLines.has(l.trim()));
   const tail = kept.findIndex((l) => /^\s*(🏷️|#)/u.test(l));
-  if (tail === -1) kept.push("", contactBlock);
-  else kept.splice(tail, 0, contactBlock, "");
+  if (tail === -1) kept.push("", block);
+  else kept.splice(tail, 0, block, "");
   const withContact = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 
   // Reported so a caption that came back far short of the brief is visible
-  // rather than being discovered at posting time.
+  // rather than being discovered at posting time. The sign-off is matched line
+  // for line rather than by its "For " opening, so a body sentence that happens
+  // to begin with "For" still counts toward the length.
   const bodyWords = withContact
     .split("\n")
-    .filter((l) => !/^\s*(📍|📞|🏷️|#)/.test(l))
+    .filter((l) => !/^\s*(📍|📞|🏷️|#)/.test(l) && !signatureLines.has(l.trim()))
     .join(" ")
     .split(/\s+/)
     .filter(Boolean).length;
