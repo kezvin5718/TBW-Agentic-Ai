@@ -47,6 +47,13 @@ export async function applyBatchVerdict(batchId: string | null): Promise<{ rejec
   return { rejected: updated?.length || 0, reason };
 }
 
+/** What one caption attempt did, in words the screen can show. */
+export interface CaptionOutcome {
+  ok: boolean;
+  caption?: string;
+  error?: string;
+}
+
 /**
  * Writes the caption for an approved creative, once, in the background.
  *
@@ -54,8 +61,31 @@ export async function applyBatchVerdict(batchId: string | null): Promise<{ rejec
  * this on load would mean a vision read and a caption write per creative while
  * somebody watches a spinner, so it happens as QC passes instead — by the time
  * the team opens the tab the work is done.
+ *
+ * Returns true when a caption was written, for callers that only count.
  */
 export async function writeCaptionFor(uploadId: string, baseUrl: string, cookie: string): Promise<boolean> {
+  return (await captionForUpload(uploadId, baseUrl, cookie)).ok;
+}
+
+/**
+ * The same work, with the reason it did or didn't happen.
+ *
+ * The Automation screen asks for captions by hand now, so an empty box has to
+ * be able to say why it is empty — and `force` is what makes the ✨ beside a
+ * written caption mean "write me another one" rather than being ignored.
+ *
+ * Note what is NOT guarded here: a row left at 'failed' or 'no_contact' has an
+ * empty caption and a status that is not 'done', so it is picked up and tried
+ * again on its own. Only a real caption, or a row already marked done, is left
+ * alone — and `force` overrides even those.
+ */
+export async function captionForUpload(
+  uploadId: string,
+  baseUrl: string,
+  cookie: string,
+  opts: { force?: boolean } = {}
+): Promise<CaptionOutcome> {
   const admin = createServiceRoleClient();
   const { data: row } = await admin
     .from("creative_uploads")
@@ -63,12 +93,19 @@ export async function writeCaptionFor(uploadId: string, baseUrl: string, cookie:
     .eq("id", uploadId)
     .maybeSingle();
 
-  if (!row) return false;
-  // A Story carries no caption on either platform, and a caption the designer
-  // typed is theirs — neither gets overwritten.
-  if (row.festival_id || row.content_type === "story" || row.content_type === "thumbnail") return false;
-  if (String(row.caption || "").trim()) return false;
-  if (row.caption_status === "done") return false;
+  if (!row) return { ok: false, error: "That creative no longer exists." };
+  // A Story carries no caption on either platform, and a festival creative
+  // carries the line chosen for it on the Festivals board.
+  if (row.festival_id) return { ok: false, error: "Festival creatives carry their own line." };
+  if (row.content_type === "story" || row.content_type === "thumbnail") {
+    return { ok: false, error: "A Story carries no caption." };
+  }
+  // A caption the designer typed is theirs, unless someone explicitly asks for
+  // another one.
+  if (!opts.force) {
+    if (String(row.caption || "").trim()) return { ok: false, error: "This one already has a caption." };
+    if (row.caption_status === "done") return { ok: false, error: "This one already has a caption." };
+  }
 
   try {
     // Read the creative properly first — every part of a video, and the text
@@ -108,7 +145,7 @@ export async function writeCaptionFor(uploadId: string, baseUrl: string, cookie:
       if (data.code === "missing_contact") {
         await admin.from("creative_uploads").update({ caption_status: "no_contact" }).eq("id", uploadId);
         console.warn(`caption for upload ${uploadId} skipped: ${data.error}`);
-        return false;
+        return { ok: false, error: data.error || "No address or phone on file for this client." };
       }
       throw new Error(data.error || "no caption returned");
     }
@@ -117,12 +154,13 @@ export async function writeCaptionFor(uploadId: string, baseUrl: string, cookie:
       .from("creative_uploads")
       .update({ caption: data.caption, caption_status: "done" })
       .eq("id", uploadId);
-    return true;
+    return { ok: true, caption: data.caption as string };
   } catch (err: unknown) {
     // Not fatal: the Automation row simply shows an empty caption box the team
     // can fill or retry, which is where they were before this existed.
     await admin.from("creative_uploads").update({ caption_status: "failed" }).eq("id", uploadId);
-    console.error(`caption for upload ${uploadId} failed:`, err instanceof Error ? err.message : err);
-    return false;
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`caption for upload ${uploadId} failed:`, message);
+    return { ok: false, error: message };
   }
 }

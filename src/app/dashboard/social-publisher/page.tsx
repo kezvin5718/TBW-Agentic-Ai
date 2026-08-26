@@ -8,6 +8,58 @@ import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2,
 import PlatformIcon, { postLabel, PLATFORM_LABEL } from "./PlatformIcon";
 import { uploadDirect } from "@/lib/direct-upload";
 
+/** One creative's answer from the caption writer. */
+interface CaptionResult { id: string; ok: boolean; caption?: string; error?: string }
+
+/**
+ * A caption box that grows to fit what is in it.
+ *
+ * A hundred-and-twenty-word caption in a three-row box is read three lines at a
+ * time, which is how a wrong line survives being checked. The height is set
+ * from the content whenever the VALUE changes, not only on a keystroke —
+ * captions arrive from the writer long after the box first rendered.
+ */
+function AutoTextarea({
+  value, onChange, rows = 3, className = "", placeholder, disabled,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  rows?: number;
+  className?: string;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const floor = useRef(0);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // Measured once, before any height is forced on it, so the box never
+    // shrinks below the rows it was written with. A zero means it is not laid
+    // out yet — don't latch that, or the box keeps that height for good.
+    if (!floor.current && el.clientHeight > 0) floor.current = el.clientHeight;
+    el.style.height = "auto";
+    el.style.height = `${Math.max(el.scrollHeight, floor.current)}px`;
+  }, [value]);
+
+  // The ceiling is CSS, not arithmetic: a measurement taken while the pane is
+  // not laid out reads zero, and a computed cap would collapse the box to
+  // nothing at the moment someone most needs to read it.
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      rows={rows}
+      placeholder={placeholder}
+      disabled={disabled}
+      style={{ maxHeight: "60vh" }}
+      className={`${className} resize-none overflow-y-auto`}
+    />
+  );
+}
+
 interface ClientRow { id: string; name: string; logo?: string }
 interface HubUpload {
   id: string; client_id: string; file_url: string; file_name: string | null;
@@ -737,7 +789,6 @@ export default function SocialPublisherPage() {
   const [autoPlatforms, setAutoPlatforms] = useState<string[]>([]);
   const [autoAvailable, setAutoAvailable] = useState<string[]>([]);
   const [autoRejected, setAutoRejected] = useState(0);
-  const [autoAwaiting, setAutoAwaiting] = useState(0);
   const [autoLoading, setAutoLoading] = useState(false);
   const [autoSending, setAutoSending] = useState(false);
   const [cadence, setCadence] = useState<Cadence>("daily");
@@ -762,7 +813,13 @@ export default function SocialPublisherPage() {
   // With the whole row permanently draggable, selecting caption text in the
   // textarea starts a drag instead of a selection.
   const [dragArm, setDragArm] = useState<string | null>(null);
-  const [captionBusy, setCaptionBusy] = useState(false);
+  // Writing captions by hand: how far through, why a given row came back empty,
+  // and which single row is being rewritten right now.
+  const [writeAllBusy, setWriteAllBusy] = useState(false);
+  const [writeAllDone, setWriteAllDone] = useState(0);
+  const [writeAllTotal, setWriteAllTotal] = useState(0);
+  const [captionErrors, setCaptionErrors] = useState<Record<string, string>>({});
+  const [regenId, setRegenId] = useState<string | null>(null);
 
   /** Move one row to sit where another currently is, keeping the rest in order. */
   const reorder = (fromId: string, toId: string) => {
@@ -776,26 +833,81 @@ export default function SocialPublisherPage() {
     });
   };
 
-  /** Fill in the captions that are missing, including ones that failed before. */
-  const fillCaptions = async () => {
-    setCaptionBusy(true);
+  /**
+   * Write every empty caption box on screen, in small batches.
+   *
+   * The background writer this screen was built to wait on has never produced a
+   * caption in production, so the team needs to be able to ask for them.
+   */
+  const writeAllCaptions = async () => {
+    const todo = orderedRows
+      .filter((r) => r.content_type !== "story" && !(autoCaptions[r.id] ?? "").trim())
+      .map((r) => r.id);
+    if (todo.length === 0) {
+      setNotice({ ok: true, text: "Every caption box already has something in it." });
+      return;
+    }
+    setWriteAllBusy(true);
+    setWriteAllDone(0);
+    setWriteAllTotal(todo.length);
+    setCaptionErrors({});
     setNotice(null);
+    let failed = 0;
     try {
-      const res = await fetch("/api/social-publisher/automation", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId: autoClient, action: "captions" }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not write the captions");
+      // Eight per request: each caption is a vision read plus a writing call,
+      // and asking for many more than this outlives the request's own budget.
+      for (let i = 0; i < todo.length; i += 8) {
+        const slice = todo.slice(i, i + 8);
+        const res = await fetch("/api/social-publisher/auto-captions", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uploadIds: slice }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not write the captions");
+        for (const out of (data.results || []) as CaptionResult[]) {
+          if (out.ok && out.caption) setAutoCaptions((c) => ({ ...c, [out.id]: out.caption as string }));
+          else {
+            failed++;
+            setCaptionErrors((e) => ({ ...e, [out.id]: out.error || "could not be written" }));
+          }
+        }
+        setWriteAllDone(Math.min(i + slice.length, todo.length));
+      }
       setNotice({
-        ok: (data.failed || 0) === 0,
-        text: data.message + (data.remaining > 0 ? ` ${data.remaining} still without one — run it again.` : ""),
+        ok: failed === 0,
+        text: failed === 0
+          ? `${todo.length} caption${todo.length === 1 ? "" : "s"} written.`
+          : `${todo.length - failed} written, ${failed} could not be — the reason is under each box.`,
       });
-      await loadAutomation(autoClient);
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not write the captions" });
-    } finally { setCaptionBusy(false); }
+    } finally { setWriteAllBusy(false); }
   };
+
+  /**
+   * Write this one again, over whatever is in the box.
+   *
+   * No dialog: the box is editable text on a screen that has not sent anything
+   * yet, so the worst an accidental press costs is one caption to retype.
+   */
+  const regenerateCaption = async (id: string) => {
+    setRegenId(id);
+    setCaptionErrors((e) => { const next = { ...e }; delete next[id]; return next; });
+    try {
+      const res = await fetch("/api/social-publisher/auto-captions", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uploadIds: [id], force: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not write the caption");
+      const out = ((data.results || []) as CaptionResult[])[0];
+      if (out?.ok && out.caption) setAutoCaptions((c) => ({ ...c, [id]: out.caption as string }));
+      else setCaptionErrors((e) => ({ ...e, [id]: out?.error || "could not be written" }));
+    } catch (err: unknown) {
+      setCaptionErrors((e) => ({ ...e, [id]: err instanceof Error ? err.message : "could not be written" }));
+    } finally { setRegenId(null); }
+  };
+
   const [autoCaptions, setAutoCaptions] = useState<Record<string, string>>({});
   const [autoSkip, setAutoSkip] = useState<Set<string>>(new Set());
 
@@ -811,7 +923,6 @@ export default function SocialPublisherPage() {
       setAutoAvailable(data.platforms || []);
       setAutoPlatforms(data.platforms || []);
       setAutoRejected(data.rejected || 0);
-      setAutoAwaiting(data.awaitingCaption || 0);
       setAutoCaptions(Object.fromEntries(rows.map((r) => [r.id, r.caption || ""])));
       setAutoOrder(rows.map((r) => r.id));
       setAutoDates({});
@@ -1891,8 +2002,8 @@ export default function SocialPublisherPage() {
               Stories don&apos;t carry a caption — Instagram and Facebook drop this text. Add it onto the image, or also select Post/Reel.
             </p>
           )}
-          <textarea value={caption} onChange={(e) => setCaption(e.target.value)} rows={5} placeholder="Write the caption, or generate it from the brand's brain…"
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 resize-none leading-relaxed" />
+          <AutoTextarea value={caption} onChange={setCaption} rows={5} placeholder="Write the caption, or generate it from the brand's brain…"
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 leading-relaxed" />
         </div>
 
         {/* 4. Schedule + send */}
@@ -2050,6 +2161,7 @@ export default function SocialPublisherPage() {
                 <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Gap between posts on the same day</span>
                 <div className="flex bg-slate-950 border border-slate-800 rounded-lg p-0.5 flex-wrap">
                   {([
+                    { v: 1, label: "1m" },
                     { v: 5, label: "5m" },
                     { v: 10, label: "10m" },
                     { v: 30, label: "30m" },
@@ -2114,13 +2226,15 @@ export default function SocialPublisherPage() {
                 </label>
                 <div className="flex items-center gap-3 flex-wrap">
                   <span className="text-[10px] text-slate-600">Drag a row by ⠿ to reorder — the dates follow the sequence.</span>
-                  {autoAwaiting > 0 && (
-                    <button onClick={fillCaptions} disabled={captionBusy}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-[11px] font-bold text-black cursor-pointer disabled:opacity-50">
-                      {captionBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                      <span>{captionBusy ? "Writing…" : `Write ${autoAwaiting} missing caption(s)`}</span>
-                    </button>
-                  )}
+                  <button onClick={writeAllCaptions} disabled={writeAllBusy}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[11px] font-bold text-white cursor-pointer disabled:opacity-50">
+                    {writeAllBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                    <span>{writeAllBusy ? `writing ${writeAllDone} of ${writeAllTotal}…` : "Write all captions"}</span>
+                  </button>
+                  {/* The old amber "Write N missing caption(s)" button lived here,
+                      driving the per-client automation route. Two buttons writing
+                      captions is one too many — the indigo one covers the rows on
+                      screen with per-row feedback, so the amber one retired. */}
                 </div>
               </div>
 
@@ -2171,13 +2285,28 @@ export default function SocialPublisherPage() {
                       {r.content_type === "story" ? (
                         <p className="text-[10px] text-slate-600">Stories carry no caption — both platforms drop the text.</p>
                       ) : (
-                        <textarea
-                          value={autoCaptions[r.id] ?? ""}
-                          onChange={(e) => setAutoCaptions((c) => ({ ...c, [r.id]: e.target.value }))}
-                          rows={3}
-                          placeholder="Caption is written automatically once QC passes…"
-                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500 resize-none leading-relaxed"
-                        />
+                        <div className="space-y-1">
+                          <div className="flex items-start gap-1.5">
+                            <AutoTextarea
+                              value={autoCaptions[r.id] ?? ""}
+                              onChange={(v) => setAutoCaptions((c) => ({ ...c, [r.id]: v }))}
+                              rows={3}
+                              placeholder="Caption is written automatically once QC passes…"
+                              className="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500 leading-relaxed"
+                            />
+                            <button
+                              onClick={() => regenerateCaption(r.id)}
+                              disabled={regenId === r.id || writeAllBusy}
+                              title="Write this caption again"
+                              className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg border border-slate-800 bg-slate-950 text-slate-500 hover:text-indigo-400 hover:border-indigo-600 cursor-pointer disabled:opacity-40"
+                            >
+                              {regenId === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                          {captionErrors[r.id] && (
+                            <p className="text-[10px] text-amber-400">{captionErrors[r.id]}</p>
+                          )}
+                        </div>
                       )}
                     </div>
 
@@ -2882,8 +3011,8 @@ export default function SocialPublisherPage() {
 
                     <div>
                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Caption</label>
-                      <textarea value={editing.caption} onChange={(e) => setEditing({ ...editing, caption: e.target.value })} rows={4}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white resize-none leading-relaxed focus:outline-none focus:border-indigo-500" />
+                      <AutoTextarea value={editing.caption} onChange={(v) => setEditing({ ...editing, caption: v })} rows={4}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white leading-relaxed focus:outline-none focus:border-indigo-500" />
                       {storyHasNoCaption(libSel.content_type) && editing.caption && (
                         <p className="mt-1 text-[10px] text-amber-400">Stories drop the caption — this text won&apos;t appear.</p>
                       )}
