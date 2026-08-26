@@ -36,15 +36,13 @@ export async function POST(request: NextRequest) {
   }
 
   const { captionForUpload } = await import("@/lib/upload-batch");
-  const origin = request.nextUrl.origin;
-  const cookie = request.headers.get("cookie") || "";
   const force = body.force === true;
 
   // One at a time: each is a paid call, and a burst of forty would put the
   // whole batch at the mercy of one rate limit.
   const results: { id: string; ok: boolean; caption?: string; error?: string }[] = [];
   for (const id of ids) {
-    const out = await captionForUpload(id, origin, cookie, { force });
+    const out = await captionForUpload(id, { force });
     results.push({ id, ...out });
   }
 

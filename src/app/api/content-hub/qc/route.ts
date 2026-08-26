@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { completeVision } from "@/lib/llm-vision";
 import { safeJsonParse } from "@/lib/llm";
@@ -51,7 +51,7 @@ interface Verdict { verdict: "match" | "mismatch" | "unsure"; detected_brand: st
  * client it was uploaded under; wrong-brand uploads get flagged "mismatch".
  * Videos are skipped (v1). Processes up to 10 per call.
  */
-export async function POST(request: NextRequest) {
+export async function POST() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const role = (user?.user_metadata?.role as string) || "client";
@@ -211,12 +211,10 @@ Rules: "match" if the visible branding belongs to "${uploadedFor}"${sisters.leng
     .in("id", captionable.length ? captionable : ["00000000-0000-0000-0000-000000000000"])
     .eq("status", "uploaded");
 
-  const origin = request.nextUrl.origin;
-  const cookie = request.headers.get("cookie") || "";
   let captioned = 0;
   for (const s of survivors || []) {
     if (s.batch_id && rejectedBatches.has(s.batch_id)) continue;
-    if (await writeCaptionFor(s.id, origin, cookie)) captioned++;
+    if (await writeCaptionFor(s.id)) captioned++;
   }
 
   return NextResponse.json({ success: true, checked, flagged, autoScheduled, rejectedByBatch, captioned });

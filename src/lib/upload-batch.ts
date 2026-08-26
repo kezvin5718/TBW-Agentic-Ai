@@ -64,8 +64,8 @@ export interface CaptionOutcome {
  *
  * Returns true when a caption was written, for callers that only count.
  */
-export async function writeCaptionFor(uploadId: string, baseUrl: string, cookie: string): Promise<boolean> {
-  return (await captionForUpload(uploadId, baseUrl, cookie)).ok;
+export async function writeCaptionFor(uploadId: string): Promise<boolean> {
+  return (await captionForUpload(uploadId)).ok;
 }
 
 /**
@@ -82,8 +82,6 @@ export async function writeCaptionFor(uploadId: string, baseUrl: string, cookie:
  */
 export async function captionForUpload(
   uploadId: string,
-  baseUrl: string,
-  cookie: string,
   opts: { force?: boolean } = {}
 ): Promise<CaptionOutcome> {
   const admin = createServiceRoleClient();
@@ -123,38 +121,37 @@ export async function captionForUpload(
       })
       .eq("id", uploadId);
 
-    const res = await fetch(`${baseUrl}/api/social-publisher/generate-caption`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", cookie },
-      body: JSON.stringify({
-        clientId: row.client_id,
-        platform: "instagram",
-        contentType: row.content_type || "post",
-        mediaUrl: row.file_url,
-        mediaIsVideo: row.media_type === "video",
-        thumbnailUrl: row.thumbnail_url || undefined,
-        visionDescription: reading.description,
-        onCreativeText: reading.onCreativeText,
-      }),
+    // Written in-process. This was an HTTP call to our own API carrying the
+    // caller's cookie, and in production that hop loses the session — which is
+    // the whole reason no caption was ever written in the background.
+    const { writeCaptionForClient } = await import("@/lib/caption-engine");
+    const written = await writeCaptionForClient({
+      clientId: row.client_id,
+      platform: "instagram",
+      contentType: row.content_type || "post",
+      mediaUrl: row.file_url,
+      mediaIsVideo: row.media_type === "video",
+      thumbnailUrl: row.thumbnail_url || undefined,
+      visionDescription: reading.description,
+      onCreativeText: reading.onCreativeText,
     });
-    const data = await res.json();
-    if (!res.ok || !data.caption) {
+    if (!written.ok) {
       // A missing address is a fixable gap in the brand record, not a failure of
       // this creative — it is recorded distinctly so the screen can say which
       // client needs one instead of showing an unexplained empty box.
-      if (data.code === "missing_contact") {
+      if (written.code === "missing_contact") {
         await admin.from("creative_uploads").update({ caption_status: "no_contact" }).eq("id", uploadId);
-        console.warn(`caption for upload ${uploadId} skipped: ${data.error}`);
-        return { ok: false, error: data.error || "No address or phone on file for this client." };
+        console.warn(`caption for upload ${uploadId} skipped: ${written.error}`);
+        return { ok: false, error: written.error || "No address or phone on file for this client." };
       }
-      throw new Error(data.error || "no caption returned");
+      throw new Error(written.error || "no caption returned");
     }
 
     await admin
       .from("creative_uploads")
-      .update({ caption: data.caption, caption_status: "done" })
+      .update({ caption: written.caption, caption_status: "done" })
       .eq("id", uploadId);
-    return { ok: true, caption: data.caption as string };
+    return { ok: true, caption: written.caption };
   } catch (err: unknown) {
     // Not fatal: the Automation row simply shows an empty caption box the team
     // can fill or retry, which is where they were before this existed.

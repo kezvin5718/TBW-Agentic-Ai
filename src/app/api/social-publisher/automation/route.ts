@@ -54,19 +54,33 @@ export async function GET(request: NextRequest) {
     new Set(Object.values(rpMapping).filter((m) => m?.client_id === clientId).map((m) => m.platform).filter(Boolean))
   );
 
-  // Held back for a fix rather than silently missing from the list.
-  const { count: rejected } = await admin
+  // Held back for a fix rather than silently missing from the list. Only the
+  // last week counts: a banner that adds up every creative ever rejected keeps
+  // reporting the same seven long after they were dealt with, and a number that
+  // never moves is one nobody reads.
+  //
+  // Nothing stamps a rejection time on these rows, so recency is read from when
+  // the creative was uploaded — close enough, since a batch is judged within
+  // minutes of arriving.
+  const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+  const rejectedQuery = () => admin
     .from("creative_uploads")
-    .select("id", { count: "exact", head: true })
+    .select("file_name", { count: "exact" })
     .eq("client_id", clientId)
-    .eq("status", "rejected");
+    .eq("status", "rejected")
+    .gte("created_at", weekAgo);
+  const [{ count: rejectedCount }, { data: rejectedRows }] = await Promise.all([
+    rejectedQuery().limit(1),
+    rejectedQuery().order("created_at", { ascending: false }).limit(10),
+  ]);
 
   const rows = data || [];
   return NextResponse.json({
     success: true,
     uploads: rows,
     platforms,
-    rejected: rejected || 0,
+    rejected: rejectedCount || 0,
+    rejectedNames: (rejectedRows || []).map((r) => r.file_name).filter(Boolean),
     awaitingCaption: rows.filter((r) => r.caption_status !== "done" && !String(r.caption || "").trim()).length,
   });
 }
@@ -115,8 +129,6 @@ export async function POST(request: NextRequest) {
     if (todo.length === 0) return NextResponse.json({ success: true, written: 0, remaining: 0, message: "Every creative already has a caption." });
 
     const { writeCaptionFor } = await import("@/lib/upload-batch");
-    const origin = request.nextUrl.origin;
-    const cookie = request.headers.get("cookie") || "";
     let written = 0;
     const problems: string[] = [];
     for (const r of todo) {
@@ -125,7 +137,7 @@ export async function POST(request: NextRequest) {
       if (r.caption_status === "failed" || r.caption_status === "no_contact") {
         await admin2.from("creative_uploads").update({ caption_status: "none" }).eq("id", r.id);
       }
-      if (await writeCaptionFor(r.id, origin, cookie)) written++;
+      if (await writeCaptionFor(r.id)) written++;
       else problems.push(r.id);
     }
 
@@ -175,7 +187,7 @@ export async function POST(request: NextRequest) {
     .in("id", ids);
   const byId = new Map((uploads || []).map((u) => [u.id, u]));
 
-  const results: Array<{ uploadId: string; platform: string; ok: boolean; detail: string }> = [];
+  const results: Array<{ uploadId: string; platform: string; ok: boolean; detail: string; skipped?: boolean }> = [];
   const skipped: string[] = [];
   const doneUploads = new Set<string>();
   const stagedCache = new Map<string, string>();
@@ -211,9 +223,18 @@ export async function POST(request: NextRequest) {
     const scheduledUtc = istWallClockToUtc(item.scheduledFor);
     const scheduledIso = scheduledUtc.toISOString();
     const contentType = upload.content_type || "post";
-    let allOk = true;
+    let anyOk = false;
 
     for (const platform of platforms) {
+      // YouTube takes video and nothing else. Sending it an image is a
+      // guaranteed RecurPost 3003 ("You Must upload Video"), and that one
+      // certain failure is what used to hold the whole creative back — so the
+      // call is never made rather than made and mourned.
+      if (platform === "youtube" && !isVideo) {
+        results.push({ uploadId: upload.id, platform, ok: false, skipped: true, detail: "YouTube takes videos only — skipped" });
+        continue;
+      }
+
       const accountId = accountFor(platform);
       let ok = false;
       let detail = "";
@@ -276,24 +297,36 @@ export async function POST(request: NextRequest) {
       });
 
       results.push({ uploadId: upload.id, platform, ok, detail });
-      if (!ok) allOk = false;
+      if (ok) anyOk = true;
     }
 
-    if (allOk) doneUploads.add(upload.id);
+    if (anyOk) doneUploads.add(upload.id);
   }
 
-  // Only creatives that went out cleanly leave the hub; a partial failure stays
-  // put so the row can be retried rather than quietly disappearing.
+  // Posted anywhere means posted. Requiring every platform to succeed meant one
+  // refusal held the creative in the list, and the next run sent it again — the
+  // reason yesterday's posts kept coming back.
   if (doneUploads.size > 0) {
     await admin.from("creative_uploads").update({ status: "scheduled" }).in("id", Array.from(doneUploads));
   }
 
-  const failed = results.filter((r) => !r.ok);
+  // A platform that was never going to take this creative is not a failure.
+  const failed = results.filter((r) => !r.ok && !r.skipped);
+  const namesOf = (rows: typeof results) => [...new Set(rows.map((r) => r.platform))].join(", ");
+  const posted = results.filter((r) => r.ok);
+  const skippedPlatforms = results.filter((r) => r.skipped);
+  const message = [
+    posted.length ? `posted to ${namesOf(posted)}` : "nothing posted",
+    failed.length ? `failed on ${namesOf(failed)}` : "",
+    skippedPlatforms.length ? `${namesOf(skippedPlatforms)} skipped (video only)` : "",
+  ].filter(Boolean).join(" · ");
+
   return NextResponse.json({
     success: failed.length === 0,
     scheduled: doneUploads.size,
-    posts: results.length - failed.length,
+    posts: posted.length,
     failed: failed.length,
+    message,
     results,
     skipped,
   });

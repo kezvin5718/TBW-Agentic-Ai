@@ -789,6 +789,7 @@ export default function SocialPublisherPage() {
   const [autoPlatforms, setAutoPlatforms] = useState<string[]>([]);
   const [autoAvailable, setAutoAvailable] = useState<string[]>([]);
   const [autoRejected, setAutoRejected] = useState(0);
+  const [autoRejectedNames, setAutoRejectedNames] = useState<string[]>([]);
   const [autoLoading, setAutoLoading] = useState(false);
   const [autoSending, setAutoSending] = useState(false);
   const [cadence, setCadence] = useState<Cadence>("daily");
@@ -923,6 +924,7 @@ export default function SocialPublisherPage() {
       setAutoAvailable(data.platforms || []);
       setAutoPlatforms(data.platforms || []);
       setAutoRejected(data.rejected || 0);
+      setAutoRejectedNames(data.rejectedNames || []);
       setAutoCaptions(Object.fromEntries(rows.map((r) => [r.id, r.caption || ""])));
       setAutoOrder(rows.map((r) => r.id));
       setAutoDates({});
@@ -1055,7 +1057,8 @@ export default function SocialPublisherPage() {
         ok: data.failed === 0,
         text: (data.failed === 0
           ? `${data.scheduled} creative(s) scheduled — ${data.posts} post(s) queued. They're in the Library now.`
-          : `${data.posts} queued, ${data.failed} failed. Do NOT send again — the ones that worked are already scheduled. Retry the failures from the Library.`) + skipNote,
+          : `${data.posts} queued, ${data.failed} failed. Do NOT send again — the ones that worked are already scheduled. Retry the failures from the Library.`)
+          + (data.message ? ` (${data.message})` : "") + skipNote,
       });
       await loadAutomation(autoClient);
       await loadHistory();
@@ -2125,7 +2128,14 @@ export default function SocialPublisherPage() {
           {autoRejected > 0 && (
             <div className="bg-rose-950/20 border border-rose-900/50 rounded-xl p-2.5 text-[11px] text-rose-300 flex items-start gap-2">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-              <span><b>{autoRejected}</b> creative(s) for this client were rejected at QC and are not shown here. Fix them in Content Hub and upload the set again.</span>
+              <span className="min-w-0">
+                <b>{autoRejected}</b> creative(s) uploaded in the last week were rejected at QC and are not shown here. Fix them in Content Hub and upload the set again.
+                {autoRejectedNames.length > 0 && (
+                  <span className="block mt-0.5 text-rose-400/80 truncate">
+                    {autoRejectedNames.join(" · ")}{autoRejected > autoRejectedNames.length ? ` … and ${autoRejected - autoRejectedNames.length} more` : ""}
+                  </span>
+                )}
+              </span>
             </div>
           )}
 
