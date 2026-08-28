@@ -781,9 +781,16 @@ export default function SocialPublisherPage() {
     media_type: string; content_type: string;
     caption: string | null; caption_status: string;
     thumbnail_url: string | null; created_at: string;
+    /** Risk mode only: QC refused this one, and why. */
+    rejected?: boolean; rejected_reason?: string | null; qc_note?: string | null;
+    risk_accepted_at?: string | null;
   }
   type Cadence = "daily" | "alternate" | "manual";
 
+  // Clear vs Risk. Deliberately a plain useState: this resets on reload and on
+  // a client change, because publishing against QC advice should be a decision
+  // taken afresh each time, never a setting somebody left on.
+  const [autoMode, setAutoMode] = useState<"clear" | "risk">("clear");
   const [autoClient, setAutoClient] = useState("");
   const [autoRows, setAutoRows] = useState<AutoRow[]>([]);
   const [autoPlatforms, setAutoPlatforms] = useState<string[]>([]);
@@ -912,11 +919,11 @@ export default function SocialPublisherPage() {
   const [autoCaptions, setAutoCaptions] = useState<Record<string, string>>({});
   const [autoSkip, setAutoSkip] = useState<Set<string>>(new Set());
 
-  const loadAutomation = useCallback(async (clientId: string) => {
+  const loadAutomation = useCallback(async (clientId: string, mode: "clear" | "risk" = "clear") => {
     if (!clientId) { setAutoRows([]); return; }
     setAutoLoading(true);
     try {
-      const res = await fetch(`/api/social-publisher/automation?clientId=${clientId}`);
+      const res = await fetch(`/api/social-publisher/automation?clientId=${clientId}${mode === "risk" ? "&risk=1" : ""}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not load");
       const rows = (data.uploads || []) as AutoRow[];
@@ -935,7 +942,9 @@ export default function SocialPublisherPage() {
     } finally { setAutoLoading(false); }
   }, []);
 
-  useEffect(() => { if (view === "automation" && autoClient) loadAutomation(autoClient); }, [view, autoClient, loadAutomation]);
+  useEffect(() => { if (view === "automation" && autoClient) loadAutomation(autoClient, autoMode); }, [view, autoClient, autoMode, loadAutomation]);
+  // Switching client drops you back to the safe list.
+  useEffect(() => { setAutoMode("clear"); }, [autoClient]);
 
   /** Step in days between consecutive posts for the chosen cadence. */
   const cadenceStep = cadence === "alternate" ? 2 : 1;
@@ -1048,7 +1057,8 @@ export default function SocialPublisherPage() {
 
       const res = await fetch("/api/social-publisher/automation", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId: autoClient, platforms: autoPlatforms, items }),
+        // Only a send started from Risk mode may override QC.
+        body: JSON.stringify({ clientId: autoClient, platforms: autoPlatforms, items, risk: autoMode === "risk" }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not schedule");
@@ -1060,7 +1070,7 @@ export default function SocialPublisherPage() {
           : `${data.posts} queued, ${data.failed} failed. Do NOT send again — the ones that worked are already scheduled. Retry the failures from the Library.`)
           + (data.message ? ` (${data.message})` : "") + skipNote,
       });
-      await loadAutomation(autoClient);
+      await loadAutomation(autoClient, autoMode);
       await loadHistory();
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not schedule" });
@@ -2231,9 +2241,29 @@ export default function SocialPublisherPage() {
           ) : (
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                  Approved &amp; waiting <span className="text-slate-600 normal-case font-medium">({autoReady.length} of {autoRows.length} selected)</span>
-                </label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Approved &amp; waiting <span className="text-slate-600 normal-case font-medium">({autoReady.length} of {autoRows.length} selected)</span>
+                  </label>
+                  {/* Risk mode shows what QC refused, so the founder can judge it
+                      himself. It is never remembered — see autoMode. */}
+                  <div className="flex bg-slate-950 border border-slate-900 rounded-lg p-0.5 text-[10px] font-bold">
+                    {(["clear", "risk"] as const).map((m) => (
+                      <button key={m} onClick={() => setAutoMode(m)}
+                        title={m === "risk" ? "Also show creatives QC rejected, with the reason" : "Only creatives that passed QC"}
+                        className={`px-2.5 py-1 rounded-md cursor-pointer transition-colors ${
+                          autoMode === m
+                            ? m === "risk" ? "bg-amber-600 text-black" : "bg-indigo-600 text-white"
+                            : "text-slate-500 hover:text-white"
+                        }`}>
+                        {m === "risk" ? "Risk" : "Clear"}
+                      </button>
+                    ))}
+                  </div>
+                  {autoMode === "risk" && (
+                    <span className="text-[10px] text-amber-400">QC-rejected creatives are shown — sending them overrides QC on the record.</span>
+                  )}
+                </div>
                 <div className="flex items-center gap-3 flex-wrap">
                   <span className="text-[10px] text-slate-600">Drag a row by ⠿ to reorder — the dates follow the sequence.</span>
                   <button onClick={writeAllCaptions} disabled={writeAllBusy}
@@ -2291,7 +2321,17 @@ export default function SocialPublisherPage() {
                             no address/phone on file — add it in Brand Brain
                           </span>
                         )}
+                        {r.risk_accepted_at && (
+                          <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-amber-950/40 border border-amber-900 text-amber-400">
+                            posted against QC advice
+                          </span>
+                        )}
                       </div>
+                      {r.rejected && (
+                        <p className="text-[10px] text-amber-400 leading-snug">
+                          QC rejected — {r.rejected_reason || r.qc_note || "no reason recorded"}
+                        </p>
+                      )}
                       {r.content_type === "story" ? (
                         <p className="text-[10px] text-slate-600">Stories carry no caption — both platforms drop the text.</p>
                       ) : (
@@ -2301,7 +2341,7 @@ export default function SocialPublisherPage() {
                               value={autoCaptions[r.id] ?? ""}
                               onChange={(v) => setAutoCaptions((c) => ({ ...c, [r.id]: v }))}
                               rows={3}
-                              placeholder="Caption is written automatically once QC passes…"
+                              placeholder="Click ✨ or 'Write all captions' to generate…"
                               className="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500 leading-relaxed"
                             />
                             <button

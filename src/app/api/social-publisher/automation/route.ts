@@ -34,11 +34,14 @@ export async function GET(request: NextRequest) {
 
   const clientId = request.nextUrl.searchParams.get("clientId");
   if (!clientId) return NextResponse.json({ error: "clientId required" }, { status: 400 });
+  // Risk mode: the founder wants to see what QC refused, and decide for himself.
+  const risk = request.nextUrl.searchParams.get("risk") === "1";
 
   const admin = createServiceRoleClient();
+  const COLUMNS = "id, file_url, file_name, media_type, content_type, caption, caption_status, qc_status, qc_note, rejected_reason, risk_accepted_at, thumbnail_url, created_at";
   const { data, error } = await admin
     .from("creative_uploads")
-    .select("id, file_url, file_name, media_type, content_type, caption, caption_status, qc_status, qc_note, thumbnail_url, created_at")
+    .select(COLUMNS)
     .eq("client_id", clientId)
     .eq("status", "uploaded")
     .eq("qc_status", "match")
@@ -46,6 +49,22 @@ export async function GET(request: NextRequest) {
     .neq("content_type", "thumbnail")
     .order("created_at", { ascending: true });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // The refused ones, carrying the reason they were refused. They arrive in the
+  // same shape as everything else and flagged, so the screen can mix them into
+  // one list rather than keeping a second one.
+  let refused: Record<string, unknown>[] = [];
+  if (risk) {
+    const { data: rejectedRows } = await admin
+      .from("creative_uploads")
+      .select(COLUMNS)
+      .eq("client_id", clientId)
+      .eq("status", "rejected")
+      .is("festival_id", null)
+      .neq("content_type", "thumbnail")
+      .order("created_at", { ascending: true });
+    refused = (rejectedRows || []).map((r) => ({ ...r, rejected: true }));
+  }
 
   // Which platforms this client can actually receive a post on.
   const { data: mapRow } = await admin.from("agency_settings").select("value").eq("key", "recurpost_account_map").maybeSingle();
@@ -74,10 +93,11 @@ export async function GET(request: NextRequest) {
     rejectedQuery().order("created_at", { ascending: false }).limit(10),
   ]);
 
-  const rows = data || [];
+  const rows = [...(data || []).map((r) => ({ ...r, rejected: false })), ...refused];
   return NextResponse.json({
     success: true,
     uploads: rows,
+    riskMode: risk,
     platforms,
     rejected: rejectedCount || 0,
     rejectedNames: (rejectedRows || []).map((r) => r.file_name).filter(Boolean),
@@ -195,15 +215,23 @@ export async function POST(request: NextRequest) {
   // cover once per run rather than re-fetching it for every send.
   const thumbCache = new Map<string, string>();
 
+  // Sending from Risk mode is the founder saying, deliberately, that he has
+  // looked at what QC refused and is publishing it anyway.
+  const riskRun = body.risk === true;
+  const overridden: string[] = [];
+
   for (const item of items) {
     const upload = byId.get(item.uploadId);
     if (!upload) { skipped.push(`${item.uploadId} — no longer in the hub.`); continue; }
     // Re-checked at send time: a batch can be rejected between loading the
-    // screen and pressing the button, and rejected work must never go out.
-    if (upload.status !== "uploaded" || upload.qc_status !== "match") {
+    // screen and pressing the button, and rejected work must never go out —
+    // unless this run is an explicit override of exactly that.
+    const isOverride = riskRun && upload.status === "rejected";
+    if (!isOverride && (upload.status !== "uploaded" || upload.qc_status !== "match")) {
       skipped.push(`${upload.id} — no longer approved (${upload.status}/${upload.qc_status}).`);
       continue;
     }
+    if (isOverride) overridden.push(upload.id as string);
 
     const isVideo = upload.media_type === "video";
     let publishUrl = upload.file_url as string;
@@ -293,7 +321,7 @@ export async function POST(request: NextRequest) {
         scheduled_for: scheduledIso,
         status: ok ? "sent" : "failed",
         recurpost_post_id: rpId,
-        webhook_response: `[automation] ${detail}`,
+        webhook_response: `${isOverride ? "[risk-override] " : ""}[automation] ${detail}`,
       });
 
       results.push({ uploadId: upload.id, platform, ok, detail });
@@ -308,6 +336,16 @@ export async function POST(request: NextRequest) {
   // reason yesterday's posts kept coming back.
   if (doneUploads.size > 0) {
     await admin.from("creative_uploads").update({ status: "scheduled" }).in("id", Array.from(doneUploads));
+  }
+
+  // Who overruled QC, and when. Written on the upload itself so the record
+  // outlives this request and travels with the creative.
+  const stampable = overridden.filter((id) => doneUploads.has(id));
+  if (stampable.length > 0) {
+    await admin
+      .from("creative_uploads")
+      .update({ risk_accepted_at: new Date().toISOString(), risk_accepted_by: user.id })
+      .in("id", stampable);
   }
 
   // A platform that was never going to take this creative is not a failure.

@@ -78,7 +78,6 @@ export async function POST() {
   let flagged = 0;
   let autoScheduled = 0;
   const touchedBatches = new Set<string>();
-  const captionable: string[] = [];
 
   for (const row of rows) {
     const uploadedFor = (row.clients as { name?: string } | null)?.name || "Unknown";
@@ -186,12 +185,11 @@ Rules: "match" if the visible branding belongs to "${uploadedFor}"${sisters.leng
     }
 
     if (row.batch_id) touchedBatches.add(row.batch_id);
-    if (!row.festival_id && status === "match") captionable.push(row.id);
   }
 
   // Batch verdicts come after every row in this sweep has a result, because a
   // batch is only decided once all of its creatives have been judged.
-  const { applyBatchVerdict, writeCaptionFor } = await import("@/lib/upload-batch");
+  const { applyBatchVerdict } = await import("@/lib/upload-batch");
   let rejectedByBatch = 0;
   const rejectedBatches = new Set<string>();
   for (const batchId of touchedBatches) {
@@ -203,19 +201,9 @@ Rules: "match" if the visible branding belongs to "${uploadedFor}"${sisters.leng
     }
   }
 
-  // Captions are written for approved work only, and never for a creative whose
-  // batch was just rejected — that one is going to be re-uploaded.
-  const { data: survivors } = await admin
-    .from("creative_uploads")
-    .select("id, batch_id")
-    .in("id", captionable.length ? captionable : ["00000000-0000-0000-0000-000000000000"])
-    .eq("status", "uploaded");
-
-  let captioned = 0;
-  for (const s of survivors || []) {
-    if (s.batch_id && rejectedBatches.has(s.batch_id)) continue;
-    if (await writeCaptionFor(s.id)) captioned++;
-  }
-
-  return NextResponse.json({ success: true, checked, flagged, autoScheduled, rejectedByBatch, captioned });
+  // Captions are NOT written here any more. Passing QC no longer spends a
+  // vision read and a writing call on every creative that happens to arrive —
+  // captions are generated only when somebody asks for them, from the
+  // Automation screen's ✨ / "Write all captions", or the composer.
+  return NextResponse.json({ success: true, checked, flagged, autoScheduled, rejectedByBatch });
 }

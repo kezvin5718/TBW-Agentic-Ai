@@ -248,6 +248,25 @@ async function collectFindings(): Promise<Finding[]> {
     });
   }
 
+  // QC exists to be trusted. If it is being overruled every week, either the
+  // work is fine and the rules are too tight, or it is not and somebody should
+  // know — either way the founder decides, not the silence.
+  const { data: overrides } = await admin
+    .from("creative_uploads")
+    .select("client_id")
+    .not("risk_accepted_at", "is", null)
+    .gte("risk_accepted_at", daysAgoIso(7));
+  const overrideByClient: Record<string, number> = {};
+  for (const r of overrides || []) overrideByClient[r.client_id as string] = (overrideByClient[r.client_id as string] || 0) + 1;
+  for (const [id, n] of Object.entries(overrideByClient)) {
+    found.push({
+      manager: "design",
+      key: `qc_overridden:${id}`,
+      metric: n,
+      title: `QC overruled ${n}× this week for ${clientName.get(id) || "?"} — its rules may be too strict.`,
+    });
+  }
+
   // ── Content Writing Manager ───────────────────────────────────────────────
   const { data: capStuck } = await admin
     .from("creative_uploads")
