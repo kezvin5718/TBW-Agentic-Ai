@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
     .select("id, title, description, type, status, priority, deadline, source, assignee_name, assignee_id, client_id, created_at, completed_at, clients(name)")
     .is("plan_id", null)
     .order("priority", { ascending: false })
-    .order("deadline", { ascending: true })
+    .order("deadline", { ascending: true, nullsFirst: false })
     .limit(500);
 
   if (status === "open") q = q.neq("status", "done");
@@ -83,7 +83,21 @@ export async function GET(request: NextRequest) {
     return { ...m, avatar_url: prof?.avatar_url || null, role_title: m.role_title || prof?.designation || null };
   });
 
-  return NextResponse.json({ success: true, tasks: tasks || [], team: teamWithPhotos, clients: clients || [], canDelete: await mayDeleteTasks(user.id, role) });
+  // Attachments in one keyed query rather than a join: the task list is already
+  // shaped and most tasks have none.
+  const taskIds = (tasks || []).map((t) => t.id as string);
+  const { data: files } = taskIds.length
+    ? await admin.from("task_attachments").select("id, task_id, file_name, mime, size_bytes, url, created_at").in("task_id", taskIds).order("created_at")
+    : { data: [] };
+  const filesByTask = new Map<string, unknown[]>();
+  for (const f of files || []) {
+    const list = filesByTask.get(f.task_id as string) || [];
+    list.push(f);
+    filesByTask.set(f.task_id as string, list);
+  }
+  const tasksWithFiles = (tasks || []).map((t) => ({ ...t, attachments: filesByTask.get(t.id as string) || [] }));
+
+  return NextResponse.json({ success: true, tasks: tasksWithFiles, team: teamWithPhotos, clients: clients || [], canDelete: await mayDeleteTasks(user.id, role) });
 }
 
 // POST — create a task. Body: { title, description?, clientId?, type?, assigneeName?, priority?, deadline? }
@@ -97,9 +111,9 @@ export async function POST(request: NextRequest) {
 
   const type = TASK_TYPES.includes(body.type) ? body.type : "other";
   const priority = PRIORITIES.includes(body.priority) ? body.priority : "medium";
-  const deadline = body.deadline
-    ? new Date(body.deadline).toISOString()
-    : new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString();
+  // A blank deadline is now a real answer, not a missing one: the modal offers
+  // it deliberately. Bots always send a date, so they are unaffected.
+  const deadline = body.deadline ? new Date(body.deadline).toISOString() : null;
 
   const admin = createServiceRoleClient();
   let assigneeId: string | null = null;
@@ -154,7 +168,8 @@ export async function PATCH(request: NextRequest) {
   }
   if (body.priority !== undefined && PRIORITIES.includes(body.priority)) patch.priority = body.priority;
   if (body.type !== undefined && TASK_TYPES.includes(body.type)) patch.type = body.type;
-  if (body.deadline !== undefined && body.deadline) patch.deadline = new Date(body.deadline).toISOString();
+  // Explicit null clears it; absent leaves it alone.
+  if (body.deadline !== undefined) patch.deadline = body.deadline ? new Date(body.deadline).toISOString() : null;
   if (body.title !== undefined && (body.title || "").trim()) patch.title = body.title.trim();
   if (body.clientId !== undefined) patch.client_id = body.clientId || null;
 

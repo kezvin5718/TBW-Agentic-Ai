@@ -4,9 +4,10 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Avatar from "../Avatar";
 import { fmtIST, fmtISTDate } from "@/lib/time";
 import { fetchSuggestion, suggestionKey, type RouteSuggestion } from "@/lib/task-suggestion";
+import { uploadTaskFile, humanSize } from "@/lib/drive-upload-client";
 import {
   Loader2, Plus, X, Check, Users, Rows3,
-  Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2, Pencil, ScanLine, ChevronDown,
+  Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2, Pencil, ScanLine, ChevronDown, Paperclip,
 } from "lucide-react";
 
 interface Task {
@@ -16,7 +17,7 @@ interface Task {
   type: string;
   status: string;
   priority: string;
-  deadline: string;
+  deadline: string | null;
   source: string;
   assignee_name: string | null;
   assignee_id: string | null;
@@ -24,7 +25,11 @@ interface Task {
   created_at: string;
   completed_at: string | null;
   clients?: { name: string } | null;
+  attachments?: Attachment[];
 }
+
+/** A file living in Drive, pointed at from a task. */
+interface Attachment { id: string; task_id: string; file_name: string; mime: string | null; size_bytes: number | null; url: string; created_at: string }
 interface Member { id: string; name: string; role_title: string | null; profile_id: string | null; avatar_url: string | null; away_until: string | null }
 interface ClientRow { id: string; name: string }
 /** A member's last 60 days, as /api/team-profile computes them. */
@@ -95,6 +100,34 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   // The router's read on the task being typed. Only ever offered into an empty
   // assignee field — a name already chosen is a decision, not a placeholder.
   const [addSuggestion, setAddSuggestion] = useState<RouteSuggestion | null>(null);
+  // Files chosen in the modal, and how far each has got. The task is saved
+  // first and the files follow, so a refused upload never costs the task.
+  const [pickedFiles, setPickedFiles] = useState<File[]>([]);
+  const [uploadPct, setUploadPct] = useState<Record<string, number>>({});
+  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  /** One at a time: two half-gigabyte uploads at once is how both fail. */
+  const sendFiles = async (taskId: string, files: File[]): Promise<string[]> => {
+    const failures: string[] = [];
+    for (const file of files) {
+      try {
+        await uploadTaskFile(taskId, file, (f) => setUploadPct((p) => ({ ...p, [file.name]: Math.round(f * 100) })));
+      } catch (err: unknown) {
+        failures.push(`${file.name}: ${err instanceof Error ? err.message : "upload failed"}`);
+      }
+    }
+    return failures;
+  };
+
+  const removeAttachment = async (id: string) => {
+    if (!confirm("Remove this file? It is deleted from Drive too.")) return;
+    await fetch("/api/task-files", {
+      method: "DELETE", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    await fetchAll(tab);
+  };
   // Two months of each member's actual work, and whether the PM is assigning
   // by itself. Both only matter on the Team tab.
   const [profiles, setProfiles] = useState<Record<string, MemberProfile>>({});
@@ -143,7 +176,8 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
       assigneeName: editForm.assigneeName,
       type: editForm.type,
       priority: editForm.priority,
-      deadline: editForm.deadline || undefined,
+      // null, not undefined: clearing the field has to actually clear it.
+      deadline: editForm.deadline || null,
     });
     setEditTask(null);
   };
@@ -293,11 +327,25 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   const addTask = async () => {
     if (!form.title.trim()) return;
     setSaving(true);
+    setUploadErrors([]);
     try {
-      await fetch("/api/team-tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
+      // The task row first, then its files. A 500MB upload that fails halfway
+      // must not take the typed-out task with it.
+      const res = await fetch("/api/team-tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
+      const created = await res.json();
+      if (!res.ok) throw new Error(created.error || "Could not create the task");
+
+      const failures = created.id && pickedFiles.length > 0 ? await sendFiles(created.id, pickedFiles) : [];
+      setUploadErrors(failures);
       setForm({ title: "", clientId: "", assigneeName: "", type: "design", priority: "medium", deadline: "" });
-      setShowAdd(false);
+      setPickedFiles([]);
+      setUploadPct({});
+      if (fileRef.current) fileRef.current.value = "";
+      // A failure list is only useful while the form is still on screen.
+      if (failures.length === 0) setShowAdd(false);
       await fetchAll(tab);
+    } catch (err: unknown) {
+      setUploadErrors([err instanceof Error ? err.message : "Could not create the task"]);
     } finally { setSaving(false); }
   };
 
@@ -313,8 +361,8 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
     const startToday = new Date(); startToday.setHours(0, 0, 0, 0);
     return {
       open: open.length,
-      overdue: open.filter((t) => new Date(t.deadline).getTime() < startToday.getTime()).length,
-      dueToday: open.filter((t) => { const d = new Date(t.deadline).getTime(); return d >= startToday.getTime() && d <= today.getTime(); }).length,
+      overdue: open.filter((t) => t.deadline && new Date(t.deadline).getTime() < startToday.getTime()).length,
+      dueToday: open.filter((t) => { if (!t.deadline) return false; const d = new Date(t.deadline).getTime(); return d >= startToday.getTime() && d <= today.getTime(); }).length,
       review: open.filter((t) => t.status === "review").length,
     };
   }, [tasks]);
@@ -381,16 +429,29 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
         {metaChip("Type", TYPE_LABEL[t.type] || t.type || "Task")}
         {metaChip("Priority", t.priority || "medium")}
         {metaChip("Client", t.clients?.name || "—")}
-        {metaChip("Due", fmtISTDate(t.deadline))}
+        {metaChip("Due", t.deadline ? fmtISTDate(t.deadline) : "no deadline")}
         {metaChip("Assigned", fmtIST(t.created_at))}
         {metaChip("From", SOURCE_LABEL[t.source] || t.source || "Manager")}
       </div>
+      {(t.attachments || []).length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {(t.attachments || []).map((f) => (
+            <span key={f.id} className="inline-flex items-center gap-1.5 text-[10px] bg-slate-900/60 border border-slate-800 rounded-lg px-2 py-1">
+              <Paperclip className="w-3 h-3 text-slate-500 shrink-0" />
+              <a href={f.url} target="_blank" rel="noreferrer" className="text-slate-300 hover:text-indigo-400 truncate max-w-[220px]">{f.file_name}</a>
+              <span className="text-slate-600 font-mono shrink-0">{humanSize(f.size_bytes)}</span>
+              <button onClick={() => removeAttachment(f.id)} title="Remove this file"
+                className="text-slate-700 hover:text-rose-400 cursor-pointer shrink-0">✕</button>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 
   const oneLine = (t: Task) => {
     const isOpen = !!expanded[t.id];
-    const overdue = new Date(t.deadline).getTime() < now && t.status !== "done";
+    const overdue = !!t.deadline && new Date(t.deadline).getTime() < now && t.status !== "done";
     const assignedOn = new Date(t.created_at);
     const ageDays = Math.floor((now - assignedOn.getTime()) / 86400000);
     const member = team.find((m) => m.name.toLowerCase() === (t.assignee_name || "").toLowerCase());
@@ -432,7 +493,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
         <div className="col-span-6 md:col-span-2 flex items-center justify-end gap-1.5">
           <span className={`flex items-center gap-1 text-[10px] font-mono font-bold ${overdue ? "text-red-400" : "text-slate-500"}`}>
             {overdue ? <AlertTriangle className="w-3 h-3" /> : <Calendar className="w-3 h-3" />}
-            {new Date(t.deadline).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+            {t.deadline ? new Date(t.deadline).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : <span className="text-slate-600 font-normal">no deadline</span>}
           </span>
           {busy === t.id ? <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" /> : (
             <>
@@ -471,17 +532,26 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   };
 
   const byUrgency = useMemo(() => {
-    const due = (t: Task) => new Date(t.deadline).getTime();
+    // A task with no date is not "the year 1970": it sorts last whichever way
+    // the dates run, because it is not competing for urgency at all.
+    const due = (t: Task) => (t.deadline ? new Date(t.deadline).getTime() : null);
+    const byDue = (a: Task, b: Task, dir: 1 | -1) => {
+      const x = due(a), y = due(b);
+      if (x === null && y === null) return 0;
+      if (x === null) return 1;
+      if (y === null) return -1;
+      return (x - y) * dir;
+    };
     const made = (t: Task) => new Date(t.created_at).getTime();
     const prio = (t: Task) => ({ urgent: 0, high: 1, medium: 2, low: 3 }[t.priority] ?? 2);
     const cmp: Record<typeof sortBy, (a: Task, b: Task) => number> = {
-      due_asc: (a, b) => due(a) - due(b),
-      due_desc: (a, b) => due(b) - due(a),
+      due_asc: (a, b) => byDue(a, b, 1),
+      due_desc: (a, b) => byDue(a, b, -1),
       assigned_desc: (a, b) => made(b) - made(a),
       assigned_asc: (a, b) => made(a) - made(b),
       // Equal priorities fall back to soonest due, so the top of the list is
       // still the thing to do next rather than an arbitrary urgent item.
-      priority: (a, b) => prio(a) - prio(b) || due(a) - due(b),
+      priority: (a, b) => prio(a) - prio(b) || byDue(a, b, 1),
     };
     return [...filtered].sort(cmp[sortBy]);
   }, [filtered, sortBy]);
@@ -651,6 +721,32 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
             </button>
           </div>
+          <div className="md:col-span-6 space-y-1.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <input ref={fileRef} type="file" multiple className="hidden"
+                onChange={(e) => setPickedFiles(Array.from(e.target.files || []))} />
+              <button onClick={() => fileRef.current?.click()} disabled={saving}
+                className="inline-flex items-center gap-1.5 min-h-10 px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 hover:border-indigo-600 text-[11px] font-bold text-slate-400 hover:text-white cursor-pointer disabled:opacity-50">
+                <Paperclip className="w-3.5 h-3.5" /><span>Attach files</span>
+              </button>
+              <span className="text-[10px] text-slate-600">
+                {pickedFiles.length > 0
+                  ? `${pickedFiles.length} file(s) — they upload after the task is saved`
+                  : "Up to 500MB each — they go straight to Drive, not through the portal."}
+              </span>
+            </div>
+            {pickedFiles.map((f) => (
+              <div key={f.name} className="flex items-center gap-2">
+                <span className="text-[10px] text-slate-400 truncate min-w-0 flex-1">{f.name} <span className="text-slate-600">{humanSize(f.size)}</span></span>
+                {saving && (
+                  <span className="w-24 h-1 bg-slate-900 rounded-full overflow-hidden shrink-0">
+                    <span className="block h-full bg-[var(--yellow)] transition-all duration-200" style={{ width: `${uploadPct[f.name] || 0}%` }} />
+                  </span>
+                )}
+              </div>
+            ))}
+            {uploadErrors.map((e, i) => <p key={i} className="text-[10px] text-amber-400">{e}</p>)}
+          </div>
           {addSuggestion && form.assigneeName === addSuggestion.name && (
             <p className="md:col-span-6 text-[10px] text-slate-500 -mt-1">
               Suggested: <span className="text-slate-300 font-semibold">{addSuggestion.name}</span> — {addSuggestion.reason}
@@ -737,7 +833,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
         // endless scroll; from md it is today's grid, untouched.
         <div className="flex overflow-x-auto snap-x snap-mandatory md:overflow-visible md:grid md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
           {columns.map((col) => {
-            const late = col.items.filter((t) => new Date(t.deadline).getTime() < now && t.status !== "done").length;
+            const late = col.items.filter((t) => t.deadline && new Date(t.deadline).getTime() < now && t.status !== "done").length;
             const isCollapsed = !!collapsed[col.name];
             return (
               <div key={col.name} className={`w-72 shrink-0 snap-start md:w-auto border rounded-2xl bg-slate-950/50 ${late > 0 ? "border-rose-900/50" : "border-slate-900"}`}>
@@ -826,7 +922,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                 ) : (
                   <div className="px-2.5 pb-2.5 space-y-1">
                     {col.items.map((t) => {
-                      const overdue = new Date(t.deadline).getTime() < now && t.status !== "done";
+                      const overdue = !!t.deadline && new Date(t.deadline).getTime() < now && t.status !== "done";
                       const isOpen = !!expanded[t.id];
                       return (
                         <div key={t.id} className="bg-slate-950/60 border border-slate-900/70 rounded-lg">
@@ -844,7 +940,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                           </button>
                           {t.clients?.name && <span className="text-slate-600 truncate max-w-[80px]">{t.clients.name}</span>}
                           <span className={`font-mono shrink-0 ${overdue ? "text-rose-400 font-bold" : "text-slate-500"}`}>
-                            {new Date(t.deadline).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+                            {t.deadline ? new Date(t.deadline).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) : "—"}
                           </span>
                           <select value={t.status} disabled={!!busy} onChange={(e) => patch(t.id, { status: e.target.value })}
                             className={`text-[8px] font-bold rounded px-1 py-0.5 border cursor-pointer focus:outline-none shrink-0 ${STATUS_STYLE[t.status]}`}>
@@ -927,6 +1023,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                 <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Deadline</span>
                 <input type="date" value={editForm.deadline} onChange={(e) => setEditForm({ ...editForm, deadline: e.target.value })}
                   className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 focus:outline-none" />
+                <p className="text-[9px] text-slate-600 mt-1">Leave empty when there is no fixed date — set one when it&apos;s urgent.</p>
               </div>
             </div>
             <div className="flex items-center justify-between pt-1">

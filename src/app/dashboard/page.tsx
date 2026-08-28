@@ -38,7 +38,7 @@ interface EmployeeTask {
   id: string;
   status: string;
   type: string;
-  deadline: string;
+  deadline: string | null;
   title: string | null;
   plan_id: string | null;
   plan: {
@@ -131,7 +131,9 @@ export default async function DashboardPage() {
       .neq("status", "done");
     const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999);
     const teamOpenTasks = teamTaskRows?.length || 0;
-    const teamDueToday = (teamTaskRows || []).filter((t) => new Date(t.deadline) <= endOfToday).length;
+    // A task with no date is not due today — new Date(null) is 1970, which
+    // would have counted every one of them as overdue.
+    const teamDueToday = (teamTaskRows || []).filter((t) => t.deadline && new Date(t.deadline) <= endOfToday).length;
 
     // Lead Pipeline Summary
     const { data: leads } = await supabase.from("leads").select("*");
@@ -218,7 +220,7 @@ export default async function DashboardPage() {
       .select("*, plan:monthly_plans(clients(name)), client:clients(name)")
       .eq("assignee_id", user.id)
       .neq("status", "done")
-      .order("deadline", { ascending: true });
+      .order("deadline", { ascending: true, nullsFirst: false });
 
     employeeTasks = myTasks || [];
   }
@@ -497,7 +499,7 @@ export default async function DashboardPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {employeeTasks.map((t) => {
-                const isOverdue = new Date(t.deadline) < new Date() && t.status !== "done";
+                const isOverdue = !!t.deadline && new Date(t.deadline) < new Date() && t.status !== "done";
                 return (
                   <div key={t.id} className="bg-slate-955/20 border border-slate-900 rounded-2xl p-5 space-y-4 hover:border-slate-850 transition-colors flex flex-col justify-between text-xs">
                     <div className="space-y-2">
@@ -525,7 +527,7 @@ export default async function DashboardPage() {
                         isOverdue ? "text-red-400 animate-pulse" : "text-slate-500"
                       }`}>
                         <Calendar className="w-3.5 h-3.5" />
-                        <span>Due: {fmtISTDate(t.deadline)}</span>
+                        <span>{t.deadline ? `Due: ${fmtISTDate(t.deadline)}` : "No deadline"}</span>
                       </span>
 
                       {t.plan_id ? (

@@ -486,3 +486,99 @@ export async function storeFromBuffer(buffer: Buffer, fileName: string, mimeType
   }
   return uploadToSupabaseStorageDirect(fileName, buffer, mimeType);
 }
+
+// ── Task attachments ────────────────────────────────────────────────────────
+//
+// A 500MB file must never pass through the portal: the browser uploads it
+// straight to Drive over a resumable session this server opens. That needs a
+// live access token and a folder id out here, which is all these add — the
+// auth, refresh and folder logic above is reused, not rebuilt.
+
+export const TASK_FILES_ROOT = "TBW Task Files";
+
+/**
+ * A live OAuth access token for the connected Drive account.
+ *
+ * The resumable-session handshake is a plain HTTPS call rather than a
+ * googleapis client method, so it needs the bearer token itself. The refresh
+ * is the same one every other call here goes through.
+ */
+export async function getDriveAccessToken(): Promise<string | null> {
+  const creds = await loadCreds();
+  if (!creds || creds.status !== "connected") return null;
+  try {
+    const oauth2 = getOAuthClient();
+    oauth2.setCredentials({ refresh_token: decrypt(creds.refresh_token_encrypted) });
+    const { token } = await oauth2.getAccessToken();
+    return token || null;
+  } catch (err) {
+    if (isDeadGrant(err)) await markDriveBroken("Google rejected the saved refresh token (invalid_grant).");
+    console.error("Drive: could not mint an access token —", err);
+    return null;
+  }
+}
+
+/** "TBW Task Files / <client, or General>" — created on first use. */
+export async function ensureTaskFilesFolder(clientName?: string | null): Promise<string | null> {
+  const drive = await getDriveService();
+  if (!drive) return null;
+  const root = await findOrCreateFolder(drive, TASK_FILES_ROOT);
+  return findOrCreateFolder(drive, (clientName || "").trim() || "General", root);
+}
+
+/**
+ * The same anyone-with-link reader grant every stored file here gets, so the
+ * team can open an attachment without a Google account of their own.
+ */
+export async function shareFileWithLink(fileId: string): Promise<void> {
+  const drive = await getDriveService();
+  if (!drive) return;
+  try {
+    await drive.permissions.create({ fileId, requestBody: { role: "reader", type: "anyone" } });
+  } catch (err) {
+    console.error(`Drive: ${fileId} uploaded but could not be made link-viewable —`, err);
+  }
+}
+
+/** Confirms an uploaded file really exists, and what Drive says it is. */
+export async function getDriveFileMeta(
+  fileId: string
+): Promise<{ id: string; name: string; mimeType: string; size: number | null } | null> {
+  const drive = await getDriveService();
+  if (!drive) return null;
+  try {
+    const res = await drive.files.get({ fileId, fields: "id,name,mimeType,size" });
+    const f = res.data;
+    if (!f?.id) return null;
+    return { id: f.id, name: f.name || "", mimeType: f.mimeType || "", size: f.size ? Number(f.size) : null };
+  } catch (err) {
+    console.warn("Drive: file lookup failed —", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/** Best-effort delete by id — an attachment nothing references must not squat. */
+export async function deleteDriveFileById(fileId: string): Promise<boolean> {
+  const drive = await getDriveService();
+  if (!drive) return false;
+  try {
+    await drive.files.delete({ fileId });
+    return true;
+  } catch (err) {
+    console.warn("Drive file delete failed (record removed anyway):", err instanceof Error ? err.message : err);
+    return false;
+  }
+}
+
+/**
+ * The link to open a Drive file with.
+ *
+ * Images get the lh3 form the rest of the app embeds directly. Everything else
+ * — PDFs, zips, video — gets Drive's own viewer, because lh3 does not serve
+ * those bytes (which is why downloadDriveFileByUrl exists at all).
+ */
+export function driveViewUrl(fileId: string, mimeType?: string | null): string {
+  return (mimeType || "").startsWith("image/")
+    ? `https://lh3.googleusercontent.com/d/${fileId}`
+    : `https://drive.google.com/file/d/${fileId}/view`;
+}
