@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { fmtIST } from "@/lib/time";
 import { createClient } from "@/lib/supabase/client";
-import { MessageSquare, RefreshCw, Loader2, UserPlus, Check, X, AlertTriangle, ListTodo, Paperclip, ChevronDown } from "lucide-react";
+import { MessageSquare, RefreshCw, Loader2, UserPlus, Check, X, AlertTriangle, ListTodo, Paperclip, ChevronDown, Trash2 } from "lucide-react";
 import TaskDrafts from "./TaskDrafts";
 
 interface Item {
@@ -60,6 +60,10 @@ export default function WhatsAppInboxPage() {
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [sort, setSort] = useState<Sort>("newest");
+  // Only the founder may empty the tray, so the button only exists for them.
+  const [isFounder, setIsFounder] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
 
   // Only "oldest" reaches the server; the other sorts all ride on the newest-first list,
   // so switching into them leaves this URL — and therefore the fetch — untouched.
@@ -117,6 +121,7 @@ export default function WhatsAppInboxPage() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       setMe(user?.id || null);
+      setIsFounder((user?.user_metadata?.role as string) === "founder");
       const { data } = await supabase.from("profiles").select("id, name").in("role", ["founder", "employee"]);
       setStaff(data || []);
       const { data: cl } = await supabase.from("clients").select("id, name").is("archived_at", null).order("name");
@@ -129,6 +134,27 @@ export default function WhatsAppInboxPage() {
     setExtracting(true);
     try { await fetch("/api/whatsapp-inbox/extract", { method: "POST" }); await fetchItems(tab); }
     finally { setExtracting(false); }
+  };
+
+  /** Dismiss everything still unread. Nothing is deleted — see the API. */
+  const clearTray = async () => {
+    const count = tab === "new" ? items.length : 0;
+    const many = count > 0 ? `all ${count}${hasMore ? "+" : ""} messages` : "every unread message";
+    if (!confirm(`Clear ${many} from the tray? Nothing is deleted — assigned and done items stay, and the messages remain in the records.`)) return;
+    setClearing(true);
+    setFlash(null);
+    try {
+      const res = await fetch("/api/whatsapp-inbox", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "clear_all" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not clear the tray");
+      setFlash(`${data.cleared} message(s) cleared — they stay in the records.`);
+      await fetchItems(tab);
+    } catch (err: unknown) {
+      setFlash(err instanceof Error ? err.message : "Could not clear the tray");
+    } finally { setClearing(false); }
   };
 
   const act = async (id: string, action: string, assignedTo?: string) => {
@@ -148,10 +174,20 @@ export default function WhatsAppInboxPage() {
           </h1>
           <p className="text-sm text-slate-500 mt-1">Client messages — groups and direct chats — read-only. The bot reads each conversation, files any photo or file they send to Drive, and drafts the task; you approve it. The system never replies on WhatsApp.</p>
         </div>
-        <button onClick={runExtract} disabled={extracting} className="px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider bg-slate-900 border border-slate-800 hover:border-indigo-600 text-white flex items-center space-x-2 cursor-pointer disabled:opacity-60">
-          {extracting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}<span>Scan new</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {isFounder && (
+            <button onClick={clearTray} disabled={clearing} title="Dismiss every unread message — nothing is deleted"
+              className="px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider bg-slate-900 border border-slate-800 hover:border-rose-700 hover:text-rose-300 text-slate-400 flex items-center space-x-2 cursor-pointer disabled:opacity-60">
+              {clearing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}<span>Clear tray</span>
+            </button>
+          )}
+          <button onClick={runExtract} disabled={extracting} className="px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider bg-slate-900 border border-slate-800 hover:border-indigo-600 text-white flex items-center space-x-2 cursor-pointer disabled:opacity-60">
+            {extracting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}<span>Scan new</span>
+          </button>
+        </div>
       </div>
+
+      {flash && <p className="text-[11px] text-slate-400">{flash}</p>}
 
       {/* Bot drafts — framed from whole conversations, waiting for approval */}
       <TaskDrafts clients={clients} staff={staff} onApproved={() => fetchItems(tab)} />

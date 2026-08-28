@@ -37,7 +37,8 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ success: true, items: data || [] });
 }
 
-// PATCH — act on an item: assign / done / dismiss. Body: { id, action, assignedTo? }
+// PATCH — act on an item: assign / done / dismiss / create_task. Body: { id, action, assignedTo? }
+// Or on the whole tray: { action: "clear_all" }, which needs no id.
 export async function PATCH(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -47,9 +48,29 @@ export async function PATCH(request: NextRequest) {
   }
 
   const { id, action, assignedTo } = await request.json();
-  if (!id || !action) return NextResponse.json({ error: "id and action are required" }, { status: 400 });
+  if (!action) return NextResponse.json({ error: "action is required" }, { status: 400 });
 
   const admin = createServiceRoleClient();
+
+  // clear_all — sweep the unread tray in one move. Two thousand group messages
+  // is not a list anybody reads, and the founder needs a floor to work from.
+  //
+  // Dismissed, never deleted: the message and whatever it carried to Drive stay
+  // exactly where they are and stay queryable — this only stops them being
+  // counted as waiting.
+  if (action === "clear_all") {
+    // Emptying the whole tray is the founder's call alone.
+    if (role !== "founder") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    const { data: cleared, error } = await admin
+      .from("wa_inbox")
+      .update({ status: "dismissed" })
+      .eq("status", "new")
+      .select("id");
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, cleared: (cleared || []).length });
+  }
+
+  if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
 
   // create_task — convert this WhatsApp message into a Team Task (wa_inbox.task_id links back)
   if (action === "create_task") {
