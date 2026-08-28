@@ -135,8 +135,16 @@ export async function PUT(request: NextRequest) {
       },
     }));
 
-  const { error } = await admin.from("tasks").insert(payload);
+  const { data: made, error } = await admin.from("tasks").insert(payload).select("id, title, client_id, type, assignee_name");
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Rows the sheet left unassigned can be routed from history, when the
+  // founder has turned that on. One at a time, and never fatal.
+  const { autoAssignTask } = await import("@/lib/pm-auto-assign");
+  for (const t of made || []) {
+    if (t.assignee_name) continue;
+    await autoAssignTask({ taskId: t.id as string, title: String(t.title || ""), clientId: t.client_id as string | null, taskType: t.type as string | null });
+  }
 
   return NextResponse.json({
     success: true,

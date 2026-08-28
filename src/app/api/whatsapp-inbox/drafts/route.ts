@@ -143,6 +143,14 @@ export async function POST(request: NextRequest) {
 
   if (taskErr) return NextResponse.json({ error: `Could not create the task: ${taskErr.message}` }, { status: 500 });
 
+  // Nobody named an owner. If the founder has switched the PM on, the history
+  // may be certain enough to name one — and if it isn't, the task simply stays
+  // unassigned, exactly as it would have.
+  if (!assigneeName) {
+    const { autoAssignTask } = await import("@/lib/pm-auto-assign");
+    await autoAssignTask({ taskId: task.id, title, clientId: body.clientId ?? draft.client_id ?? null, taskType: type });
+  }
+
   await admin.from("wa_task_drafts").update({
     status: "approved", reviewed_by: user.id, reviewed_at: new Date().toISOString(), task_id: task.id,
   }).eq("id", draft.id);

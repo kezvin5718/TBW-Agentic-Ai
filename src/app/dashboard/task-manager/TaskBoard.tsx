@@ -27,6 +27,14 @@ interface Task {
 }
 interface Member { id: string; name: string; role_title: string | null; profile_id: string | null; avatar_url: string | null; away_until: string | null }
 interface ClientRow { id: string; name: string }
+/** A member's last 60 days, as /api/team-profile computes them. */
+interface MemberProfile {
+  id: string; name: string; openLoad: number; doneCount: number;
+  onTimePct: number | null;
+  speed: { type: string; medianDays: number; count: number }[];
+  qcPassPct: number | null;
+  topClients: { name: string; count: number }[];
+}
 
 const TYPE_LABEL: Record<string, string> = {
   design: "Design", video_edit: "Video Edit", ai_video: "AI Video", script: "Script",
@@ -87,6 +95,13 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   // The router's read on the task being typed. Only ever offered into an empty
   // assignee field — a name already chosen is a decision, not a placeholder.
   const [addSuggestion, setAddSuggestion] = useState<RouteSuggestion | null>(null);
+  // Two months of each member's actual work, and whether the PM is assigning
+  // by itself. Both only matter on the Team tab.
+  const [profiles, setProfiles] = useState<Record<string, MemberProfile>>({});
+  const [openProfile, setOpenProfile] = useState<string | null>(null);
+  const [pmOn, setPmOn] = useState(false);
+  const [pmCanToggle, setPmCanToggle] = useState(false);
+  const [pmBusy, setPmBusy] = useState(false);
   // Whether THIS viewer may delete — decided by the API (founder, or an
   // employee the founder granted it to) and echoed on every load, so the button
   // never appears where pressing it could only return a 403.
@@ -148,6 +163,34 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   }, []);
 
   useEffect(() => { fetchAll(tab); }, [tab, fetchAll]);
+
+  useEffect(() => {
+    if (mode !== "team") return;
+    (async () => {
+      try {
+        const [pRes, sRes] = await Promise.all([
+          fetch("/api/team-profile", { cache: "no-store" }),
+          fetch("/api/pm-auto-assign", { cache: "no-store" }),
+        ]);
+        if (pRes.ok) {
+          const d = await pRes.json();
+          setProfiles(Object.fromEntries(((d.profiles || []) as MemberProfile[]).map((p) => [p.name.toLowerCase().trim(), p])));
+        }
+        if (sRes.ok) { const d = await sRes.json(); setPmOn(!!d.on); setPmCanToggle(!!d.canToggle); }
+      } catch { /* the board works without either */ }
+    })();
+  }, [mode]);
+
+  const togglePm = async () => {
+    setPmBusy(true);
+    try {
+      const res = await fetch("/api/pm-auto-assign", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on: !pmOn }),
+      });
+      if (res.ok) setPmOn((await res.json()).on);
+    } finally { setPmBusy(false); }
+  };
 
   const patch = async (id: string, fields: Record<string, unknown>) => {
     setBusy(id);
@@ -642,6 +685,20 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
           <option value="assigned_asc">Assigned · oldest first</option>
           <option value="priority">Priority</option>
         </select>
+        {mode === "team" && (
+          <button
+            onClick={pmCanToggle ? togglePm : undefined}
+            disabled={pmBusy || !pmCanToggle}
+            title={pmCanToggle ? "Only high-confidence matches assign themselves; everything else waits for you." : "Only the founder can change this."}
+            className={`flex items-center gap-1.5 min-h-10 px-3 py-2 rounded-xl border text-[10px] font-bold transition-colors disabled:opacity-60 ${
+              pmOn ? "bg-emerald-950/40 border-emerald-900 text-emerald-300" : "bg-slate-950 border-slate-900 text-slate-400"
+            } ${pmCanToggle ? "cursor-pointer" : "cursor-default"}`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${pmOn ? "bg-emerald-400" : "bg-slate-700"}`} />
+            <span>PM auto-assign — high-confidence tasks assign themselves</span>
+            <span className={pmOn ? "text-emerald-400" : "text-slate-600"}>{pmOn ? "ON" : "OFF"}</span>
+          </button>
+        )}
         <span className="text-[10px] text-slate-600 font-mono ml-auto">{filtered.length} task(s)</span>
       </div>
 
@@ -724,8 +781,46 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                       <button onClick={() => setAway(col.member!.id, null)} title="They're back"
                         className="text-[9px] font-bold text-slate-600 hover:text-white cursor-pointer px-1">clear</button>
                     )}
+                    {profiles[col.name.toLowerCase().trim()] && (
+                      <button onClick={() => setOpenProfile((p) => (p === col.name ? null : col.name))}
+                        title="Their last 60 days"
+                        className="text-[9px] font-bold text-slate-600 hover:text-indigo-400 cursor-pointer px-1 ml-auto">
+                        {openProfile === col.name ? "hide" : "profile"}
+                      </button>
+                    )}
                   </div>
                 )}
+
+                {/* Two months of facts, opened on request so the header stays a
+                    header. Numbers only — nothing here ranks anybody. */}
+                {openProfile === col.name && profiles[col.name.toLowerCase().trim()] && (() => {
+                  const p = profiles[col.name.toLowerCase().trim()];
+                  const stat = (label: string, value: string) => (
+                    <span key={label} className="text-[9px] text-slate-500">
+                      {label} <span className="text-slate-300 font-bold font-mono">{value}</span>
+                    </span>
+                  );
+                  return (
+                    <div className="mx-3.5 mb-2 px-2.5 py-2 rounded-lg bg-slate-950/80 border border-slate-900 space-y-1">
+                      <div className="flex flex-wrap gap-x-3 gap-y-1">
+                        {stat("open", String(p.openLoad))}
+                        {stat("done 60d", String(p.doneCount))}
+                        {stat("on time", p.onTimePct === null ? "—" : `${p.onTimePct}%`)}
+                        {stat("QC pass", p.qcPassPct === null ? "—" : `${p.qcPassPct}%`)}
+                      </div>
+                      {p.speed.length > 0 && (
+                        <p className="text-[9px] text-slate-500">
+                          typically {p.speed.map((sp) => `${TYPE_LABEL[sp.type] || sp.type} ${sp.medianDays}d`).join(" · ")}
+                        </p>
+                      )}
+                      {p.topClients.length > 0 && (
+                        <p className="text-[9px] text-slate-600 truncate">
+                          mostly {p.topClients.map((c) => `${c.name} (${c.count})`).join(", ")}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
                 {!isCollapsed && (col.items.length === 0 ? (
                   <p className="text-[10px] text-slate-600 px-3.5 pb-2.5">No open tasks.</p>
                 ) : (

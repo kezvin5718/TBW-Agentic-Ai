@@ -150,6 +150,23 @@ export async function POST(request: NextRequest) {
       .eq("id", taskId);
   }
 
+  // Festival creatives are born with nobody on them by design; the PM may name
+  // someone when it is certain, and otherwise leaves them for the board.
+  const { autoAssignTask } = await import("@/lib/pm-auto-assign");
+  for (const clientId of fresh) {
+    const taskId = taskByClient.get(clientId);
+    if (!taskId) continue;
+    const put = await autoAssignTask({ taskId, title: `${festival.name} — ${names.get(clientId)}`, clientId, taskType: "design" });
+    // The festival row keeps its own copy of who is on it; without this the
+    // board would offer to assign someone the task already has.
+    if (put) {
+      await admin.from("festival_tasks")
+        .update({ team_member_id: put.teamMemberId, assignee_name: put.name })
+        .eq("festival_id", festivalId)
+        .eq("client_id", clientId);
+    }
+  }
+
   const added = (madeRows || []).length;
   return NextResponse.json({
     success: true,
