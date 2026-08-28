@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Bot, Loader2, Check, X, ChevronDown, ChevronRight, AlertTriangle, Sparkles } from "lucide-react";
 import { fmtIST } from "@/lib/time";
 import { awayLabel } from "../task-manager/TaskBoard";
+import { fetchSuggestion, suggestionKey, type RouteSuggestion } from "@/lib/task-suggestion";
 
 interface Msg { id: string; sender_name: string | null; message_text: string | null; received_at: string }
 interface Draft {
@@ -65,6 +66,12 @@ export default function TaskDrafts({ clients, staff, onApproved }: { clients: Cl
   }, []);
   const awayFor = (name: string | null) => awayLabel(away[String(name || "").toLowerCase().trim()]);
 
+  // Who the history says should take each draft. Asked lazily as the drafts
+  // render, cached per (client, type) so a tray of eight jobs for one client
+  // asks once.
+  const [suggested, setSuggested] = useState<Record<string, RouteSuggestion | null>>({});
+  const askedRef = useRef<Set<string>>(new Set());
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -101,9 +108,32 @@ export default function TaskDrafts({ clients, staff, onApproved }: { clients: Cl
   const val = (d: Draft, key: keyof Draft | "assignee"): string => {
     const e = edits[d.id] as Record<string, unknown> | undefined;
     if (e && e[key] !== undefined) return String(e[key] ?? "");
-    if (key === "assignee") return d.suggested_assignee || "";
+    // Order of authority: what a human typed, then the bot's own guess, then
+    // the router's read of the history.
+    if (key === "assignee") return d.suggested_assignee || suggestionFor(d)?.name || "";
     return String((d as unknown as Record<string, unknown>)[key] ?? "");
   };
+
+  // Ask the router for every draft nobody has named an assignee on — neither a
+  // human edit nor the bot's own guess. A null answer changes nothing at all.
+  useEffect(() => {
+    (async () => {
+      for (const d of drafts) {
+        if (val(d, "assignee")) continue;
+        const key = suggestionKey(d.client_id, d.task_type);
+        if (askedRef.current.has(key)) continue;
+        askedRef.current.add(key);
+        const s = await fetchSuggestion(d.client_id, d.task_type);
+        setSuggested((prev) => ({ ...prev, [key]: s }));
+      }
+    })();
+    // val() reads edits, but re-asking on every keystroke would be pointless:
+    // the cache is keyed on the question, not the answer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drafts]);
+
+  /** The suggestion for this draft, once it has arrived. */
+  const suggestionFor = (d: Draft) => suggested[suggestionKey(d.client_id, d.task_type)] || null;
 
   const decide = async (d: Draft, action: "approve" | "reject") => {
     setBusy(d.id);
@@ -237,6 +267,13 @@ export default function TaskDrafts({ clients, staff, onApproved }: { clients: Cl
                     {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
                   </select>
                 </div>
+
+                {/* Who the history says should take it — shown, never forced. */}
+                {suggestionFor(d) && !edits[d.id]?.assignee && (
+                  <p className="text-[10px] text-slate-500">
+                    Suggested: <span className="text-slate-300 font-semibold">{suggestionFor(d)!.name}</span> — {suggestionFor(d)!.reason}
+                  </p>
+                )}
 
                 <button onClick={() => setOpen(expanded ? null : d.id)}
                   className="text-[10px] font-bold text-slate-400 hover:text-white flex items-center gap-1 cursor-pointer">

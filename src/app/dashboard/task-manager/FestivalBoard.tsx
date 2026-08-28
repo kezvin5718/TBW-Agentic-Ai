@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { fmtISTDate } from "@/lib/time";
 import { awayLabel } from "./TaskBoard";
+import { fetchSuggestion, suggestionKey, type RouteSuggestion } from "@/lib/task-suggestion";
 import { Loader2, Plus, Check, Trash2, Sparkles, Search, X } from "lucide-react";
 
 interface FestivalRow { id: string; name: string; scheduled_at: string }
@@ -63,6 +64,8 @@ export default function FestivalBoard() {
   const [picked, setPicked] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // One ask per client that still has nobody on it, cached by the pair.
+  const [suggested, setSuggested] = useState<Record<string, RouteSuggestion | null>>({});
 
   // The festivals list is the one Campaign Planning keeps; the team's clients
   // and members come from the same place the Task Board reads them.
@@ -151,6 +154,27 @@ export default function FestivalBoard() {
     } finally { setSaving(false); }
   };
 
+  // Festival creatives are design work, so the question is always
+  // (this client, design). Asked once per distinct client with an empty row,
+  // one after another rather than in a burst.
+  useEffect(() => {
+    const wanted = [...new Set(tasks.filter((t) => !t.team_member_id).map((t) => t.client_id))];
+    const missing = wanted.filter((c) => !(suggestionKey(c, "design") in suggested));
+    if (missing.length === 0) return;
+    let alive = true;
+    (async () => {
+      for (const clientId of missing) {
+        const s = await fetchSuggestion(clientId, "design");
+        if (!alive) return;
+        setSuggested((prev) => ({ ...prev, [suggestionKey(clientId, "design")]: s }));
+      }
+    })();
+    return () => { alive = false; };
+    // `suggested` is the cache being filled; depending on it would re-run the
+    // effect for every answer that arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks]);
+
   const onFestival = useMemo(() => new Set(tasks.map((t) => t.client_id)), [tasks]);
   const byName = (a: FestivalTask, b: FestivalTask) =>
     (a.clients?.name || "").localeCompare(b.clients?.name || "");
@@ -194,6 +218,23 @@ export default function FestivalBoard() {
           <option value="">Assign to…</option>
           {team.map((m) => <option key={m.id} value={m.id}>{m.name}{awayLabel(m.away_until) ? ` — ${awayLabel(m.away_until)}` : ""}</option>)}
         </select>
+
+        {/* A suggestion, not a decision: festival work is assigned on purpose,
+            so this waits to be clicked. */}
+        {!t.team_member_id && (() => {
+          const s = suggested[suggestionKey(t.client_id, "design")];
+          if (!s?.teamMemberId) return null;
+          return (
+            <button
+              onClick={() => patch(t.id, { teamMemberId: s.teamMemberId, assigneeName: s.name })}
+              disabled={!!busy}
+              title={s.reason}
+              className="min-h-10 px-2.5 py-2 rounded-lg border border-dashed border-indigo-700 text-[10px] font-bold text-indigo-300 hover:bg-indigo-950/40 cursor-pointer disabled:opacity-40"
+            >
+              suggest: {s.name}
+            </button>
+          );
+        })()}
 
         {busy === t.id ? <Loader2 className="w-4 h-4 animate-spin text-indigo-400" /> : (
           <>

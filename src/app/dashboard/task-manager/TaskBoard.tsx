@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Avatar from "../Avatar";
 import { fmtIST, fmtISTDate } from "@/lib/time";
+import { fetchSuggestion, suggestionKey, type RouteSuggestion } from "@/lib/task-suggestion";
 import {
   Loader2, Plus, X, Check, Users, Rows3,
   Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2, Pencil, ScanLine, ChevronDown,
@@ -83,6 +84,9 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ title: "", clientId: "", assigneeName: "", type: "design", priority: "medium", deadline: "" });
   const [saving, setSaving] = useState(false);
+  // The router's read on the task being typed. Only ever offered into an empty
+  // assignee field — a name already chosen is a decision, not a placeholder.
+  const [addSuggestion, setAddSuggestion] = useState<RouteSuggestion | null>(null);
   // Whether THIS viewer may delete — decided by the API (founder, or an
   // employee the founder granted it to) and echoed on every load, so the button
   // never appears where pressing it could only return a 403.
@@ -225,6 +229,23 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
     });
     await fetchAll(tab);
   };
+
+  // Flicking through the type dropdown should not become twelve requests.
+  useEffect(() => {
+    if (!showAdd) { setAddSuggestion(null); return; }
+    if (form.assigneeName) return;
+    let alive = true;
+    const timer = setTimeout(async () => {
+      const s = await fetchSuggestion(form.clientId, form.type);
+      if (!alive) return;
+      setAddSuggestion(s);
+      // Pre-select only if the field is STILL empty when the answer lands.
+      setForm((f) => (f.assigneeName || !s ? f : { ...f, assigneeName: s.name }));
+    }, 400);
+    return () => { alive = false; clearTimeout(timer); };
+    // suggestionKey() is what actually changes the question being asked.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAdd, suggestionKey(form.clientId, form.type), form.assigneeName]);
 
   const addTask = async () => {
     if (!form.title.trim()) return;
@@ -587,6 +608,11 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
             </button>
           </div>
+          {addSuggestion && form.assigneeName === addSuggestion.name && (
+            <p className="md:col-span-6 text-[10px] text-slate-500 -mt-1">
+              Suggested: <span className="text-slate-300 font-semibold">{addSuggestion.name}</span> — {addSuggestion.reason}
+            </p>
+          )}
         </div>
       )}
 
