@@ -69,7 +69,7 @@ export async function GET(request: NextRequest) {
 
   const [{ data: tasks, error }, { data: team }, { data: clients }] = await Promise.all([
     q,
-    admin.from("team_members").select("id, name, role_title, profile_id").eq("active", true).order("name"),
+    admin.from("team_members").select("id, name, role_title, profile_id, away_until").eq("active", true).order("name"),
     admin.from("clients").select("id, name").order("name"),
   ]);
 

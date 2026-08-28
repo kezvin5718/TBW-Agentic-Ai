@@ -2,10 +2,11 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { fmtISTDate } from "@/lib/time";
+import { awayLabel } from "./TaskBoard";
 import { Loader2, Plus, Check, Trash2, Sparkles, Search, X } from "lucide-react";
 
 interface FestivalRow { id: string; name: string; scheduled_at: string }
-interface Member { id: string; name: string; role_title: string | null }
+interface Member { id: string; name: string; role_title: string | null; away_until: string | null }
 interface ClientRow { id: string; name: string }
 interface FestivalTask {
   id: string;
@@ -191,7 +192,7 @@ export default function FestivalBoard() {
           className="min-h-10 text-[10px] font-bold bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none"
         >
           <option value="">Assign to…</option>
-          {team.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          {team.map((m) => <option key={m.id} value={m.id}>{m.name}{awayLabel(m.away_until) ? ` — ${awayLabel(m.away_until)}` : ""}</option>)}
         </select>
 
         {busy === t.id ? <Loader2 className="w-4 h-4 animate-spin text-indigo-400" /> : (

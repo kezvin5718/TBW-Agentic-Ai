@@ -24,7 +24,7 @@ interface Task {
   completed_at: string | null;
   clients?: { name: string } | null;
 }
-interface Member { id: string; name: string; role_title: string | null; profile_id: string | null; avatar_url: string | null }
+interface Member { id: string; name: string; role_title: string | null; profile_id: string | null; avatar_url: string | null; away_until: string | null }
 interface ClientRow { id: string; name: string }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -35,6 +35,15 @@ const TYPE_LABEL: Record<string, string> = {
 const PRIORITY_DOT: Record<string, string> = {
   urgent: "bg-red-500", high: "bg-rose-400", medium: "bg-amber-400", low: "bg-slate-600",
 };
+/** Away today, or away until a day still ahead. */
+export function awayLabel(awayUntil: string | null | undefined): string | null {
+  if (!awayUntil) return null;
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  if (awayUntil < today) return null;
+  const when = new Date(`${awayUntil}T12:00:00Z`).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" });
+  return `away till ${when}`;
+}
+
 /** Where a task came from, in the words a manager uses for it. */
 const SOURCE_LABEL: Record<string, string> = {
   manual: "Manager", whatsapp: "WhatsApp", call: "Call",
@@ -205,6 +214,16 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
     } catch (err: unknown) {
       setScanError(err instanceof Error ? err.message : "Could not create the tasks");
     } finally { setCreating(false); }
+  };
+
+  /** Mark a member away (or back). The boards read this everywhere a name is offered. */
+  const setAway = async (memberId: string, awayUntil: string | null) => {
+    setTeam((prev) => prev.map((m) => (m.id === memberId ? { ...m, away_until: awayUntil } : m)));
+    await fetch("/api/team-members", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: memberId, awayUntil }),
+    });
+    await fetchAll(tab);
   };
 
   const addTask = async () => {
@@ -472,7 +491,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
               <select value="" onChange={(e) => e.target.value && setScan({ ...scan, rows: scan.rows.map((r) => ({ ...r, assigneeName: e.target.value })) })}
                 className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
                 <option value="">— pick a person —</option>
-                {team.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+                {team.map((m) => <option key={m.id} value={m.name}>{m.name}{awayLabel(m.away_until) ? ` — ${awayLabel(m.away_until)}` : ""}</option>)}
               </select>
             </div>
             {scan.sheetUrl && (
@@ -501,7 +520,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                     <select value={r.assigneeName} onChange={(e) => set({ assigneeName: e.target.value })}
                       className={`text-[11px] rounded-lg px-1.5 py-1.5 border cursor-pointer focus:outline-none ${r.assigneeName ? "bg-indigo-950/40 border-indigo-900 text-indigo-300" : "bg-slate-950 border-slate-800 text-slate-500"}`}>
                       <option value="">Unassigned</option>
-                      {team.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+                      {team.map((m) => <option key={m.id} value={m.name}>{m.name}{awayLabel(m.away_until) ? ` — ${awayLabel(m.away_until)}` : ""}</option>)}
                     </select>
                   </div>
                   {r.remark && <p className="text-[10px] text-slate-500 pl-6">{r.remark}</p>}
@@ -557,7 +576,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
           </select>
           <select value={form.assigneeName} onChange={(e) => setForm({ ...form, assigneeName: e.target.value })} className="text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
             <option value="">Assign to…</option>
-            {team.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+            {team.map((m) => <option key={m.id} value={m.name}>{m.name}{awayLabel(m.away_until) ? ` — ${awayLabel(m.away_until)}` : ""}</option>)}
           </select>
           <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
             {Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -583,7 +602,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
         <select value={filterMember} onChange={(e) => setFilterMember(e.target.value)} className="text-[10px] font-bold bg-slate-950 border border-slate-900 rounded-xl px-3 py-2.5 text-slate-300 cursor-pointer focus:outline-none">
           <option value="">All members</option>
           <option value="unassigned">Unassigned</option>
-          {team.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+          {team.map((m) => <option key={m.id} value={m.name}>{m.name}{awayLabel(m.away_until) ? ` — ${awayLabel(m.away_until)}` : ""}</option>)}
         </select>
         <select value={filterClient} onChange={(e) => setFilterClient(e.target.value)} className="text-[10px] font-bold bg-slate-950 border border-slate-900 rounded-xl px-3 py-2.5 text-slate-300 cursor-pointer focus:outline-none">
           <option value="">All clients</option>
@@ -658,6 +677,29 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                     <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{col.items.length}</span>
                   </div>
                 </button>
+                {/* Availability. Team member rows are made in the database, but
+                    whether someone is on leave changes weekly — so this one
+                    field is editable where the founder is already looking. */}
+                {col.member && (
+                  <div className="flex items-center gap-1.5 px-3.5 pb-2 -mt-1 flex-wrap">
+                    {awayLabel(col.member.away_until) && (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-950/40 border border-amber-900 text-amber-400">
+                        {awayLabel(col.member.away_until)}
+                      </span>
+                    )}
+                    <input
+                      type="date"
+                      value={col.member.away_until || ""}
+                      onChange={(e) => setAway(col.member!.id, e.target.value || null)}
+                      title="Away until — they stay assignable, but everyone can see they're out"
+                      className="min-h-10 text-[10px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-400 cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-600"
+                    />
+                    {col.member.away_until && (
+                      <button onClick={() => setAway(col.member!.id, null)} title="They're back"
+                        className="text-[9px] font-bold text-slate-600 hover:text-white cursor-pointer px-1">clear</button>
+                    )}
+                  </div>
+                )}
                 {!isCollapsed && (col.items.length === 0 ? (
                   <p className="text-[10px] text-slate-600 px-3.5 pb-2.5">No open tasks.</p>
                 ) : (
@@ -740,7 +782,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                 <select value={editForm.assigneeName} onChange={(e) => setEditForm({ ...editForm, assigneeName: e.target.value })}
                   className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
                   <option value="">Unassigned</option>
-                  {team.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+                  {team.map((m) => <option key={m.id} value={m.name}>{m.name}{awayLabel(m.away_until) ? ` — ${awayLabel(m.away_until)}` : ""}</option>)}
                 </select>
               </div>
               <div>

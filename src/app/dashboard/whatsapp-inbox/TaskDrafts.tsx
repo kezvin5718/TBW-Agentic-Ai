@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Bot, Loader2, Check, X, ChevronDown, ChevronRight, AlertTriangle, Sparkles } from "lucide-react";
 import { fmtIST } from "@/lib/time";
+import { awayLabel } from "../task-manager/TaskBoard";
 
 interface Msg { id: string; sender_name: string | null; message_text: string | null; received_at: string }
 interface Draft {
@@ -45,6 +46,24 @@ export default function TaskDrafts({ clients, staff, onApproved }: { clients: Cl
   const [open, setOpen] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [edits, setEdits] = useState<Record<string, Partial<Draft> & { assignee?: string }>>({});
+  // This list offers profiles, but leave is recorded against team_members — so
+  // the roster is read separately and matched on name, the way every other
+  // link between the two tables is made.
+  const [away, setAway] = useState<Record<string, string | null>>({});
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/team-tasks?status=open", { cache: "no-store" });
+        if (!res.ok) return;
+        const d = await res.json();
+        const map: Record<string, string | null> = {};
+        for (const m of d.team || []) map[String(m.name || "").toLowerCase().trim()] = m.away_until || null;
+        setAway(map);
+      } catch { /* the list still works without it */ }
+    })();
+  }, []);
+  const awayFor = (name: string | null) => awayLabel(away[String(name || "").toLowerCase().trim()]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -202,7 +221,7 @@ export default function TaskDrafts({ clients, staff, onApproved }: { clients: Cl
                   <select value={val(d, "assignee")} onChange={(e) => patch(d.id, "assignee", e.target.value)}
                     className="text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-white cursor-pointer focus:outline-none">
                     <option value="">— unassigned —</option>
-                    {staff.map((s) => <option key={s.id} value={s.name || ""}>{s.name}</option>)}
+                    {staff.map((s) => <option key={s.id} value={s.name || ""}>{s.name}{awayFor(s.name) ? ` — ${awayFor(s.name)}` : ""}</option>)}
                     {val(d, "assignee") && !staff.some((s) => s.name === val(d, "assignee")) && (
                       <option value={val(d, "assignee")}>{val(d, "assignee")}</option>
                     )}
