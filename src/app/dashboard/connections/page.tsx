@@ -129,6 +129,11 @@ const UPDATES: { date: string; text: string }[] = [
 ];
 
 interface BriefRow { brief_date: string; brief: string | null; notes: Partial<Record<ManagerKey, string[]>>; created_at: string }
+/** A live row from the managers' ledger — the thing the two buttons act on. */
+interface LedgerIssue {
+  key: string; manager: string; title: string; metric: number | null;
+  status: string; first_seen: string; snooze_until: string | null;
+}
 type Selected = { kind: "stage"; stage: Stage } | { kind: "manager"; mkey: string } | null;
 
 export default function AgentsConsolePage() {
@@ -137,6 +142,23 @@ export default function AgentsConsolePage() {
   const [briefRow, setBriefRow] = useState<BriefRow | null>(null);
   const [scanning, setScanning] = useState(false);
   const [selected, setSelected] = useState<Selected>(null);
+  // The ledger behind the counts. Founder-only at the API, so a 403 simply
+  // means this viewer sees the findings without the buttons to settle them.
+  const [ledgerIssues, setLedgerIssues] = useState<LedgerIssue[]>([]);
+  const [ledgerToday, setLedgerToday] = useState("");
+  const [canSettle, setCanSettle] = useState(false);
+  const [settling, setSettling] = useState<string | null>(null);
+
+  const loadIssues = useCallback(async () => {
+    try {
+      const res = await fetch("/api/manager-issues", { cache: "no-store" });
+      if (!res.ok) { setCanSettle(false); setLedgerIssues([]); return; }
+      const d = await res.json();
+      setLedgerIssues(d.issues || []);
+      setLedgerToday(d.today || "");
+      setCanSettle(true);
+    } catch { setCanSettle(false); }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -149,13 +171,33 @@ export default function AgentsConsolePage() {
       if (bRes.ok) setBriefRow((await bRes.json()).latest || null);
     } catch { /* ignore */ } finally { setLoading(false); }
   }, []);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); loadIssues(); }, [load, loadIssues]);
+
+  /** "Working on it" or "that's the cost of business" — then it goes quiet. */
+  const settle = async (key: string, action: "snooze" | "accept") => {
+    setSettling(key);
+    try {
+      const res = await fetch("/api/manager-issues", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, action }),
+      });
+      if (res.ok) await loadIssues();
+    } finally { setSettling(null); }
+  };
+
+  const ageOf = (firstSeen: string) => {
+    if (!ledgerToday) return 0;
+    const a = Date.parse(`${firstSeen}T00:00:00Z`);
+    const b = Date.parse(`${ledgerToday}T00:00:00Z`);
+    return Number.isNaN(a) || Number.isNaN(b) ? 0 : Math.max(0, Math.round((b - a) / 86400000));
+  };
 
   const runScan = async () => {
     setScanning(true);
     try {
       const res = await fetch("/api/manager-brief", { method: "POST" });
       if (res.ok) setBriefRow((await res.json()).latest || null);
+      await loadIssues();
     } finally { setScanning(false); }
   };
 
@@ -412,6 +454,47 @@ export default function AgentsConsolePage() {
                 {selected.mkey !== "ochrester" && issues.length === 0 && (
                   <p className="text-[11px] text-emerald-400 bg-emerald-950/20 border border-emerald-900/40 rounded-lg px-2.5 py-1.5">All clear in this manager&apos;s territory{briefRow ? ` as of ${briefRow.brief_date}` : ""}.</p>
                 )}
+
+                {/* The ledger itself: how old each one is, and the two ways to
+                    settle it. Snoozing says "I'm on it"; accepting says "this is
+                    the cost of doing business" — and the scan remembers both. */}
+                {selected.mkey !== "ochrester" && (() => {
+                  const mine = ledgerIssues.filter((i) => i.manager === selected.mkey);
+                  if (mine.length === 0) return null;
+                  return (
+                    <div className="space-y-1.5 border-t border-slate-900 pt-2">
+                      <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider">On the ledger ({mine.length})</p>
+                      {mine.map((it) => {
+                        const age = ageOf(it.first_seen);
+                        const snoozed = it.status === "snoozed";
+                        return (
+                          <div key={it.key} className={`rounded-lg border px-2.5 py-2 space-y-1.5 ${snoozed ? "bg-slate-950/60 border-slate-900" : "bg-slate-950/80 border-slate-800"}`}>
+                            <div className="flex items-start gap-2">
+                              <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded-full border ${
+                                age >= 7 ? "bg-rose-950/40 border-rose-900 text-rose-400" : "bg-slate-900 border-slate-800 text-slate-400"
+                              }`}>day {age}</span>
+                              <span className={`text-[11px] leading-snug min-w-0 ${snoozed ? "text-slate-500" : "text-slate-300"}`}>{it.title}</span>
+                            </div>
+                            {snoozed ? (
+                              <p className="text-[9px] text-slate-600">Quiet until {it.snooze_until} — it comes back on its own.</p>
+                            ) : canSettle ? (
+                              <div className="flex items-center gap-1.5">
+                                <button onClick={() => settle(it.key, "snooze")} disabled={settling === it.key}
+                                  className="px-2 py-1 rounded-md bg-slate-900 border border-slate-800 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer disabled:opacity-40">
+                                  {settling === it.key ? "…" : "Working on it"}
+                                </button>
+                                <button onClick={() => settle(it.key, "accept")} disabled={settling === it.key}
+                                  className="px-2 py-1 rounded-md bg-slate-900 border border-slate-800 text-[10px] font-bold text-slate-400 hover:text-amber-300 cursor-pointer disabled:opacity-40">
+                                  Accept
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
                 <div className="space-y-1 border-t border-slate-900 pt-2">
                   <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Duties</p>
                   {m.skills.map((sk) => (

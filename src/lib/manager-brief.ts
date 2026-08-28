@@ -61,6 +61,25 @@ export interface Ledger {
 
 interface AddressEntry { address?: string; phone?: string }
 
+/**
+ * The background jobs and how long each may reasonably go unseen — the same
+ * generous thresholds /api/cron-health uses, kept here as a copy rather than
+ * imported so a library never reaches into a route.
+ */
+const MIN = 60_000;
+const HOUR = 60 * MIN;
+const CRON_JOBS: { key: string; label: string; schedule: string; quietAfterMs: number }[] = [
+  { key: "publishing", label: "Publishing scheduler", schedule: "every 15 min", quietAfterMs: 45 * MIN },
+  { key: "wa_task_bot", label: "WhatsApp task bot", schedule: "every 3 min", quietAfterMs: 20 * MIN },
+  { key: "call_watcher", label: "Call recordings sweep", schedule: "every 5 min", quietAfterMs: 30 * MIN },
+  { key: "ads_autopilot", label: "Ads autopilot", schedule: "06:00 daily", quietAfterMs: 26 * HOUR },
+  { key: "manager_brief", label: "Manager brief", schedule: "07:45 daily", quietAfterMs: 26 * HOUR },
+  { key: "morning_briefing", label: "Morning briefing", schedule: "08:00 daily", quietAfterMs: 26 * HOUR },
+  { key: "overdue_digest", label: "Overdue digest", schedule: "09:00 daily", quietAfterMs: 26 * HOUR },
+  { key: "storage_sweep", label: "Storage sweep", schedule: "03:30 daily", quietAfterMs: 26 * HOUR },
+  { key: "weekly_learning_loop", label: "Weekly learning loop", schedule: "Sun 23:59", quietAfterMs: 8 * 24 * HOUR },
+];
+
 function istToday(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
 }
@@ -210,6 +229,25 @@ async function collectFindings(): Promise<Finding[]> {
     });
   }
 
+  // Passed the critic days ago and still waiting on a person. The work is done;
+  // it is the looking at it that has stalled.
+  const { data: waitingReview } = await admin
+    .from("creatives")
+    .select("client_id")
+    .eq("qc_status", "passed")
+    .eq("founder_approval", "pending")
+    .lt("created_at", daysAgoIso(3));
+  const reviewByClient: Record<string, number> = {};
+  for (const r of waitingReview || []) reviewByClient[r.client_id as string] = (reviewByClient[r.client_id as string] || 0) + 1;
+  for (const [id, n] of Object.entries(reviewByClient)) {
+    found.push({
+      manager: "design",
+      key: `review_backlog:${id}`,
+      metric: n,
+      title: `${clientName.get(id) || "?"} has ${n} creative(s) QC-passed and waiting on your review for more than 3 days.`,
+    });
+  }
+
   // ── Content Writing Manager ───────────────────────────────────────────────
   const { data: capStuck } = await admin
     .from("creative_uploads")
@@ -228,6 +266,24 @@ async function collectFindings(): Promise<Finding[]> {
       key: `captions_stuck:${id}`,
       metric: total,
       title: `Captions stuck: ${clientName.get(id) || "?"} (${total}${c.noContact ? `, ${c.noContact} blocked on missing contact` : ""}). Use the Automation tab's caption backfill after fixing contacts.`,
+    });
+  }
+
+  // Uploaded, approved, and then nothing. A creative nobody scheduled is work
+  // already paid for and not yet used.
+  const { data: trayRows } = await admin
+    .from("creative_uploads")
+    .select("client_id")
+    .eq("status", "uploaded")
+    .lt("created_at", daysAgoIso(7));
+  const trayByClient: Record<string, number> = {};
+  for (const r of trayRows || []) trayByClient[r.client_id as string] = (trayByClient[r.client_id as string] || 0) + 1;
+  for (const [id, n] of Object.entries(trayByClient)) {
+    found.push({
+      manager: "content",
+      key: `tray_stale:${id}`,
+      metric: n,
+      title: `${clientName.get(id) || "?"} has ${n} creative(s) sitting in the hub untouched for over a week.`,
     });
   }
 
@@ -277,6 +333,56 @@ async function collectFindings(): Promise<Finding[]> {
       key: `no_pipeline:${id}`,
       title: `${clientName.get(id) || "?"} posted in the last 30 days but has NOTHING scheduled ahead.`,
     });
+  }
+
+  // ── System-level, reported under the manager each one hurts most ──────────
+  //
+  // The balance is the brand manager's business because an empty account stops
+  // captions before it stops anything else. A missing key or an unreachable
+  // endpoint says nothing at all — a scan is not the place to learn that
+  // OpenRouter was briefly down.
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (apiKey && !apiKey.startsWith("mock")) {
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/credits", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(15_000),
+        cache: "no-store",
+      });
+      const data = (await res.json()) as { data?: { total_credits?: number; total_usage?: number } };
+      if (res.ok && data.data) {
+        const remaining = (data.data.total_credits ?? 0) - (data.data.total_usage ?? 0);
+        if (remaining < 10) {
+          found.push({
+            manager: "brand",
+            key: "credit_low",
+            // Higher is worse everywhere else, so this carries the shortfall.
+            metric: Math.max(0, Math.round((10 - remaining) * 100) / 100),
+            title: `OpenRouter credit is down to $${remaining.toFixed(2)} — captions, plans and briefs all stop when it runs out.`,
+          });
+        }
+      }
+    } catch { /* a scan never fails because a balance check did */ }
+  }
+
+  // A background job that has gone quiet past its own threshold. Same list and
+  // the same generous thresholds the health strip uses, so the two cannot
+  // disagree about what "quiet" means.
+  const { data: cronRows } = await admin.from("cron_runs").select("job, last_success_at");
+  if (process.env.CRON_ENABLED === "true") {
+    const lastByJob = new Map((cronRows || []).map((r) => [r.job as string, r.last_success_at as string | null]));
+    for (const job of CRON_JOBS) {
+      const last = lastByJob.get(job.key);
+      const quietFor = last ? Date.now() - Date.parse(last) : null;
+      if (quietFor !== null && quietFor <= job.quietAfterMs) continue;
+      found.push({
+        manager: "social",
+        key: `cron_quiet:${job.key}`,
+        title: last
+          ? `${job.label} (${job.schedule}) has not run since ${new Date(last).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.`
+          : `${job.label} (${job.schedule}) has never run.`,
+      });
+    }
   }
 
   return found;
@@ -382,6 +488,58 @@ async function reconcile(findings: Finding[], today: string): Promise<Ledger> {
   };
 }
 
+/** Monday in IST — the one morning a week that gets the week-over-week read. */
+function isMonday(today: string): boolean {
+  return new Date(`${today}T12:00:00Z`).getUTCDay() === 1;
+}
+
+/**
+ * Week over week, from the daily series.
+ *
+ * Only on Mondays: a trend read every morning is noise, and the founder's week
+ * starts here. Up to three lines per manager, biggest movers first — a number
+ * that went up is the point, not the whole table.
+ */
+async function weeklyTrends(today: string): Promise<string> {
+  const admin = createServiceRoleClient();
+  const dayIso = (back: number) => new Date(Date.parse(`${today}T00:00:00Z`) - back * 86400000).toISOString().slice(0, 10);
+  const from = dayIso(14);
+
+  const [{ data: series }, { data: issues }] = await Promise.all([
+    admin.from("manager_metrics").select("day, key, metric").gte("day", from).lt("day", today),
+    admin.from("manager_issues").select("key, manager, title"),
+  ]);
+  if (!series || series.length === 0) return "";
+
+  const cutoff = dayIso(7);
+  const sums = new Map<string, { thisWeek: number; lastWeek: number }>();
+  for (const row of series) {
+    const metric = Number(row.metric);
+    if (!Number.isFinite(metric)) continue;
+    const key = row.key as string;
+    const bucket = sums.get(key) || { thisWeek: 0, lastWeek: 0 };
+    if ((row.day as string) >= cutoff) bucket.thisWeek += metric;
+    else bucket.lastWeek += metric;
+    sums.set(key, bucket);
+  }
+
+  const meta = new Map((issues || []).map((i) => [i.key as string, i]));
+  const byManager: Record<string, string[]> = {};
+  const ranked = [...sums.entries()]
+    .filter(([, v]) => v.thisWeek > 0 || v.lastWeek > 0)
+    .sort((a, b) => b[1].thisWeek - a[1].thisWeek);
+  for (const [key, v] of ranked) {
+    const row = meta.get(key);
+    const manager = (row?.manager as string) || "brand";
+    const lines = (byManager[manager] ||= []);
+    if (lines.length >= 3) continue;
+    lines.push(`- ${key}: ${v.thisWeek} this week vs ${v.lastWeek} last week`);
+  }
+
+  const blocks = Object.entries(byManager).map(([manager, lines]) => `${manager}:\n${lines.join("\n")}`);
+  return blocks.length > 0 ? `TRENDS (week over week):\n${blocks.join("\n")}` : "";
+}
+
 /** The per-manager lists the Agents Console counts and lists — open work only. */
 function notesFromLedger(ledger: Ledger): ManagerNotes {
   const notes: ManagerNotes = { brand: [], design: [], content: [], social: [] };
@@ -395,7 +553,7 @@ function notesFromLedger(ledger: Ledger): ManagerNotes {
 }
 
 /** The ledger, written out for Ochrester to compress. */
-function ledgerSections(ledger: Ledger): string {
+function ledgerSections(ledger: Ledger, trends = ""): string {
   const line = (r: IssueRow) => `- [${r.manager}] ${r.title}`;
   const blocks: string[] = [];
 
@@ -418,12 +576,14 @@ function ledgerSections(ledger: Ledger): string {
     );
   }
 
+  if (trends) blocks.push(trends);
+
   return blocks.join("\n\n");
 }
 
 /** Ochrester: the ledger in, one readable brief out. Falls back to the plain sections if the model is unreachable. */
-async function composeBrief(ledger: Ledger): Promise<string> {
-  const raw = ledgerSections(ledger);
+async function composeBrief(ledger: Ledger, trends = ""): Promise<string> {
+  const raw = ledgerSections(ledger, trends);
 
   try {
     const brief = await complete({
@@ -435,6 +595,7 @@ async function composeBrief(ledger: Ledger): Promise<string> {
 3. Never re-describe a STILL OPEN item at full length — one clause and its age ("Suvarna's captions still stuck, day 9"). The founder has read it before.
 4. Give one line of credit for anything under FIXED SINCE YESTERDAY.
 5. Mention accepted risks only as the single count given, never itemised. If anything was auto-accepted today, say so once.
+6. If a TRENDS block is present, close with "THIS WEEK VS LAST:" and at most 5 lines drawn from it — the biggest movers, in plain words ("Suvarna's QC rejections: 9 this week against 4 last"). Omit the section entirely when there is no TRENDS block.
 Mobile-readable, no markdown headers, no invented facts — only what the ledger says.`,
       messages: [{ role: "user", content: raw }],
     });
@@ -450,7 +611,10 @@ export async function runManagerBrief(): Promise<{ date: string; brief: string }
   const date = istToday();
   const findings = await collectFindings();
   const ledger = await reconcile(findings, date);
-  const brief = await composeBrief(ledger);
+  // The week-over-week read is a Monday thing; every other morning it would be
+  // noise around the things that actually need doing today.
+  const trends = isMonday(date) ? await weeklyTrends(date) : "";
+  const brief = await composeBrief(ledger, trends);
   const notes = notesFromLedger(ledger);
   await admin.from("manager_briefs").upsert(
     { brief_date: date, notes, brief, created_at: new Date().toISOString() },
