@@ -157,11 +157,11 @@ export default function StyleLibraryPage() {
             Your proven looks, one JSON per old design. Drop designs in a category — the machine extracts the style, you curate, 5b uses the best matches at Build.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => setShowClients((v) => !v)} className={`px-3 py-2 rounded-xl text-xs font-bold border flex items-center space-x-1.5 cursor-pointer ${showClients ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={() => setShowClients((v) => !v)} className={`px-3 py-2 min-h-[40px] lg:min-h-0 rounded-xl text-xs font-bold border flex items-center space-x-1.5 cursor-pointer ${showClients ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
             <Users className="w-3.5 h-3.5" /><span>Client defaults</span>
           </button>
-          <button onClick={() => setShowSettings((v) => !v)} className={`px-3 py-2 rounded-xl text-xs font-bold border flex items-center space-x-1.5 cursor-pointer ${showSettings ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
+          <button onClick={() => setShowSettings((v) => !v)} className={`px-3 py-2 min-h-[40px] lg:min-h-0 rounded-xl text-xs font-bold border flex items-center space-x-1.5 cursor-pointer ${showSettings ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
             <Settings2 className="w-3.5 h-3.5" /><span>Fonts</span>
           </button>
         </div>
@@ -234,7 +234,7 @@ export default function StyleLibraryPage() {
           { v: "3x2", label: "3×2" },
         ].map((o) => (
           <button key={o.v} onClick={() => setGridMode(o.v)}
-            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border cursor-pointer ${gridMode === o.v ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
+            className={`px-2.5 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg text-[11px] font-bold border cursor-pointer ${gridMode === o.v ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
             {o.label}
           </button>
         ))}
@@ -246,7 +246,7 @@ export default function StyleLibraryPage() {
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mr-1">For client only</span>
         <select value={forClient} onChange={(e) => setForClient(e.target.value)}
-          className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-slate-300 cursor-pointer focus:outline-none focus:border-indigo-600">
+          className="max-w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 min-h-[40px] lg:min-h-0 text-[11px] font-bold text-slate-300 cursor-pointer focus:outline-none focus:border-indigo-600">
           <option value="">All brands (shared shelf)</option>
           {clients.map((cl) => <option key={cl.id} value={cl.id}>{cl.name}</option>)}
         </select>
@@ -286,13 +286,13 @@ export default function StyleLibraryPage() {
 
       {/* Extraction status */}
       {(pendingHere > 0 || extracting) && (
-        <div className="flex items-center justify-between bg-amber-950/20 border border-amber-900/50 rounded-xl px-4 py-2.5">
+        <div className="flex items-center justify-between gap-2 flex-wrap bg-amber-950/20 border border-amber-900/50 rounded-xl px-4 py-2.5">
           <span className="text-xs text-amber-300 font-semibold flex items-center space-x-2">
             {extracting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <AlertTriangle className="w-3.5 h-3.5" />}
             <span>{extracting ? `Extracting styles… ${pendingHere} left in this category` : `${pendingHere} design${pendingHere === 1 ? "" : "s"} waiting for extraction`}</span>
           </span>
           {!extracting && (
-            <button onClick={runExtraction} className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-[11px] font-bold text-white cursor-pointer flex items-center space-x-1">
+            <button onClick={runExtraction} className="px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-amber-600 hover:bg-amber-500 text-[11px] font-bold text-white cursor-pointer flex items-center space-x-1">
               <RefreshCw className="w-3 h-3" /><span>Extract now</span>
             </button>
           )}
@@ -320,7 +320,7 @@ export default function StyleLibraryPage() {
                   <img src={p.image_url} alt={p.file_name || ""} className="w-full h-full object-cover" loading="lazy" />
                 )}
                 <button onClick={() => review(p.id, { starred: !p.starred })} title="Performed well — pick this look first"
-                  className={`absolute top-2 right-2 p-1.5 rounded-lg cursor-pointer ${p.starred ? "bg-amber-500 text-black" : "bg-black/60 text-slate-400 hover:text-amber-400"}`}>
+                  className={`absolute top-2 right-2 p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg cursor-pointer ${p.starred ? "bg-amber-500 text-black" : "bg-black/60 text-slate-400 hover:text-amber-400"}`}>
                   <Star className="w-3.5 h-3.5" fill={p.starred ? "currentColor" : "none"} />
                 </button>
                 {p.status === "pending" && <span className="absolute bottom-2 left-2 text-[9px] font-black px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-900 text-amber-400">extracting…</span>}
@@ -338,7 +338,7 @@ export default function StyleLibraryPage() {
                         {CATS.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
                       </select>
                     )}
-                    <button onClick={() => review(p.id, { status: "pending" }).then(runExtraction)} className="w-full py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-bold text-white cursor-pointer">Retry extraction</button>
+                    <button onClick={() => review(p.id, { status: "pending" }).then(runExtraction)} className="w-full py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-bold text-white cursor-pointer">Retry extraction</button>
                   </>
                 ) : (
                   <>
@@ -347,10 +347,10 @@ export default function StyleLibraryPage() {
                       {(p.tags || []).slice(0, 4).map((t) => <span key={t} className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400">{t}</span>)}
                     </div>
                     {p.category && (
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <select value={p.category} onChange={(e) => review(p.id, { category: e.target.value })}
                           title="Move to another shelf"
-                          className="bg-slate-950 border border-slate-800 rounded-lg px-1.5 py-1 text-[10px] text-slate-300 cursor-pointer focus:outline-none">
+                          className="max-w-full bg-slate-950 border border-slate-800 rounded-lg px-1.5 py-1 min-h-[36px] lg:min-h-0 text-[10px] text-slate-300 cursor-pointer focus:outline-none">
                           {CATS.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
                         </select>
                         {p.suggested_category && p.suggested_category !== p.category && (
@@ -372,12 +372,12 @@ export default function StyleLibraryPage() {
                 )}
                 <div className="flex gap-1.5 pt-0.5">
                   {p.status === "approved" && (
-                    <button onClick={() => review(p.id, { status: "rejected" })} title="Keep it, but 5b won't use it" className="flex-1 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">Exclude</button>
+                    <button onClick={() => review(p.id, { status: "rejected" })} title="Keep it, but 5b won't use it" className="flex-1 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">Exclude</button>
                   )}
                   {p.status === "rejected" && (
-                    <button onClick={() => review(p.id, { status: "approved" })} className="flex-1 py-1.5 rounded-lg bg-emerald-900/40 border border-emerald-900 text-[10px] font-bold text-emerald-400 cursor-pointer">Re-include</button>
+                    <button onClick={() => review(p.id, { status: "approved" })} className="flex-1 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-emerald-900/40 border border-emerald-900 text-[10px] font-bold text-emerald-400 cursor-pointer">Re-include</button>
                   )}
-                  <button onClick={() => remove(p.id)} title="Remove from the library (Drive file stays)" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-500 hover:text-rose-400 cursor-pointer">
+                  <button onClick={() => remove(p.id)} title="Remove from the library (Drive file stays)" className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-slate-500 hover:text-rose-400 cursor-pointer">
                     <Trash2 className="w-3 h-3" />
                   </button>
                 </div>
@@ -408,7 +408,7 @@ function CategorySettings({ cat, onSave }: { cat: Category; onSave: (key: string
         <input value={secondary} onChange={(e) => setSecondary(e.target.value)} placeholder="Secondary font, e.g. Cormorant"
           className="flex-1 min-w-[180px] bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500" />
         <button disabled={saving} onClick={async () => { setSaving(true); await onSave(cat.key, { font_primary: primary, font_secondary: secondary, notes }); setSaving(false); }}
-          className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white cursor-pointer disabled:opacity-50">
+          className="px-4 py-2 min-h-[40px] lg:min-h-0 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white cursor-pointer disabled:opacity-50">
           {saving ? "Saving…" : "Save"}
         </button>
       </div>

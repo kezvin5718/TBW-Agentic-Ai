@@ -250,7 +250,7 @@ export default function PlanPostsPage() {
           <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 flex items-center gap-2">
             <span>Style {styleSel === null && analysis?.styleCategory ? <span className="text-indigo-400 normal-case">(client default)</span> : null}</span>
             <button onClick={analyse} disabled={loading || !planId} title="Sync with Style Library — pull the latest uploaded looks"
-              className="p-1 rounded text-indigo-400 hover:text-indigo-300 cursor-pointer disabled:opacity-40">
+              className="p-1 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded text-indigo-400 hover:text-indigo-300 cursor-pointer disabled:opacity-40">
               <RefreshCw className={`w-3 h-3 ${loading || refreshing ? "animate-spin" : ""}`} />
             </button>
           </label>
@@ -345,7 +345,7 @@ export default function PlanPostsPage() {
                 </span>
               </h3>
               <button onClick={() => photoRef.current?.click()} disabled={working !== ""}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold cursor-pointer disabled:opacity-50">
+                className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] lg:min-h-0 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold cursor-pointer disabled:opacity-50">
                 {working === "photos" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
                 <span>{working === "photos" ? `${uploadPct}%` : "Add photos"}</span>
               </button>
@@ -383,15 +383,15 @@ export default function PlanPostsPage() {
                   {picked.length} of {analysis.specs.length}
                 </span>
               </h3>
-              <div className="flex items-center gap-2 text-[10px] font-bold">
+              <div className="flex items-center gap-2 flex-wrap text-[10px] font-bold">
                 <button onClick={() => setPicked(analysis.specs.map((s) => s.item))}
-                  className="text-slate-400 hover:text-white cursor-pointer">Select all</button>
+                  className="min-h-[40px] lg:min-h-0 text-slate-400 hover:text-white cursor-pointer">Select all</button>
                 <span className="text-slate-700">·</span>
                 <button onClick={() => setPicked([])}
-                  className="text-slate-400 hover:text-white cursor-pointer">Clear</button>
+                  className="min-h-[40px] lg:min-h-0 text-slate-400 hover:text-white cursor-pointer">Clear</button>
                 <span className="text-slate-700">·</span>
                 <button onClick={() => setPicked(analysis.specs.slice(0, 2).map((s) => s.item))}
-                  className="text-indigo-400 hover:text-indigo-300 cursor-pointer">Just the first 2</button>
+                  className="min-h-[40px] lg:min-h-0 text-indigo-400 hover:text-indigo-300 cursor-pointer">Just the first 2</button>
               </div>
             </div>
             <p className="text-[11px] text-slate-600 mb-1">
@@ -401,7 +401,7 @@ export default function PlanPostsPage() {
             {analysis.specs.map((s) => (
               <div key={s.item} className="space-y-1">
               <label
-                className={`flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${picked.includes(s.item) ? "border-indigo-600 bg-indigo-950/20" : "border-slate-900 bg-slate-950/60 hover:border-slate-800"}`}>
+                className={`flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1.5 sm:gap-y-3 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${picked.includes(s.item) ? "border-indigo-600 bg-indigo-950/20" : "border-slate-900 bg-slate-950/60 hover:border-slate-800"}`}>
                 <input type="checkbox" checked={picked.includes(s.item)}
                   onChange={(e) => setPicked((prev) => e.target.checked ? [...prev, s.item] : prev.filter((n) => n !== s.item))}
                   className="shrink-0 accent-indigo-500 cursor-pointer" />
@@ -409,7 +409,7 @@ export default function PlanPostsPage() {
                 <span className={`text-[9px] font-black px-1.5 py-0.5 rounded shrink-0 border ${s.kind === "product" ? "bg-amber-950/40 border-amber-900 text-amber-400" : "bg-emerald-950/40 border-emerald-900 text-emerald-400"}`}>
                   {s.kind === "product" ? "PHOTO" : "GENERATED"}
                 </span>
-                <span className="text-xs text-white truncate flex-1" title={s.reason}>{s.headline || "(untitled)"}</span>
+                <span className="text-xs text-white truncate flex-1 min-w-[140px] sm:min-w-0" title={s.reason}>{s.headline || "(untitled)"}</span>
                 <span className="text-[10px] text-slate-500 shrink-0 capitalize">{s.contentType}{s.frames > 1 ? ` ×${s.frames}` : ""}</span>
                 <span className="text-[10px] font-mono text-slate-600 shrink-0">{s.date?.slice(5) || "—"}</span>
               </label>
@@ -442,7 +442,7 @@ export default function PlanPostsPage() {
               {analysis.alreadyMade.length > 0 && `${analysis.alreadyMade.length} creative(s) already made from this plan. `}
               Everything lands in Creative Approvals for a human to review.
             </p>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Link href="/dashboard/creatives-review"
                 className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:border-indigo-600 text-[11px] font-bold">
                 Creative Approvals <ArrowRight className="w-3.5 h-3.5" />

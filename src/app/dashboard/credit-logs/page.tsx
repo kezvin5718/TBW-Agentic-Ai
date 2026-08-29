@@ -58,8 +58,8 @@ export default function CreditLogsPage() {
   const maxPurpose = Math.max(...(data?.byPurpose.map((p) => p.cost) || [0]), 0.0001);
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-2">
             <Wallet className="w-6 h-6 text-indigo-400" /> Credit Logs
@@ -69,7 +69,7 @@ export default function CreditLogsPage() {
         <button
           onClick={load}
           disabled={loading}
-          className="inline-flex items-center gap-2 text-xs font-bold px-4 py-2 rounded-lg border bg-slate-950 border-slate-800 text-slate-300 hover:text-white hover:border-indigo-500 cursor-pointer disabled:opacity-50"
+          className="inline-flex items-center gap-2 text-xs font-bold px-4 py-2 min-h-[40px] lg:min-h-0 rounded-lg border bg-slate-950 border-slate-800 text-slate-300 hover:text-white hover:border-indigo-500 cursor-pointer disabled:opacity-50"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
         </button>
@@ -82,7 +82,7 @@ export default function CreditLogsPage() {
       )}
 
       {/* Balance row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
         <div className="p-5 rounded-xl border border-emerald-800/50 bg-emerald-950/20">
           <div className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">Balance left</div>
           <div className="text-3xl font-black text-white mt-1">
@@ -116,7 +116,7 @@ export default function CreditLogsPage() {
         <div className="text-sm font-bold text-white flex items-center gap-2 mb-4">
           <TrendingDown className="w-4 h-4 text-indigo-400" /> Daily spend — last 14 days
         </div>
-        <div className="flex items-end gap-1.5 h-28">
+        <div className="flex items-end gap-px sm:gap-1.5 h-28">
           {(data?.byDay || []).map((d) => (
             <div key={d.day} className="flex-1 flex flex-col items-center gap-1 group" title={`${d.day}: ${usd(d.cost)} · ${d.calls} calls`}>
               <div className="text-[9px] text-slate-500 opacity-0 group-hover:opacity-100">{usd(d.cost)}</div>
@@ -184,7 +184,7 @@ export default function CreditLogsPage() {
           <Zap className="w-4 h-4 text-amber-400" /> Recent calls
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+          <table className="w-full min-w-[520px] text-xs">
             <thead>
               <tr className="text-left text-slate-500 border-b border-slate-800">
                 <th className="py-2 pr-3 font-bold">When (IST)</th>

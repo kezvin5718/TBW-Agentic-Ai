@@ -1453,15 +1453,15 @@ export default function SocialPublisherPage() {
           </h1>
           <p className="text-sm text-slate-500 mt-1">Pick the client, upload the creative, generate an on-brand caption, set the time — it posts through RecurPost to your connected accounts.</p>
         </div>
-        <div className="flex bg-slate-950 border border-slate-900 rounded-xl p-1 text-[10px] font-bold uppercase tracking-wider">
-          <button onClick={() => setView("compose")} className={`px-4 py-2 rounded-lg cursor-pointer transition-all ${view === "compose" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>Compose</button>
-          <button onClick={() => setView("stories")} className={`px-4 py-2 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "stories" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
+        <div className="flex flex-wrap bg-slate-950 border border-slate-900 rounded-xl p-1 text-[10px] font-bold uppercase tracking-wider">
+          <button onClick={() => setView("compose")} className={`px-4 py-2 min-h-[40px] lg:min-h-0 rounded-lg cursor-pointer transition-all ${view === "compose" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>Compose</button>
+          <button onClick={() => setView("stories")} className={`px-4 py-2 min-h-[40px] lg:min-h-0 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "stories" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
             <Layers className="w-3.5 h-3.5" /><span>Multi-Story</span>
           </button>
-          <button onClick={() => setView("automation")} className={`px-4 py-2 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "automation" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
+          <button onClick={() => setView("automation")} className={`px-4 py-2 min-h-[40px] lg:min-h-0 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "automation" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
             <Wand2 className="w-3.5 h-3.5" /><span>Automation</span>
           </button>
-          <button onClick={() => setView("library")} className={`px-4 py-2 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "library" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
+          <button onClick={() => setView("library")} className={`px-4 py-2 min-h-[40px] lg:min-h-0 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "library" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
             <Eye className="w-3.5 h-3.5" /><span>Library ({posts.length})</span>
           </button>
         </div>
@@ -1489,9 +1489,9 @@ export default function SocialPublisherPage() {
             <Settings className="w-4 h-4" /><span>RecurPost Accounts — map each social account to a client ({Object.keys(rpMapping).length} mapped)</span>
           </summary>
           <div className="px-4 pb-4 space-y-2">
-            <div className="flex gap-2">
-              <button onClick={testRecurPost} disabled={rpBusy} className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-[11px] font-bold cursor-pointer disabled:opacity-50">Test connection</button>
-              <button onClick={loadRecurPost} disabled={rpBusy} className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-[11px] font-bold cursor-pointer disabled:opacity-50">Refresh accounts</button>
+            <div className="flex gap-2 flex-wrap">
+              <button onClick={testRecurPost} disabled={rpBusy} className="px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-[11px] font-bold cursor-pointer disabled:opacity-50">Test connection</button>
+              <button onClick={loadRecurPost} disabled={rpBusy} className="px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-[11px] font-bold cursor-pointer disabled:opacity-50">Refresh accounts</button>
             </div>
             {rpAccounts.length === 0 ? (
               <p className="text-[11px] text-slate-600">No accounts returned — connect accounts inside RecurPost first, then Refresh.</p>
@@ -1502,11 +1502,11 @@ export default function SocialPublisherPage() {
                   <div key={a.id} className="flex items-center gap-2 flex-wrap border-b border-slate-900/60 py-2">
                     <span className="text-[11px] font-bold text-white min-w-[160px] truncate">{a.name}</span>
                     <span className="text-[10px] text-slate-500 capitalize min-w-[70px]">{a.platform || "?"}</span>
-                    <select value={m.client_id} onChange={(e) => setRpMapping((p) => ({ ...p, [a.id]: { ...m, client_id: e.target.value } }))} className="text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-white cursor-pointer focus:outline-none">
+                    <select value={m.client_id} onChange={(e) => setRpMapping((p) => ({ ...p, [a.id]: { ...m, client_id: e.target.value } }))} className="text-[11px] max-w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 min-h-[40px] lg:min-h-0 text-white cursor-pointer focus:outline-none">
                       <option value="">— client —</option>
                       {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
-                    <select value={m.platform} onChange={(e) => setRpMapping((p) => ({ ...p, [a.id]: { ...m, platform: e.target.value } }))} className="text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-white cursor-pointer focus:outline-none">
+                    <select value={m.platform} onChange={(e) => setRpMapping((p) => ({ ...p, [a.id]: { ...m, platform: e.target.value } }))} className="text-[11px] max-w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 min-h-[40px] lg:min-h-0 text-white cursor-pointer focus:outline-none">
                       <option value="">— platform —</option>
                       {PLATFORMS.map((pl) => <option key={pl.key} value={pl.key}>{pl.label}</option>)}
                     </select>
@@ -1543,9 +1543,9 @@ export default function SocialPublisherPage() {
                       className="flex-1 min-w-[200px] bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
                     />
                     <div className="flex gap-1.5 flex-wrap">
-                      <button onClick={() => setRpPlatFilter("all")} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border capitalize cursor-pointer ${rpPlatFilter === "all" ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>All</button>
+                      <button onClick={() => setRpPlatFilter("all")} className={`px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-full text-[10px] font-bold border capitalize cursor-pointer ${rpPlatFilter === "all" ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>All</button>
                       {platOptions.map((p) => (
-                        <button key={p} onClick={() => setRpPlatFilter(p)} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border capitalize cursor-pointer ${rpPlatFilter === p ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>{p}</button>
+                        <button key={p} onClick={() => setRpPlatFilter(p)} className={`px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-full text-[10px] font-bold border capitalize cursor-pointer ${rpPlatFilter === p ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>{p}</button>
                       ))}
                     </div>
                   </div>
@@ -1571,7 +1571,7 @@ export default function SocialPublisherPage() {
               );
             })()}
             {rpAccounts.length > 0 && (
-              <button onClick={saveRpMapping} disabled={rpBusy} className="mt-1 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold cursor-pointer disabled:opacity-50">
+              <button onClick={saveRpMapping} disabled={rpBusy} className="mt-1 px-4 py-2 min-h-[40px] lg:min-h-0 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold cursor-pointer disabled:opacity-50">
                 {rpBusy ? "Saving…" : "Save mapping"}
               </button>
             )}
@@ -1595,7 +1595,7 @@ export default function SocialPublisherPage() {
         <div className="flex items-center gap-2 flex-wrap bg-slate-950/40 border border-slate-900 rounded-xl px-3 py-2">
           {hubCollapsed && (
             <button onClick={() => setHubCollapsed(false)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer transition-all">
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer transition-all">
               <FolderOpen className="w-3.5 h-3.5" />
               <span>Show Content Hub{hubMedia.length > 0 ? ` (${hubMedia.length} waiting)` : ""}</span>
             </button>
@@ -1607,7 +1607,7 @@ export default function SocialPublisherPage() {
                 {selectedThumb && <span className="text-emerald-400"> · thumb {selectedThumb.name}</span>}
               </span>
               <button onClick={clearSelection}
-                className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-700 text-[11px] font-bold text-slate-400 hover:text-rose-400 cursor-pointer transition-all">
+                className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-700 text-[11px] font-bold text-slate-400 hover:text-rose-400 cursor-pointer transition-all">
                 <X className="w-3.5 h-3.5" /><span>Deselect</span>
               </button>
             </>
@@ -1630,14 +1630,14 @@ export default function SocialPublisherPage() {
             {hubThumbs.length > 0 && <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-950/40 border border-emerald-900 text-emerald-400">{hubThumbs.length} thumbnails</span>}
           </h3>
           <button onClick={() => setHubCollapsed(true)} title="Hide this panel — the composer and preview get the full width"
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">
+            className="inline-flex items-center gap-1 px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">
             <X className="w-3 h-3" /><span>Hide</span>
           </button>
           {hubMedia.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
-              <button onClick={() => setHubFilter("all")} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border cursor-pointer ${hubFilter === "all" ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>All</button>
+              <button onClick={() => setHubFilter("all")} className={`px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-full text-[10px] font-bold border cursor-pointer ${hubFilter === "all" ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>All</button>
               {Array.from(new Set(hubMedia.map((u) => u.clients?.name || "Unknown"))).sort().map((n) => (
-                <button key={n} onClick={() => setHubFilter(n)} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border cursor-pointer ${hubFilter === n ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>
+                <button key={n} onClick={() => setHubFilter(n)} className={`px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-full text-[10px] font-bold border cursor-pointer ${hubFilter === n ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>
                   {n} <span className="font-black">({hubClientTotals[n] || 0})</span>
                 </button>
               ))}
@@ -1675,7 +1675,7 @@ export default function SocialPublisherPage() {
                     )}
                   </div>
                 </div>
-                <button onClick={() => applyHubUpload(u)} className="w-full py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[11px] font-bold cursor-pointer">
+                <button onClick={() => applyHubUpload(u)} className="w-full py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[11px] font-bold cursor-pointer">
                   {selectedUpload?.id === u.id ? `Loaded #${hubSeq[u.id]} ✓` : `Use #${hubSeq[u.id]} →`}
                 </button>
               </div>
@@ -1698,7 +1698,7 @@ export default function SocialPublisherPage() {
           </div>
           <div>
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Content Type <span className="text-slate-600 normal-case font-medium">(pick 1–2, e.g. Reel + Story)</span></label>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               {TYPES.map((t) => (
                 <button key={t} onClick={() => toggleType(t)} className={`px-4 py-2 rounded-full text-xs font-bold border capitalize cursor-pointer transition-all ${contentTypes.includes(t) ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>{t}</button>
               ))}
@@ -1931,7 +1931,7 @@ export default function SocialPublisherPage() {
               <div className="flex items-center justify-center gap-1.5 flex-wrap">
                 {[-1, -0.25, -0.05, 0.05, 0.25, 1].map((d) => (
                   <button key={d} type="button" onClick={() => seekTo(scrubT + d)} disabled={!videoDuration}
-                    className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[10px] font-mono font-bold text-slate-300 hover:text-white cursor-pointer disabled:opacity-40">
+                    className="px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[10px] font-mono font-bold text-slate-300 hover:text-white cursor-pointer disabled:opacity-40">
                     {d > 0 ? `+${d}` : d}s
                   </button>
                 ))}
@@ -1996,12 +1996,12 @@ export default function SocialPublisherPage() {
         <div className="space-y-2">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Caption</label>
-            <div className="flex items-center gap-2">
-              <select value={aiModel} onChange={(e) => setAiModel(e.target.value as "chatgpt" | "gemini")} className="text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-white cursor-pointer focus:outline-none">
+            <div className="flex items-center gap-2 flex-wrap">
+              <select value={aiModel} onChange={(e) => setAiModel(e.target.value as "chatgpt" | "gemini")} className="text-[11px] max-w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 min-h-[40px] lg:min-h-0 text-white cursor-pointer focus:outline-none">
                 <option value="chatgpt">ChatGPT (GPT-4o)</option>
                 <option value="gemini">Gemini</option>
               </select>
-              <button onClick={generateCaption} disabled={generating} className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 text-xs font-bold cursor-pointer disabled:opacity-50">
+              <button onClick={generateCaption} disabled={generating} className="flex items-center space-x-1.5 px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 text-xs font-bold cursor-pointer disabled:opacity-50">
                 {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
                 <span>{generating ? "Writing…" : "Generate from Brand Brain"}</span>
               </button>
@@ -2032,7 +2032,7 @@ export default function SocialPublisherPage() {
               { k: "tomorrow10" as const, label: "Tomorrow 10 AM" },
             ].map((p) => (
               <button key={p.k} type="button" onClick={() => applyPreset(p.k)}
-                className="px-3 py-1.5 rounded-full text-[11px] font-bold border bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-indigo-500 cursor-pointer transition-all">
+                className="px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-full text-[11px] font-bold border bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-indigo-500 cursor-pointer transition-all">
                 {p.label}
               </button>
             ))}
@@ -2071,14 +2071,14 @@ export default function SocialPublisherPage() {
         {platforms.length > 1 && (
           <div className="flex flex-wrap gap-1.5">
             {platforms.map((p) => (
-              <button key={p} onClick={() => setPreviewPlat(p)} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border capitalize cursor-pointer ${previewPlat === p ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>{p}</button>
+              <button key={p} onClick={() => setPreviewPlat(p)} className={`px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-full text-[10px] font-bold border capitalize cursor-pointer ${previewPlat === p ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>{p}</button>
             ))}
           </div>
         )}
         {contentTypes.length > 1 && ["instagram", "facebook"].includes(previewPlat) && (
           <div className="flex gap-1.5">
             {contentTypes.map((t) => (
-              <button key={t} onClick={() => setPreviewType(t)} className={`px-2.5 py-1 rounded-full text-[10px] font-bold border capitalize cursor-pointer ${previewType === t ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>{t}</button>
+              <button key={t} onClick={() => setPreviewType(t)} className={`px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-full text-[10px] font-bold border capitalize cursor-pointer ${previewType === t ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400"}`}>{t}</button>
             ))}
           </div>
         )}
@@ -2127,7 +2127,7 @@ export default function SocialPublisherPage() {
                   <span className="text-[11px] text-slate-600 py-2">{autoClient ? "None mapped in RecurPost for this client." : "Select a client first."}</span>
                 ) : autoAvailable.map((p) => (
                   <button key={p} onClick={() => setAutoPlatforms((prev) => prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p])}
-                    className={`px-3.5 py-2 rounded-full text-xs font-bold border capitalize cursor-pointer transition-all ${autoPlatforms.includes(p) ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
+                    className={`px-3.5 py-2 min-h-[40px] lg:min-h-0 rounded-full text-xs font-bold border capitalize cursor-pointer transition-all ${autoPlatforms.includes(p) ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
                     {p}
                   </button>
                 ))}
@@ -2191,7 +2191,7 @@ export default function SocialPublisherPage() {
                     { v: null, label: "Manual" },
                   ] as Array<{ v: number | null; label: string }>).map((g) => (
                     <button key={g.label} onClick={() => setGapMins(g.v)}
-                      className={`px-2.5 py-1.5 rounded-md text-[10px] font-bold cursor-pointer transition-all ${gapMins === g.v ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
+                      className={`px-2.5 py-1.5 min-h-[40px] lg:min-h-0 rounded-md text-[10px] font-bold cursor-pointer transition-all ${gapMins === g.v ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
                       {g.label}
                     </button>
                   ))}
@@ -2200,7 +2200,7 @@ export default function SocialPublisherPage() {
 
               {(Object.keys(autoDates).length > 0 || Object.keys(autoTimes).length > 0) && (
                 <button onClick={() => { setAutoDates({}); setAutoTimes({}); }}
-                  className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-bold text-slate-400 hover:text-white cursor-pointer">
+                  className="px-3 py-2 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-bold text-slate-400 hover:text-white cursor-pointer">
                   Reset {Object.keys(autoDates).length + Object.keys(autoTimes).length} change(s)
                 </button>
               )}
@@ -2251,7 +2251,7 @@ export default function SocialPublisherPage() {
                     {(["clear", "risk"] as const).map((m) => (
                       <button key={m} onClick={() => setAutoMode(m)}
                         title={m === "risk" ? "Also show creatives QC rejected, with the reason" : "Only creatives that passed QC"}
-                        className={`px-2.5 py-1 rounded-md cursor-pointer transition-colors ${
+                        className={`px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-md cursor-pointer transition-colors ${
                           autoMode === m
                             ? m === "risk" ? "bg-amber-600 text-black" : "bg-indigo-600 text-white"
                             : "text-slate-500 hover:text-white"
@@ -2267,7 +2267,7 @@ export default function SocialPublisherPage() {
                 <div className="flex items-center gap-3 flex-wrap">
                   <span className="text-[10px] text-slate-600">Drag a row by ⠿ to reorder — the dates follow the sequence.</span>
                   <button onClick={writeAllCaptions} disabled={writeAllBusy}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[11px] font-bold text-white cursor-pointer disabled:opacity-50">
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[11px] font-bold text-white cursor-pointer disabled:opacity-50">
                     {writeAllBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
                     <span>{writeAllBusy ? `writing ${writeAllDone} of ${writeAllTotal}…` : "Write all captions"}</span>
                   </button>
@@ -2291,7 +2291,7 @@ export default function SocialPublisherPage() {
                     onDragOver={(e) => { e.preventDefault(); if (dragId && dragId !== r.id) setOverId(r.id); }}
                     onDragLeave={() => setOverId((o) => (o === r.id ? null : o))}
                     onDrop={(e) => { e.preventDefault(); if (dragId) reorder(dragId, r.id); setDragId(null); setOverId(null); }}
-                    className={`flex items-start gap-3 rounded-xl border p-3 transition-all ${
+                    className={`flex flex-wrap sm:flex-nowrap items-start gap-3 rounded-xl border p-3 transition-all ${
                       overId === r.id ? "border-[var(--yellow)] bg-[var(--yellow)]/5"
                       : dragId === r.id ? "border-indigo-600 opacity-40"
                       : skipped ? "border-slate-900 bg-slate-950/30 opacity-50"
@@ -2311,7 +2311,7 @@ export default function SocialPublisherPage() {
                         : <img src={r.file_url} alt="" className="w-full h-full object-cover" />}
                     </div>
 
-                    <div className="min-w-0 flex-1 space-y-2">
+                    <div className="min-w-[140px] sm:min-w-0 flex-1 space-y-2">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[11px] font-bold text-white truncate max-w-[220px]">{r.file_name || "creative"}</span>
                         <span className="text-[9px] uppercase font-bold text-slate-500">{r.content_type}</span>
@@ -2400,10 +2400,10 @@ export default function SocialPublisherPage() {
                             setAutoDates((d) => { const n = { ...d }; delete n[r.id]; return n; });
                             setAutoTimes((t) => { const n = { ...t }; delete n[r.id]; return n; });
                           }}
-                          className="text-[9px] font-bold text-slate-600 hover:text-white cursor-pointer">reset</button>
+                          className="text-[9px] font-bold text-slate-600 hover:text-white cursor-pointer min-h-[40px] lg:min-h-0">reset</button>
                       )}
                       <button onClick={() => setAutoSkip((s) => { const n = new Set(s); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; })}
-                        className="text-[10px] font-bold text-slate-500 hover:text-white cursor-pointer">
+                        className="text-[10px] font-bold text-slate-500 hover:text-white cursor-pointer min-h-[40px] lg:min-h-0">
                         {skipped ? "include" : "skip"}
                       </button>
                     </div>
@@ -2528,7 +2528,7 @@ export default function SocialPublisherPage() {
                   {storyHubOptions.map((u) => <option key={u.id} value={u.file_url}>{u.file_name || "file"}</option>)}
                 </select>
                 <button onClick={() => { setStoryUploadTarget("one"); storyFileRef.current?.click(); }} disabled={uploading === "media"}
-                  className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer disabled:opacity-50 shrink-0">
+                  className="inline-flex items-center gap-1.5 px-3 py-2.5 min-h-[40px] lg:min-h-0 rounded-xl bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer disabled:opacity-50 shrink-0">
                   <UploadCloud className="w-3.5 h-3.5" /><span>Upload</span>
                 </button>
               </div>
@@ -2598,7 +2598,7 @@ export default function SocialPublisherPage() {
                   className="w-24 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500" />
               </div>
               <button onClick={spreadEvenly}
-                className="px-4 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer">
+                className="px-4 py-2 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer">
                 Apply to all {storySlots.length} slots
               </button>
             </div>
@@ -2611,14 +2611,14 @@ export default function SocialPublisherPage() {
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                 Story slots <span className="text-slate-600 normal-case font-medium">({storySlots.length} of {STORY_MAX} · {storyReady.length} ready to send)</span>
               </label>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <button onClick={addSlot} disabled={storySlots.length >= STORY_MAX}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer disabled:opacity-40">
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer disabled:opacity-40">
                   <Plus className="w-3.5 h-3.5" /><span>Add slot</span>
                 </button>
                 <button onClick={() => setStorySlots((rows) => { const need = Math.min(STORY_MAX, 10) - rows.length; return need > 0 ? [...rows, ...Array.from({ length: need }, newSlot)] : rows; })}
                   disabled={storySlots.length >= 10}
-                  className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer disabled:opacity-40">
+                  className="px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer disabled:opacity-40">
                   Make it 10
                 </button>
               </div>
@@ -2654,7 +2654,7 @@ export default function SocialPublisherPage() {
                     </select>
                     <button onClick={() => { setStoryUploadTarget(r.key); storyFileRef.current?.click(); }}
                       disabled={uploading === "media" || !!storyBatch} title="Upload a file into this slot"
-                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-slate-400 hover:text-white cursor-pointer disabled:opacity-40">
+                      className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-slate-400 hover:text-white cursor-pointer disabled:opacity-40">
                       <UploadCloud className="w-3.5 h-3.5" />
                     </button>
                   </>
@@ -2667,17 +2667,17 @@ export default function SocialPublisherPage() {
 
                 <button onClick={() => duplicateSlot(r.key)} disabled={storySlots.length >= STORY_MAX}
                   title={`Duplicate this slot — same creative, ${spreadGap} min later`}
-                  className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-slate-400 hover:text-white cursor-pointer disabled:opacity-30">
+                  className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-slate-400 hover:text-white cursor-pointer disabled:opacity-30">
                   <Copy className="w-3.5 h-3.5" />
                 </button>
                 {storyMode === "many" && r.mediaUrl && (
                   <button onClick={() => fillAllFrom(r)} title="Use this creative in every slot"
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">
+                    className="px-2.5 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">
                     Fill all
                   </button>
                 )}
                 <button onClick={() => removeSlot(r.key)} disabled={storySlots.length <= 1} title="Remove this slot"
-                  className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-700 text-slate-400 hover:text-rose-400 cursor-pointer disabled:opacity-30">
+                  className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-700 text-slate-400 hover:text-rose-400 cursor-pointer disabled:opacity-30">
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -2728,16 +2728,16 @@ export default function SocialPublisherPage() {
                 { k: "posted", label: `✓ Posted (${posts.filter((p) => ["sent", "published"].includes(p.status) && !isFuture(p)).length})` },
                 { k: "failed", label: `⚠ Failed (${posts.filter((p) => p.status === "failed").length})` },
               ] as const).map((f) => (
-                <button key={f.k} onClick={() => setLibFilter(f.k)} className={`px-3 py-1.5 rounded-full text-[11px] font-bold border cursor-pointer ${libFilter === f.k ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>{f.label}</button>
+                <button key={f.k} onClick={() => setLibFilter(f.k)} className={`px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-full text-[11px] font-bold border cursor-pointer ${libFilter === f.k ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>{f.label}</button>
               ))}
               {/* "Sent" only ever meant RecurPost took it. This asks the
                   platforms what actually went live. */}
               <button onClick={verifyPublished} disabled={verifying}
-                className="ml-auto inline-flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-full border bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-indigo-500 cursor-pointer disabled:opacity-50">
+                className="ml-auto inline-flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-full border bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-indigo-500 cursor-pointer disabled:opacity-50">
                 {verifying ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
                 <span>{verifying ? "Checking…" : "Check what actually published"}</span>
               </button>
-              <select value={libClient} onChange={(e) => setLibClient(e.target.value)} className="text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-white cursor-pointer focus:outline-none">
+              <select value={libClient} onChange={(e) => setLibClient(e.target.value)} className="text-[11px] max-w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 min-h-[40px] lg:min-h-0 text-white cursor-pointer focus:outline-none">
                 <option value="all">All clients</option>
                 {Array.from(new Set(posts.map((p) => p.clients?.name).filter(Boolean))).sort().map((n) => <option key={n} value={n as string}>{n}</option>)}
               </select>
@@ -2747,28 +2747,28 @@ export default function SocialPublisherPage() {
             <div className="flex items-center gap-3 flex-wrap border-t border-slate-900 pt-3">
               <div className="flex bg-slate-950 border border-slate-900 rounded-lg p-0.5 text-[10px] font-bold uppercase">
                 {(["agenda", "month", "list"] as const).map((v) => (
-                  <button key={v} onClick={() => setLibView(v)} className={`px-3 py-1.5 rounded-md cursor-pointer ${libView === v ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>{v}</button>
+                  <button key={v} onClick={() => setLibView(v)} className={`px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-md cursor-pointer ${libView === v ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>{v}</button>
                 ))}
               </div>
               {libView === "agenda" && (
                 <div className="flex items-center gap-2">
                   <button onClick={() => setAgendaStart((d) => { const n = new Date(d); n.setDate(n.getDate() - AGENDA_DAYS); return n; })}
-                    className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white cursor-pointer">‹</button>
+                    className="px-2 py-1 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white cursor-pointer">‹</button>
                   <span className="text-sm font-bold text-white min-w-[190px] text-center">
                     {fmtISTDate(agendaStart)} — {fmtISTDate(new Date(agendaStart.getTime() + (AGENDA_DAYS - 1) * 86400000))}
                   </span>
                   <button onClick={() => setAgendaStart((d) => { const n = new Date(d); n.setDate(n.getDate() + AGENDA_DAYS); return n; })}
-                    className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white cursor-pointer">›</button>
+                    className="px-2 py-1 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white cursor-pointer">›</button>
                   <button onClick={() => { const d = new Date(); d.setHours(0, 0, 0, 0); setAgendaStart(d); }}
-                    className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">Today</button>
+                    className="px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-950 border border-slate-800 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">Today</button>
                 </div>
               )}
               {libView === "month" && (
                 <div className="flex items-center gap-2">
-                  <button onClick={() => setLibMonth(new Date(libMonth.getFullYear(), libMonth.getMonth() - 1, 1))} className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white cursor-pointer">‹</button>
+                  <button onClick={() => setLibMonth(new Date(libMonth.getFullYear(), libMonth.getMonth() - 1, 1))} className="px-2 py-1 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white cursor-pointer">‹</button>
                   <span className="text-sm font-bold text-white min-w-[130px] text-center">{libMonth.toLocaleString(undefined, { month: "long", year: "numeric" })}</span>
-                  <button onClick={() => setLibMonth(new Date(libMonth.getFullYear(), libMonth.getMonth() + 1, 1))} className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white cursor-pointer">›</button>
-                  <button onClick={() => { const d = new Date(); setLibMonth(new Date(d.getFullYear(), d.getMonth(), 1)); }} className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">Today</button>
+                  <button onClick={() => setLibMonth(new Date(libMonth.getFullYear(), libMonth.getMonth() + 1, 1))} className="px-2 py-1 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 hover:text-white cursor-pointer">›</button>
+                  <button onClick={() => { const d = new Date(); setLibMonth(new Date(d.getFullYear(), d.getMonth(), 1)); }} className="px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-950 border border-slate-800 text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">Today</button>
                 </div>
               )}
             </div>
@@ -2812,12 +2812,12 @@ export default function SocialPublisherPage() {
                         ) : (
                           <div className="p-2 space-y-2">
                             {items.map((p) => (
-                              <div key={p.id} className="flex items-start gap-2.5 bg-slate-950/80 border border-slate-900 rounded-lg p-2.5">
+                              <div key={p.id} className="flex flex-wrap sm:flex-nowrap items-start gap-2.5 bg-slate-950/80 border border-slate-900 rounded-lg p-2.5">
                                 <div className={`w-12 shrink-0 rounded-md overflow-hidden ${["reel", "story"].includes(p.content_type) ? "aspect-[9/16]" : "aspect-square"} bg-slate-900`}>
                                   {/* eslint-disable-next-line @next/next/no-img-element */}
                                   <img src={p.thumbnail_url || p.media_url} alt="" className="w-full h-full object-cover" />
                                 </div>
-                                <div className="min-w-0 flex-1">
+                                <div className="min-w-[140px] sm:min-w-0 flex-1">
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <span className="text-[11px] font-black text-white">
                                       {postDate(p).toLocaleTimeString("en-IN", { timeZone: IST_TZ, hour: "numeric", minute: "2-digit" })}
@@ -2834,14 +2834,14 @@ export default function SocialPublisherPage() {
                                   <p className="text-[10px] text-slate-500 line-clamp-2 mt-0.5">{p.caption || p.title || "(no caption)"}</p>
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0">
-                                  <button onClick={() => setLibSel(p)} title="Preview" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer"><Eye className="w-3.5 h-3.5" /></button>
+                                  <button onClick={() => setLibSel(p)} title="Preview" className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer"><Eye className="w-3.5 h-3.5" /></button>
                                   {(p.status === "failed" || isFuture(p)) && (
-                                    <button onClick={() => { setLibSel(p); startEdit(p); }} title="Edit caption, thumbnail or time" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer"><Pencil className="w-3.5 h-3.5" /></button>
+                                    <button onClick={() => { setLibSel(p); startEdit(p); }} title="Edit caption, thumbnail or time" className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer"><Pencil className="w-3.5 h-3.5" /></button>
                                   )}
                                   {p.status === "failed" && (
-                                    <button disabled={libBusy === p.id} onClick={() => retryPost(p)} title="Retry" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer disabled:opacity-50"><RotateCcw className="w-3.5 h-3.5" /></button>
+                                    <button disabled={libBusy === p.id} onClick={() => retryPost(p)} title="Retry" className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer disabled:opacity-50"><RotateCcw className="w-3.5 h-3.5" /></button>
                                   )}
-                                  <button disabled={libBusy === p.id} onClick={() => deletePost(p)} title="Remove" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-700 text-slate-400 hover:text-rose-400 cursor-pointer disabled:opacity-50"><Trash2 className="w-3.5 h-3.5" /></button>
+                                  <button disabled={libBusy === p.id} onClick={() => deletePost(p)} title="Remove" className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-700 text-slate-400 hover:text-rose-400 cursor-pointer disabled:opacity-50"><Trash2 className="w-3.5 h-3.5" /></button>
                                 </div>
                               </div>
                             ))}
@@ -2915,14 +2915,14 @@ export default function SocialPublisherPage() {
                 {libRows.map((p) => {
                   const scheduled = p.status === "sent" && isFuture(p);
                   return (
-                    <div key={p.id} onClick={() => setLibSel(p)} className={`flex items-center gap-3 rounded-xl border p-2.5 cursor-pointer transition-all ${libSel?.id === p.id ? "border-indigo-500 bg-indigo-950/20" : "border-slate-900 bg-slate-950/60 hover:border-slate-700"}`}>
+                    <div key={p.id} onClick={() => setLibSel(p)} className={`flex flex-wrap sm:flex-nowrap items-center gap-3 rounded-xl border p-2.5 cursor-pointer transition-all ${libSel?.id === p.id ? "border-indigo-500 bg-indigo-950/20" : "border-slate-900 bg-slate-950/60 hover:border-slate-700"}`}>
                       <div className="w-12 h-12 rounded-lg overflow-hidden bg-slate-900 border border-slate-800 shrink-0 flex items-center justify-center">
                         {p.thumbnail_url || !/\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(p.media_url) ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={p.thumbnail_url || p.media_url} alt="" className="w-full h-full object-cover" />
                         ) : <span className="text-slate-500 text-lg">▶</span>}
                       </div>
-                      <div className="min-w-0 flex-1">
+                      <div className="min-w-[140px] sm:min-w-0 flex-1">
                         <p className="text-[11px] font-bold text-white truncate">{p.clients?.name || "—"} <span className="text-slate-500 font-normal capitalize">· {p.platform} · {p.content_type}</span></p>
                         <p className="text-[10px] text-slate-500 truncate">{p.title || p.caption?.slice(0, 70) || "(no caption)"}</p>
                         <p className="text-[9px] text-slate-600">{p.scheduled_for ? `⏰ ${fmtIST(p.scheduled_for)} IST` : `${fmtIST(p.created_at)} IST`} · {p.profiles?.name || ""}</p>
@@ -2932,16 +2932,16 @@ export default function SocialPublisherPage() {
                           {p.status === "failed" ? "FAILED" : scheduled ? "SCHEDULED" : "POSTED"}
                         </span>
                         {(p.status === "failed" || scheduled) && (
-                          <button onClick={() => { setLibSel(p); startEdit(p); }} title="Edit caption, thumbnail or time" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer">
+                          <button onClick={() => { setLibSel(p); startEdit(p); }} title="Edit caption, thumbnail or time" className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer">
                             <Pencil className="w-3.5 h-3.5" />
                           </button>
                         )}
                         {p.status === "failed" && (
-                          <button disabled={libBusy === p.id} onClick={() => retryPost(p)} title="Retry" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer disabled:opacity-50">
+                          <button disabled={libBusy === p.id} onClick={() => retryPost(p)} title="Retry" className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer disabled:opacity-50">
                             {libBusy === p.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
                           </button>
                         )}
-                        <button disabled={libBusy === p.id} onClick={() => deletePost(p)} title="Remove from library" className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-700 text-slate-500 hover:text-rose-400 cursor-pointer disabled:opacity-50">
+                        <button disabled={libBusy === p.id} onClick={() => deletePost(p)} title="Remove from library" className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-700 text-slate-500 hover:text-rose-400 cursor-pointer disabled:opacity-50">
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
@@ -2991,18 +2991,18 @@ export default function SocialPublisherPage() {
                     {libSel.scheduled_for ? `⏰ ${fmtIST(libSel.scheduled_for)} IST` : `${fmtIST(libSel.created_at)} IST`}
                   </span>
                   {libSel.status === "failed" && (
-                    <button disabled={libBusy === libSel.id} onClick={() => retryPost(libSel)} className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1">
+                    <button disabled={libBusy === libSel.id} onClick={() => retryPost(libSel)} className="px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1">
                       {libBusy === libSel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}<span>Retry</span>
                     </button>
                   )}
                   {/* Editing can only achieve something while nothing has gone
                       out yet — a published post lives on the platform now. */}
                   {(libSel.status === "failed" || isFuture(libSel)) && editing?.id !== libSel.id && (
-                    <button onClick={() => startEdit(libSel)} className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:border-indigo-600 text-[10px] font-bold cursor-pointer flex items-center gap-1">
+                    <button onClick={() => startEdit(libSel)} className="px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:border-indigo-600 text-[10px] font-bold cursor-pointer flex items-center gap-1">
                       <Pencil className="w-3 h-3" /><span>Edit</span>
                     </button>
                   )}
-                  <button disabled={libBusy === libSel.id} onClick={() => deletePost(libSel)} className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1">
+                  <button disabled={libBusy === libSel.id} onClick={() => deletePost(libSel)} className="px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1">
                     <Trash2 className="w-3 h-3" /><span>Remove</span>
                   </button>
                 </div>
@@ -3031,7 +3031,7 @@ export default function SocialPublisherPage() {
                         if (!window.confirm(`Have you deleted post ${libSel.recurpost_post_id ?? ""} in RecurPost's Queue?\n\nIf it is still there, this will publish twice.`)) return;
                         retryPost(libSel, true);
                       }}
-                      className="px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-[10px] font-bold text-white cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                      className="px-2.5 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-amber-600 hover:bg-amber-500 text-[10px] font-bold text-white cursor-pointer disabled:opacity-50 flex items-center gap-1"
                     >
                       {libBusy === libSel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
                       <span>I&apos;ve deleted it — re-send corrected</span>
@@ -3110,14 +3110,14 @@ export default function SocialPublisherPage() {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <button onClick={saveEdit} disabled={libBusy === editing.id || !!uploading}
-                        className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[10px] font-bold text-white cursor-pointer disabled:opacity-50 flex items-center gap-1">
+                        className="px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[10px] font-bold text-white cursor-pointer disabled:opacity-50 flex items-center gap-1">
                         {libBusy === editing.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
                         <span>Save changes</span>
                       </button>
                       <button onClick={() => setEditing(null)}
-                        className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-[10px] font-bold cursor-pointer">
+                        className="px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-[10px] font-bold cursor-pointer">
                         Cancel
                       </button>
                     </div>

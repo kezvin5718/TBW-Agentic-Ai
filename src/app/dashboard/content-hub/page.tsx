@@ -436,7 +436,7 @@ export default function ContentHubPage() {
                     type="button"
                     disabled={busy}
                     onClick={() => inputRefs[key].current?.click()}
-                    className={`px-4 py-1.5 rounded-lg text-white text-xs font-bold ${a.btn} disabled:opacity-50 cursor-pointer`}
+                    className={`px-4 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg text-white text-xs font-bold ${a.btn} disabled:opacity-50 cursor-pointer`}
                   >
                     Add Files
                   </button>
@@ -475,7 +475,7 @@ export default function ContentHubPage() {
                       disabled={busy || !selectedClient || (staged[key]?.length || 0) === 0}
                       onClick={() => uploadStaged(key)}
                       title={!selectedClient ? "Select a client first" : (staged[key]?.length || 0) === 0 ? "Add files first" : ""}
-                      className={`flex-1 py-2 rounded-lg text-white text-xs font-bold ${a.btn} disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer`}
+                      className={`flex-1 py-2 min-h-[40px] lg:min-h-0 rounded-lg text-white text-xs font-bold ${a.btn} disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer`}
                     >
                       {/* Name the actual blocker — saying "add files first"
                           when a client was never picked sends people hunting
@@ -489,7 +489,7 @@ export default function ContentHubPage() {
                         : `⬆ Upload ${staged[key].length} file${staged[key].length > 1 ? "s" : ""} & run QC`}
                     </button>
                     {(staged[key]?.length || 0) > 0 && (
-                      <button type="button" disabled={busy} onClick={() => clearStaged(key)} className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-xs font-bold cursor-pointer">Clear</button>
+                      <button type="button" disabled={busy} onClick={() => clearStaged(key)} className="px-3 py-2 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-xs font-bold cursor-pointer">Clear</button>
                     )}
                   </div>
                 </div>
@@ -509,17 +509,17 @@ export default function ContentHubPage() {
         <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
           <h3 className="text-sm font-bold text-white">Recent Uploads</h3>
           {selectedIds.length > 0 && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[11px] text-slate-400 font-bold">{selectedIds.length} selected</span>
               <button
                 onClick={deleteSelected}
                 disabled={deleting === "bulk"}
-                className="px-3 py-1.5 rounded-lg bg-rose-950/40 border border-rose-900 text-rose-300 hover:bg-rose-900/40 text-[11px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                className="px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-rose-950/40 border border-rose-900 text-rose-300 hover:bg-rose-900/40 text-[11px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
               >
                 {deleting === "bulk" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                 <span>Delete selected</span>
               </button>
-              <button onClick={() => setSelectedIds([])} className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-[11px] font-bold cursor-pointer">Clear</button>
+              <button onClick={() => setSelectedIds([])} className="px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-[11px] font-bold cursor-pointer">Clear</button>
             </div>
           )}
         </div>
@@ -527,7 +527,7 @@ export default function ContentHubPage() {
           <p className="text-xs text-slate-600 py-6 text-center">No uploads yet. Select a client and upload a creative above.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-xs">
+            <table className="w-full min-w-[760px] text-xs">
               <thead>
                 <tr className="text-slate-500 text-left border-b border-slate-900">
                   <th className="py-2 pr-2 font-bold w-6">
