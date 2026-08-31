@@ -1,11 +1,13 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import BrandLogo from "./BrandLogo";
 import Avatar from "./Avatar";
 import PendingSignupsBadge from "./PendingSignupsBadge";
 import AccountControls from "./AccountControls";
+import { NAV_OPEN_KEY, type NavSection } from "@/lib/navigation";
 import {
   Sparkles,
   LayoutDashboard,
@@ -35,16 +37,32 @@ import {
   IndianRupee,
   Wallet,
   Menu,
+  Home,
+  Compass,
+  ClipboardCheck,
+  Brush,
+  MessagesSquare,
+  Target,
+  BarChart3,
+  Cpu,
+  SlidersHorizontal,
+  Landmark,
+  ChevronRight,
+  LogOut,
 } from "lucide-react";
 
 /**
  * The console's navigation — one sidebar on a desk, a slide-over drawer on a
  * phone.
  *
- * Below lg the whole 25-item menu used to render full-width ABOVE the page, so
- * a phone scrolled through the entire nav before reaching any content. The
- * markup is written once and mounted twice: the drawer and the desk sidebar
- * show the same panel, so the two can never drift.
+ * Below lg the whole menu used to render full-width ABOVE the page, so a phone
+ * scrolled through the entire nav before reaching any content. The markup is
+ * written once and mounted twice: the drawer and the desk sidebar show the
+ * same panel, so the two can never drift.
+ *
+ * The items themselves are config (`src/lib/navigation.ts`), already filtered
+ * by the layout. Sections collapse; the one holding the current page is always
+ * opened on navigation; everything else remembers what the person last chose.
  *
  * A component function cannot cross the server/client boundary, so the layout
  * passes icon names and this map turns them back into icons.
@@ -54,17 +72,13 @@ const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   Phone, Palette, Wand2, Image, Shield, FolderUp, Sparkles, Send, UploadCloud,
   Megaphone, LineChart, Layers, UserIcon, Users, Bot, Link2, Share2, Settings,
   IndianRupee, Wallet, Briefcase,
+  // Section headers
+  Home, Compass, ClipboardCheck, Brush, MessagesSquare, Target, BarChart3, Cpu,
+  SlidersHorizontal, Landmark,
 };
 
-export interface NavItem {
-  name: string;
-  href: string;
-  section: string;
-  icon: string;
-}
-
 interface Props {
-  navItems: NavItem[];
+  sections: NavSection[];
   name: string;
   email: string;
   designation: string | null;
@@ -74,8 +88,10 @@ interface Props {
   roleStyle: { bg: string; label: string; icon: string };
 }
 
-export default function SidebarNav({ navItems, name, email, designation, avatarUrl, role, brandName, roleStyle }: Props) {
+export default function SidebarNav({ sections, name, email, designation, avatarUrl, role, brandName, roleStyle }: Props) {
   const [open, setOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const pathname = usePathname() || "";
 
   // The page behind the drawer must not scroll under the thumb.
   useEffect(() => {
@@ -85,7 +101,72 @@ export default function SidebarNav({ navItems, name, email, designation, avatarU
     return () => { document.body.style.overflow = previous; };
   }, [open]);
 
+  // Which item is the current page: longest matching prefix, so /dashboard
+  // (a prefix of everything) only ever lights up on itself.
+  const activeHref = useMemo(() => {
+    const hrefs = sections.flatMap((s) => s.items.map((i) => i.href));
+    const matches = hrefs.filter((href) =>
+      href === "/dashboard" ? pathname === "/dashboard" : pathname === href || pathname.startsWith(href + "/")
+    );
+    return matches.sort((a, b) => b.length - a.length)[0] ?? null;
+  }, [sections, pathname]);
+
+  const activeSectionId = useMemo(
+    () => sections.find((s) => s.items.some((i) => i.href === activeHref))?.id ?? null,
+    [sections, activeHref]
+  );
+
+  // Expanded sections, remembered per person. Empty until the effect below has
+  // read localStorage — see the firstPersist guard.
+  const [openIds, setOpenIds] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    let saved: Record<string, boolean> | null = null;
+    try {
+      const raw = localStorage.getItem(NAV_OPEN_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) saved = parsed;
+    } catch { /* a preference is not worth an error */ }
+    // First ever visit: only the section holding the current page is open.
+    setOpenIds(saved ?? (activeSectionId ? { [activeSectionId]: true } : {}));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Skip the very first run: it fires with the empty default before the effect
+  // above has restored the saved map, and would overwrite it.
+  const firstPersist = useRef(true);
+  useEffect(() => {
+    if (firstPersist.current) { firstPersist.current = false; return; }
+    try { localStorage.setItem(NAV_OPEN_KEY, JSON.stringify(openIds)); } catch { /* ignore */ }
+  }, [openIds]);
+
+  // Navigating into a collapsed section opens it — nobody should land on a page
+  // they cannot see in the menu. Collapsing it again by hand still works.
+  useEffect(() => {
+    if (!activeSectionId) return;
+    setOpenIds((prev) => (prev[activeSectionId] ? prev : { ...prev, [activeSectionId]: true }));
+  }, [activeSectionId]);
+
+  // The avatar menu closes on a click anywhere else and on Escape. The panel is
+  // mounted twice, so the check is by attribute rather than by ref.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest?.("[data-user-menu]")) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenuOpen(false); };
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
   const RoleBadgeIcon = ICONS[roleStyle.icon] || Shield;
+
+  const closeAll = () => { setOpen(false); setMenuOpen(false); };
 
   const panel = (
     <>
@@ -100,16 +181,54 @@ export default function SidebarNav({ navItems, name, email, designation, avatarU
         </div>
       </div>
 
-      {/* User Card */}
+      {/* User card — the menu that holds the profile and the way out */}
       <div className="p-4 border-b border-slate-900">
         <div className="bg-slate-900/40 border border-slate-900/80 rounded-xl p-3 flex flex-col space-y-2">
-          <Link href="/dashboard/profile" onClick={() => setOpen(false)} className="flex items-center space-x-3 group" title="Edit your profile">
-            <Avatar name={name} url={avatarUrl} size={36} />
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-bold text-slate-200 truncate group-hover:text-[var(--yellow)] transition-colors">{name}</p>
-              <p className="text-[10px] text-slate-500 truncate">{designation || email}</p>
-            </div>
-          </Link>
+          <div className="relative" data-user-menu>
+            <button
+              type="button"
+              onClick={() => setMenuOpen((v) => !v)}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              title="Your account"
+              className="w-full flex items-center space-x-3 group cursor-pointer rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
+            >
+              <Avatar name={name} url={avatarUrl} size={36} />
+              <div className="flex-1 min-w-0 text-left">
+                <p className="text-xs font-bold text-slate-200 truncate group-hover:text-[var(--yellow)] transition-colors">{name}</p>
+                <p className="text-[10px] text-slate-500 truncate">{designation || email}</p>
+              </div>
+              <ChevronRight className={`w-3.5 h-3.5 text-slate-500 shrink-0 transition-transform ${menuOpen ? "rotate-90" : ""}`} />
+            </button>
+
+            {menuOpen && (
+              <div
+                role="menu"
+                className="absolute left-0 right-0 top-full mt-2 z-50 rounded-xl border border-slate-800 bg-slate-950 shadow-xl shadow-black/40 p-1"
+              >
+                <Link
+                  href="/dashboard/profile"
+                  role="menuitem"
+                  onClick={closeAll}
+                  className="flex items-center gap-2.5 min-h-[40px] px-3 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                >
+                  <UserIcon className="w-4 h-4 text-slate-500" />
+                  <span>My Profile</span>
+                </Link>
+                <form action="/auth/signout" method="POST">
+                  <button
+                    type="submit"
+                    role="menuitem"
+                    className="w-full flex items-center gap-2.5 min-h-[40px] px-3 rounded-lg text-xs font-medium text-slate-300 hover:text-red-400 hover:bg-red-950/20 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  >
+                    <LogOut className="w-4 h-4 text-slate-500" />
+                    <span>Sign Out</span>
+                  </button>
+                </form>
+              </div>
+            )}
+          </div>
+
           <div className={`flex items-center space-x-1.5 px-2 py-1 rounded-lg border text-[10px] font-bold w-fit ${roleStyle.bg}`}>
             <RoleBadgeIcon className="w-3 h-3" />
             <span>{roleStyle.label}</span>
@@ -122,30 +241,68 @@ export default function SidebarNav({ navItems, name, email, designation, avatarU
         </div>
       </div>
 
-      {/* Sidebar Nav — ordered to follow the workflow, grouped by section */}
-      <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-        {navItems.map((item, idx) => {
-          const Icon = ICONS[item.icon] || LayoutDashboard;
-          const showHeader = idx === 0 || navItems[idx - 1].section !== item.section;
-          return (
-            <React.Fragment key={item.href}>
-              {showHeader && (
-                <p className={`text-[10px] font-bold text-slate-500 uppercase tracking-wider px-3 mb-2 ${idx === 0 ? "" : "mt-4"}`}>
-                  {item.section}
-                </p>
-              )}
-              <Link
-                href={item.href}
-                onClick={() => setOpen(false)}
-                className="flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-900/50 border border-transparent hover:border-slate-900 transition-all group"
-              >
-                <Icon className="w-4 h-4 text-slate-500 group-hover:text-indigo-400 transition-colors" />
-                <span className="font-medium">{item.name}</span>
-                {item.href === "/dashboard/team" && <PendingSignupsBadge />}
-              </Link>
-            </React.Fragment>
-          );
-        })}
+      {/* Sidebar nav — workstream sections, each one collapsible */}
+      <nav className="flex-1 p-4 overflow-y-auto" aria-label="Console sections">
+        <ul className="space-y-1">
+          {sections.map((section) => {
+            const SectionIcon = ICONS[section.icon] || LayoutDashboard;
+            const expanded = !!openIds[section.id];
+            const listId = `nav-section-${section.id}`;
+            return (
+              <li key={section.id}>
+                <button
+                  type="button"
+                  onClick={() => setOpenIds((prev) => ({ ...prev, [section.id]: !prev[section.id] }))}
+                  aria-expanded={expanded}
+                  aria-controls={listId}
+                  className="w-full flex items-center gap-2 px-3 min-h-[36px] rounded-lg text-[10px] font-bold text-slate-500 uppercase tracking-wider hover:text-slate-300 hover:bg-slate-900/40 cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
+                >
+                  <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
+                  <SectionIcon className="w-3.5 h-3.5 shrink-0" />
+                  <span className="flex-1 text-left truncate">{section.label}</span>
+                </button>
+
+                {expanded && (
+                  <ul id={listId} className="mt-1 mb-2 space-y-1">
+                    {section.items.map((item, idx) => {
+                      const Icon = ICONS[item.icon] || LayoutDashboard;
+                      const isActive = item.href === activeHref;
+                      const showGroup = !!item.group && section.items[idx - 1]?.group !== item.group;
+                      return (
+                        <React.Fragment key={item.href}>
+                          {showGroup && (
+                            <li aria-hidden="true" className="pl-9 pr-3 pt-1.5 pb-0.5 text-[9px] font-bold uppercase tracking-wider text-slate-600">
+                              {item.group}
+                            </li>
+                          )}
+                          <li>
+                            <Link
+                              href={item.href}
+                              onClick={closeAll}
+                              aria-current={isActive ? "page" : undefined}
+                              className={`relative flex items-center space-x-3 px-3 min-h-[40px] rounded-lg text-sm border transition-all group ${item.group ? "ml-3" : ""} ${
+                                isActive
+                                  ? "bg-indigo-950/40 border-indigo-900/60 text-white font-semibold"
+                                  : "text-slate-400 font-medium border-transparent hover:text-white hover:bg-slate-900/50 hover:border-slate-900"
+                              }`}
+                            >
+                              {isActive && (
+                                <span aria-hidden="true" className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-indigo-400" />
+                              )}
+                              <Icon className={`w-4 h-4 shrink-0 transition-colors ${isActive ? "text-indigo-300" : "text-slate-500 group-hover:text-indigo-400"}`} />
+                              <span className="truncate">{item.label}</span>
+                              {item.badge === "pendingSignups" && <PendingSignupsBadge />}
+                            </Link>
+                          </li>
+                        </React.Fragment>
+                      );
+                    })}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       </nav>
 
     </>

@@ -5,6 +5,7 @@ import GlobalErrorMonitor from "./GlobalErrorMonitor";
 import SidebarNav from "./SidebarNav";
 import AccountControls from "./AccountControls";
 import { sectionKeyForPath } from "@/lib/sections";
+import { NAVIGATION } from "@/lib/navigation";
 
 export default async function DashboardLayout({
   children,
@@ -32,51 +33,23 @@ export default async function DashboardLayout({
     .maybeSingle();
   const perms: string[] | null = role === "employee" ? ((prof?.permissions as string[] | null) ?? null) : null;
 
-  // Full map of modular nav items. Icons travel as names — a component function
-  // cannot cross into the client sidebar, and everything else here is plain data.
-  const allNavItems = [
-    { name: "Console Home", href: "/dashboard", icon: "LayoutDashboard", roles: ["founder", "employee", "client"], section: "Overview" },
-
-    { name: "1 · Client Onboarding", href: "/dashboard/onboarding", icon: "UserPlus", roles: ["founder"], section: "Client Workflow" },
-    { name: "2 · Brand Brain", href: "/dashboard/brand-brain", icon: "BrainCircuit", roles: ["founder", "employee", "client"], section: "Client Workflow" },
-    { name: "3 · Campaign Planning", href: "/dashboard/planning", icon: "ClipboardList", roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "4 · Approvals Flow", href: "/dashboard/approvals", icon: "CheckSquare", roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "Task Manager", href: "/dashboard/task-manager", icon: "ListTodo", roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "Call Notes", href: "/dashboard/calls", icon: "Phone", roles: ["founder"], section: "Client Workflow" },
-    { name: "5 · Style Library", href: "/dashboard/style-library", icon: "Palette", roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "5b · Plan → Posts", href: "/dashboard/production/plan-posts", icon: "Wand2", roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "6 · Image Studio", href: "/dashboard/image-studio", icon: "Image", roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "7 · Creative Approvals", href: "/dashboard/creatives-review", icon: "Shield", roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "8 · Content Hub", href: "/dashboard/content-hub", icon: "FolderUp", roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "8b · Festivals", href: "/dashboard/festivals", icon: "Sparkles", roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "9 · Social Publisher", href: "/dashboard/social-publisher", icon: "Send", roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "10 · Ad Publishing", href: "/dashboard/publishing", icon: "UploadCloud", roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "11 · Meta Ads Manager", href: "/dashboard/ads", icon: "Megaphone", roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "11b · Catalogue Ad Copy", href: "/dashboard/ad-copy", icon: "Sparkles", roles: ["founder", "employee"], section: "Client Workflow" },
-    { name: "12 · Reporting & Analytics", href: "/dashboard/reporting", icon: "LineChart", roles: ["founder", "employee", "client"], section: "Client Workflow" },
-    { name: "13 · Agency Brain", href: "/dashboard/agency-brain", icon: "Layers", roles: ["founder"], section: "Client Workflow" },
-
-    { name: "My Profile", href: "/dashboard/profile", icon: "UserIcon", roles: ["founder", "employee", "client"], section: "Assistant & System" },
-    { name: "Team & Access", href: "/dashboard/team", icon: "Users", roles: ["founder"], section: "Assistant & System" },
-    { name: "Bron Assistant", href: "/dashboard/jarvis", icon: "Bot", roles: ["founder"], section: "Assistant & System" },
-    { name: "WhatsApp Reader", href: "/dashboard/whatsapp-reader", icon: "Link2", roles: ["founder"], section: "Assistant & System" },
-    { name: "Agents Console", href: "/dashboard/connections", icon: "Share2", roles: ["founder", "employee"], section: "Assistant & System" },
-    { name: "Integrations", href: "/dashboard/settings/integrations", icon: "Settings", roles: ["founder"], section: "Assistant & System" },
-
-    { name: "Accounting", href: "/dashboard/founder-zone/accounting", icon: "IndianRupee", roles: ["founder"], section: "Founder Zone" },
-    { name: "Credit Logs", href: "/dashboard/credit-logs", icon: "Wallet", roles: ["founder"], section: "Founder Zone" },
-  ];
-
-  const filteredNavItems = allNavItems.filter((item) => {
-    const sectionKey = sectionKeyForPath(item.href);
-    if (role === "employee" && perms) {
-      // Explicit permission list: workflow sections follow the list exactly
-      // (including granting normally-founder-only ones like Onboarding).
-      if (sectionKey) return perms.includes(sectionKey);
-      return item.roles.includes(role);
-    }
-    return item.roles.includes(role);
-  });
+  // The nav is config now (src/lib/navigation.ts) — same routes, grouped by
+  // workstream. The filter below is the one this layout always used, applied
+  // per item; a section left with no visible item is dropped whole, so a
+  // non-founder never meets an empty "Founder & Finance" heading.
+  const visibleSections = NAVIGATION.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => {
+      const sectionKey = sectionKeyForPath(item.href);
+      if (role === "employee" && perms) {
+        // Explicit permission list: workflow sections follow the list exactly
+        // (including granting normally-founder-only ones like Onboarding).
+        if (sectionKey) return perms.includes(sectionKey);
+        return (item.roles as readonly string[]).includes(role);
+      }
+      return (item.roles as readonly string[]).includes(role);
+    }),
+  })).filter((section) => section.items.length > 0);
 
   // Role styles
   const roleStyles = {
@@ -90,7 +63,20 @@ export default async function DashboardLayout({
   return (
     <div className="min-h-screen bg-[var(--ink)] text-slate-100 flex flex-col lg:flex-row font-sans">
       <SidebarNav
-        navItems={filteredNavItems.map(({ name, href, section, icon }) => ({ name, href, section, icon }))}
+        sections={visibleSections.map((s) => ({
+          id: s.id,
+          label: s.label,
+          icon: s.icon,
+          items: s.items.map((i) => ({
+            id: i.id,
+            label: i.label,
+            href: i.href,
+            icon: i.icon,
+            roles: i.roles,
+            ...(i.badge ? { badge: i.badge } : {}),
+            ...(i.group ? { group: i.group } : {}),
+          })),
+        }))}
         name={name}
         email={user.email || ""}
         designation={(prof?.designation as string | null) || null}

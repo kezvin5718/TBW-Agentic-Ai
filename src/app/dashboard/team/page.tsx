@@ -201,7 +201,9 @@ export default function TeamPage() {
                             return (
                               <label key={s.key} className={`flex items-center space-x-2 px-2.5 py-1.5 rounded-lg border cursor-pointer text-[11px] ${on ? "bg-indigo-950/30 border-indigo-900 text-white" : "bg-slate-950 border-slate-900 text-slate-500"}`}>
                                 <input type="checkbox" checked={on} onChange={() => togglePerm(u, s.key)} className="accent-[#FFD400]" />
-                                <span><span className="font-bold">{s.num}</span> · {s.name}</span>
+                                {/* The name the menu uses — the numbers live on
+                                    in the keys, which nobody has to read. */}
+                                <span>{s.displayName}</span>
                               </label>
                             );
                           })}
