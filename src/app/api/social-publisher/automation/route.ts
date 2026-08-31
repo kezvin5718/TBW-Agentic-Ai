@@ -21,9 +21,10 @@ function recurPostIdOf(res: unknown): number | null {
  *
  * Everything approved and waiting for this client, captions already written.
  *
- * Only clean work appears: a creative whose batch failed QC is rejected and
- * excluded, because the whole point is that the team opens this screen and
- * finds nothing left to check.
+ * Only clean work appears: a creative whose batch failed QC, or that QC could
+ * not vouch for, is excluded, because the whole point is that the team opens
+ * this screen and finds nothing left to check. With ?risk=1 those same
+ * creatives are listed instead, each carrying the reason it was held back.
  */
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -51,20 +52,46 @@ export async function GET(request: NextRequest) {
     .order("created_at", { ascending: true });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // The refused ones, carrying the reason they were refused. They arrive in the
-  // same shape as everything else and flagged, so the screen can mix them into
-  // one list rather than keeping a second one.
+  // The unblessed ones, carrying the reason they were held back. They arrive in
+  // the same shape as everything else and flagged, so the screen can mix them
+  // into one list rather than keeping a second one.
+  //
+  // Two kinds of unblessed, not one. The obvious kind is a batch QC rejected
+  // outright (status 'rejected'). The kind that went missing entirely is a
+  // creative QC could not make up its mind about — status still 'uploaded',
+  // qc_status 'unsure' (or 'mismatch' on a row with no batch to reject, or
+  // 'skipped') — which passes neither the Clear list's qc_status='match' test
+  // nor the old risk list's status='rejected' test, so it appeared in no mode at
+  // all. QC returns "unsure" on perfectly good work often enough that this hole
+  // swallowed whole deliveries.
+  //
+  // 'pending' and null are deliberately NOT here: QC has not run on those yet,
+  // and "not yet judged" is a different thing from "judged and unconvinced".
+  // They belong in the Clear list once QC gets to them, not in Risk now.
   let refused: Record<string, unknown>[] = [];
   if (risk) {
-    const { data: rejectedRows } = await admin
+    const risky = () => admin
       .from("creative_uploads")
       .select(COLUMNS)
       .eq("client_id", clientId)
-      .eq("status", "rejected")
       .is("festival_id", null)
       .neq("content_type", "thumbnail")
       .order("created_at", { ascending: true });
-    refused = (rejectedRows || []).map((r) => ({ ...r, rejected: true }));
+    const [{ data: rejectedRows }, { data: unblessedRows }] = await Promise.all([
+      risky().eq("status", "rejected"),
+      risky().eq("status", "uploaded").not("qc_status", "is", null).not("qc_status", "in", "(match,pending)"),
+    ]);
+    refused = [
+      ...(rejectedRows || []).map((r) => ({ ...r, rejected: true })),
+      // No rejected_reason on these — nothing rejected them. The reason is the
+      // QC verdict itself, written into the same field the screen already reads,
+      // so the row explains itself without the page learning a second shape.
+      ...(unblessedRows || []).map((r) => ({
+        ...r,
+        rejected: true,
+        rejected_reason: `QC ${r.qc_status}: ${r.qc_note || "could not verify the brand"}`,
+      })),
+    ].sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
   }
 
   // Which platforms this client can actually receive a post on.
@@ -244,7 +271,16 @@ export async function POST(request: NextRequest) {
     // Re-checked at send time: a batch can be rejected between loading the
     // screen and pressing the button, and rejected work must never go out —
     // unless this run is an explicit override of exactly that.
-    const isOverride = riskRun && upload.status === "rejected";
+    //
+    // The override has to cover everything Risk mode shows, not just the rows
+    // marked 'rejected'. A creative QC was unsure about is still sitting at
+    // status 'uploaded' with a qc_status that is not 'match', and the guard
+    // below used to bounce it as "no longer approved" even though the founder
+    // had just looked at it in Risk mode and pressed send.
+    const isOverride = riskRun && (
+      upload.status === "rejected" ||
+      (upload.status === "uploaded" && upload.qc_status !== "match")
+    );
     if (!isOverride && (upload.status !== "uploaded" || upload.qc_status !== "match")) {
       skipped.push(`${upload.id} — no longer approved (${upload.status}/${upload.qc_status}).`);
       continue;

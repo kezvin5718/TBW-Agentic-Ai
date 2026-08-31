@@ -143,8 +143,11 @@ export async function DELETE(request: NextRequest) {
     .in("id", targetIds);
   if (!rows || rows.length === 0) return NextResponse.json({ error: "Upload(s) not found" }, { status: 404 });
 
+  // Rejected rows are deletable too — a rejected creative is not scheduled,
+  // which is the only thing this guard protects. Without it, the founder's
+  // "I deleted it but Risk still shows it" ghosts were literally undeletable.
   const deletable = rows.filter(
-    (r) => r.status === "uploaded" && (role === "founder" || r.uploaded_by === user.id)
+    (r) => (r.status === "uploaded" || r.status === "rejected") && (role === "founder" || r.uploaded_by === user.id)
   );
   const skipped = rows.length - deletable.length;
   if (deletable.length === 0) {

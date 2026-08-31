@@ -828,6 +828,8 @@ export default function SocialPublisherPage() {
   const [writeAllTotal, setWriteAllTotal] = useState(0);
   const [captionErrors, setCaptionErrors] = useState<Record<string, string>>({});
   const [regenId, setRegenId] = useState<string | null>(null);
+  // Which unblessed row is being thrown away right now.
+  const [autoDeleting, setAutoDeleting] = useState<string | null>(null);
 
   /** Move one row to sit where another currently is, keeping the rest in order. */
   const reorder = (fromId: string, toId: string) => {
@@ -965,6 +967,35 @@ export default function SocialPublisherPage() {
   useEffect(() => { if (view === "automation" && autoClient) loadAutomation(autoClient, autoMode); }, [view, autoClient, autoMode, loadAutomation]);
   // Switching client drops you back to the safe list.
   useEffect(() => { setAutoMode("clear"); }, [autoClient]);
+
+  /**
+   * Throw an unblessed creative out of the hub, from the screen where it is
+   * being judged.
+   *
+   * Risk mode is where somebody looks at a creative QC would not vouch for and
+   * decides. Half those decisions are "this one is junk" — and until now that
+   * meant leaving here, finding the row again in Content Hub, and deleting it
+   * there, which is exactly how a creative gets deleted in one place and keeps
+   * appearing in the other. Same endpoint Content Hub uses; the list is reloaded
+   * after, so the row leaves the screen it was judged on.
+   */
+  const deleteAutoRow = async (r: AutoRow) => {
+    if (!window.confirm("Delete this creative from the hub? This cannot be undone.")) return;
+    setAutoDeleting(r.id);
+    try {
+      const res = await fetch("/api/content-hub", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [r.id] }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Delete failed");
+      setNotice({ ok: true, text: `Deleted ${r.file_name || "the creative"} from the hub.` });
+      await loadAutomation(autoClient, autoMode);
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Delete failed" });
+    } finally { setAutoDeleting(null); }
+  };
 
   /** Step in days between consecutive posts for the chosen cadence. */
   const cadenceStep = cadence === "alternate" ? 2 : 1;
@@ -2276,7 +2307,7 @@ export default function SocialPublisherPage() {
                   <div className="flex bg-slate-950 border border-slate-900 rounded-lg p-0.5 text-[10px] font-bold">
                     {(["clear", "risk"] as const).map((m) => (
                       <button key={m} onClick={() => setAutoMode(m)}
-                        title={m === "risk" ? "Also show creatives QC rejected, with the reason" : "Only creatives that passed QC"}
+                        title={m === "risk" ? "Also show creatives QC rejected or could not vouch for, with the reason" : "Only creatives that passed QC"}
                         className={`px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-md cursor-pointer transition-colors ${
                           autoMode === m
                             ? m === "risk" ? "bg-amber-600 text-black" : "bg-indigo-600 text-white"
@@ -2287,7 +2318,7 @@ export default function SocialPublisherPage() {
                     ))}
                   </div>
                   {autoMode === "risk" && (
-                    <span className="text-[10px] text-amber-400">QC-rejected creatives are shown — sending them overrides QC on the record.</span>
+                    <span className="text-[10px] text-amber-400">QC-rejected and QC-unsure creatives are shown — sending them overrides QC on the record.</span>
                   )}
                 </div>
                 <div className="flex items-center gap-3 flex-wrap">
@@ -2354,9 +2385,24 @@ export default function SocialPublisherPage() {
                         )}
                       </div>
                       {r.rejected && (
-                        <p className="text-[10px] text-amber-400 leading-snug">
-                          QC rejected — {r.rejected_reason || r.qc_note || "no reason recorded"}
-                        </p>
+                        <div className="flex items-start gap-2">
+                          {/* "Held back", not "QC rejected": this line now also
+                              carries creatives QC was merely unsure about, whose
+                              reason already begins "QC unsure:". */}
+                          <p className="flex-1 min-w-0 text-[10px] text-amber-400 leading-snug">
+                            Held back — {r.rejected_reason || r.qc_note || "no reason recorded"}
+                          </p>
+                          {/* Judged here, so it can be thrown away here. Deleting
+                              it anywhere else is how it stays on this screen. */}
+                          <button
+                            onClick={() => deleteAutoRow(r)}
+                            disabled={autoDeleting === r.id}
+                            title="Delete this creative from the hub"
+                            className="shrink-0 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg border border-slate-800 bg-slate-950 text-slate-500 hover:text-rose-400 hover:border-rose-700 cursor-pointer disabled:opacity-40"
+                          >
+                            {autoDeleting === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
                       )}
                       {r.content_type === "story" ? (
                         <p className="text-[10px] text-slate-600">Stories carry no caption — both platforms drop the text.</p>
