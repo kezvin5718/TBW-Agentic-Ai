@@ -1,7 +1,47 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
+import { MODEL_SMART, MODEL_FAST, MODEL_CHATGPT } from "@/lib/llm-config";
+import { imageModelName } from "@/lib/integrations/openai-images";
+import { ENGINES, type EngineConfigKey } from "@/lib/engine-registry";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * The model name a config key resolves to *on this server, right now*.
+ *
+ * Resolved here rather than shipped as a constant to the browser because that
+ * is the whole point: the founder is looking at what the running process would
+ * actually call, env vars included, not at what someone once wrote down.
+ */
+function resolveModel(key: EngineConfigKey): string {
+  switch (key) {
+    case "MODEL_SMART":
+      return MODEL_SMART;
+    case "MODEL_FAST":
+      return MODEL_FAST;
+    case "MODEL_CHATGPT":
+      return MODEL_CHATGPT;
+    // Same default logic generateBrandImage() uses, borrowed from the module
+    // itself so the two can never drift apart.
+    case "IMAGE_MODEL env":
+      return imageModelName();
+    case "OPENAI_API_KEY (Whisper)":
+      return "whisper-1";
+    // describeImageViaVision() picks its model from which key is present.
+    case "hardcoded in openai-images.ts":
+      return process.env.OPENAI_API_KEY ? "gpt-4o" : "google/gemini-2.5-flash";
+  }
+}
+
+/**
+ * More than this many calls on an unexpected model is drift, not noise.
+ *
+ * A handful of stray rows is normal — a caller passing an override, a model
+ * name that changed mid-window, an experiment. A steady stream is a stale
+ * deploy or an env var nobody remembers setting, and that is the thing worth
+ * putting a warning next to.
+ */
+const DRIFT_THRESHOLD = 3;
 
 interface LogRow {
   created_at: string;
@@ -103,6 +143,51 @@ export async function GET() {
     }
   }
 
+  // The engine map, with the last 30 days of real traffic hung off each entry.
+  // Areas with no calls still come back: a feature that has gone quiet is
+  // exactly as interesting as one that is burning money, and a complete map is
+  // what makes "which model runs the captions" answerable at a glance.
+  const byPurposeRows = new Map<string, LogRow[]>();
+  for (const r of logs) {
+    const k = r.purpose || "general";
+    const list = byPurposeRows.get(k);
+    if (list) list.push(r);
+    else byPurposeRows.set(k, [r]);
+  }
+
+  const engines = ENGINES.map((e) => {
+    const mine = e.purposes.flatMap((p) => byPurposeRows.get(p) || []);
+
+    const counts = new Map<string, number>();
+    for (const r of mine) counts.set(r.model, (counts.get(r.model) || 0) + 1);
+    const models = [...counts.entries()]
+      .map(([model, calls]) => ({ model, calls }))
+      .sort((a, b) => b.calls - a.calls);
+
+    const configuredModel = resolveModel(e.config);
+    const alsoModel = e.alsoConfig ? resolveModel(e.alsoConfig) : null;
+    const expected = new Set([configuredModel, ...(alsoModel ? [alsoModel] : [])]);
+    const drifted = models.filter((m) => m.calls > DRIFT_THRESHOLD && !expected.has(m.model));
+
+    return {
+      area: e.area,
+      purposes: e.purposes,
+      config: e.config,
+      configuredModel,
+      alsoConfig: e.alsoConfig ?? null,
+      alsoModel,
+      alsoNote: e.alsoNote ?? null,
+      changeWhere: e.changeWhere,
+      source: e.source,
+      unmetered: e.unmetered === true,
+      calls: mine.length,
+      cost: sumCost(mine),
+      models,
+      mismatch: drifted.length > 0,
+      mismatchModels: drifted.map((m) => m.model),
+    };
+  });
+
   return NextResponse.json({
     success: true,
     balance,
@@ -112,6 +197,7 @@ export async function GET() {
     byModel: groupBy((r) => r.model),
     byPurpose: groupBy((r) => r.purpose || "general"),
     byDay,
+    engines,
     recent: logs.slice(0, 25),
     trackingSince: logs.length > 0 ? logs[logs.length - 1].created_at : null,
   });

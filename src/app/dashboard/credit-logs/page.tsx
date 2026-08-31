@@ -1,9 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Wallet, RefreshCw, TrendingDown, Zap, AlertTriangle } from "lucide-react";
+import { Wallet, RefreshCw, TrendingDown, Zap, AlertTriangle, Cpu } from "lucide-react";
 
 interface Group { name: string; calls: number; failed: number; cost: number; tokens: number }
+interface Engine {
+  area: string;
+  configuredModel: string;
+  alsoModel: string | null;
+  alsoNote: string | null;
+  changeWhere: string;
+  unmetered: boolean;
+  calls: number;
+  cost: number;
+  mismatch: boolean;
+  mismatchModels: string[];
+}
 interface Payload {
   balance: { totalCredits: number; totalUsage: number; remaining: number } | null;
   balanceError: string | null;
@@ -12,6 +24,7 @@ interface Payload {
   byModel: Group[];
   byPurpose: Group[];
   byDay: { day: string; cost: number; calls: number }[];
+  engines: Engine[];
   recent: { created_at: string; model: string; purpose: string; kind: string; cost: number | null; ok: boolean }[];
   trackingSince: string | null;
 }
@@ -127,6 +140,62 @@ export default function CreditLogsPage() {
               <div className="text-[9px] text-slate-600 whitespace-nowrap">{d.day.split(" ")[0]}</div>
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* The engine map. Which model runs which part of the portal, and what it
+          would take to change it — the question that otherwise needs a developer. */}
+      <div className="p-5 rounded-xl border border-slate-800 bg-slate-950">
+        <div className="text-sm font-bold text-white flex items-center gap-2">
+          <Cpu className="w-4 h-4 text-indigo-400" /> AI engines — who runs what
+        </div>
+        <p className="text-[11px] text-slate-500 mt-1 mb-4">
+          The model behind each part of the portal, and where to change it. Every area is listed, busy or not.
+        </p>
+        <div className="divide-y divide-slate-900">
+          {(data?.engines || []).map((e) => (
+            <div key={e.area} className="py-3 first:pt-0 last:pb-0">
+              <div className="flex flex-wrap items-start gap-x-4 gap-y-1.5">
+                <div className="min-w-0 flex-1 basis-[220px]">
+                  <div className="text-xs font-bold text-slate-200">{e.area}</div>
+                  <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                    <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-indigo-300 break-all">
+                      {e.configuredModel}
+                    </span>
+                    {e.alsoModel && (
+                      <>
+                        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 break-all">
+                          {e.alsoModel}
+                        </span>
+                        {e.alsoNote && <span className="text-[10px] text-slate-600">{e.alsoNote}</span>}
+                      </>
+                    )}
+                  </div>
+                  <div className="text-[10px] text-slate-600 mt-1">change in: {e.changeWhere}</div>
+                </div>
+                <div className="ml-auto text-right shrink-0">
+                  {e.calls > 0 ? (
+                    <span className="text-[11px] text-slate-300 whitespace-nowrap">
+                      {e.calls} calls · <span className="font-bold text-white">{usd(e.cost)}</span> · 30d
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-slate-600 whitespace-nowrap">
+                      {e.unmetered ? "billed outside OpenRouter" : "no calls in 30d"}
+                    </span>
+                  )}
+                </div>
+              </div>
+              {e.mismatch && (
+                <div className="mt-1.5 text-[10px] text-amber-400 flex items-start gap-1">
+                  <span className="shrink-0">⚠</span>
+                  <span className="break-all">live traffic shows {e.mismatchModels.join(", ")}</span>
+                </div>
+              )}
+            </div>
+          ))}
+          {data && data.engines.length === 0 && (
+            <div className="text-xs text-slate-500">No engines mapped.</div>
+          )}
         </div>
       </div>
 
