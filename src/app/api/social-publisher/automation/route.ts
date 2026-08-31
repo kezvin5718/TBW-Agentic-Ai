@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { isRecurPostConfigured, postContent } from "@/lib/recurpost";
 import { istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
-import { toPublishableVideoUrl, toPublishableThumbUrl } from "@/lib/publishable-media";
+import { toPublishableVideoUrl, toPublishableThumbUrl, isDriveUrl } from "@/lib/publishable-media";
+import { isDriveConnected } from "@/lib/google-drive";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -206,6 +207,23 @@ export async function POST(request: NextRequest) {
     .select("id, file_url, media_type, content_type, status, qc_status, thumbnail_url")
     .in("id", ids);
   const byId = new Map((uploads || []).map((u) => [u.id, u]));
+
+  // A Drive-hosted video cannot be published as-is — it has to be copied out of
+  // Drive first (see publishable-media), and a rejected Drive token makes that
+  // impossible. Saturday's Risk-mode run learned that one row at a time: a wall
+  // of "could not prepare the video" lines that named the symptom and never the
+  // cause. Ask Drive once, before anything is sent, and say the single true
+  // thing instead. Images are untouched by this — Drive serves those directly,
+  // so an image-only batch goes out exactly as it does today.
+  const needsDrive = (uploads || []).some(
+    (u) => u.media_type === "video" && typeof u.file_url === "string" && isDriveUrl(u.file_url)
+  );
+  if (needsDrive && !(await isDriveConnected())) {
+    return NextResponse.json(
+      { error: "Google Drive is disconnected, so videos cannot be prepared for publishing. Reconnect it in Integrations → Google Drive, then send again — nothing was posted, so this cost nothing." },
+      { status: 400 }
+    );
+  }
 
   const results: Array<{ uploadId: string; platform: string; ok: boolean; detail: string; skipped?: boolean }> = [];
   const skipped: string[] = [];

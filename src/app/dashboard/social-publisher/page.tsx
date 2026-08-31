@@ -919,8 +919,24 @@ export default function SocialPublisherPage() {
   const [autoCaptions, setAutoCaptions] = useState<Record<string, string>>({});
   const [autoSkip, setAutoSkip] = useState<Set<string>>(new Set());
 
+  // A video living on Drive has to be copied out of Drive before it can be
+  // published, so a dead Drive token breaks every video row in the batch — and
+  // it only announced itself after the send, as fifty identical row errors.
+  // Asked once per list load, and only when there is a video to lose: the send
+  // button now says the same thing before anything is attempted.
+  const [driveDown, setDriveDown] = useState(false);
+  const checkDrive = useCallback(async () => {
+    try {
+      const res = await fetch("/api/integrations/google-drive/status");
+      const data = await res.json();
+      // A status check that cannot answer says nothing rather than crying wolf;
+      // it must never be a reason the screen stops working.
+      if (res.ok && data?.connected === false) setDriveDown(true);
+    } catch { /* silence is the right failure here */ }
+  }, []);
+
   const loadAutomation = useCallback(async (clientId: string, mode: "clear" | "risk" = "clear") => {
-    if (!clientId) { setAutoRows([]); return; }
+    if (!clientId) { setAutoRows([]); setDriveDown(false); return; }
     setAutoLoading(true);
     try {
       const res = await fetch(`/api/social-publisher/automation?clientId=${clientId}${mode === "risk" ? "&risk=1" : ""}`);
@@ -937,10 +953,14 @@ export default function SocialPublisherPage() {
       setAutoDates({});
       setAutoTimes({});
       setAutoSkip(new Set());
+      // Deliberately not awaited: the list is already usable, and a slow Drive
+      // is not allowed to hold it back.
+      setDriveDown(false);
+      if (rows.some((r) => r.media_type === "video")) void checkDrive();
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not load" });
     } finally { setAutoLoading(false); }
-  }, []);
+  }, [checkDrive]);
 
   useEffect(() => { if (view === "automation" && autoClient) loadAutomation(autoClient, autoMode); }, [view, autoClient, autoMode, loadAutomation]);
   // Switching client drops you back to the safe list.
@@ -2230,6 +2250,12 @@ export default function SocialPublisherPage() {
               </div>
             )}
           </div>
+
+          {driveDown && (
+            <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-2.5 text-[11px] text-amber-300 flex items-start gap-2">
+              <span className="min-w-0">⚠ Google Drive is disconnected — video posts will fail until it is reconnected (Integrations → Google Drive).</span>
+            </div>
+          )}
 
           {/* The list */}
           {autoLoading ? (

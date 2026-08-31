@@ -1,5 +1,6 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { complete } from "@/lib/llm";
+import { isDriveConnected } from "@/lib/google-drive";
 import { MODEL_SMART } from "@/lib/llm-config";
 
 /**
@@ -383,6 +384,20 @@ async function collectFindings(): Promise<Finding[]> {
       }
     } catch { /* a scan never fails because a balance check did */ }
   }
+
+  // Drive is where the work physically lives, so one rejected token stops four
+  // unrelated-looking things at once and each of them fails with its own local
+  // excuse — "could not prepare the video", a 5b save that saves nothing. There
+  // is no size to this one: it is either standing or it is not.
+  try {
+    if (!(await isDriveConnected())) {
+      found.push({
+        manager: "brand",
+        key: "drive_dead",
+        title: "Google Drive is disconnected (the saved token was rejected) — video publishing, 5b saves, product photos and WhatsApp media are all blocked. Reconnect in Integrations.",
+      });
+    }
+  } catch { /* a scan never fails because a connection check did */ }
 
   // A background job that has gone quiet past its own threshold. Same list and
   // the same generous thresholds the health strip uses, so the two cannot
