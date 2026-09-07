@@ -92,6 +92,27 @@ const TYPES = ["post", "reel", "story"] as const;
 /** Instagram and Facebook Stories carry no caption — the text is dropped. */
 const storyHasNoCaption = (contentType: string) => contentType === "story";
 
+/** The Automation Clear/Risk switch. A component of its own because it must
+    render in the empty state too — an empty Clear list is exactly the moment
+    someone needs the Risk button, so it can never live inside the row list. */
+function AutoModeToggle({ mode, onChange }: { mode: "clear" | "risk"; onChange: (m: "clear" | "risk") => void }) {
+  return (
+    <div className="flex bg-slate-950 border border-slate-900 rounded-lg p-0.5 text-[10px] font-bold">
+      {(["clear", "risk"] as const).map((m) => (
+        <button key={m} onClick={() => onChange(m)}
+          title={m === "risk" ? "Also show creatives QC rejected or could not vouch for, with the reason" : "Only creatives that passed QC"}
+          className={`px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-md cursor-pointer transition-colors ${
+            mode === m
+              ? m === "risk" ? "bg-amber-600 text-black" : "bg-indigo-600 text-white"
+              : "text-slate-500 hover:text-white"
+          }`}>
+          {m === "risk" ? "Risk" : "Clear"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function SocialPublisherPage() {
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [posts, setPosts] = useState<PostRow[]>([]);
@@ -2294,7 +2315,20 @@ export default function SocialPublisherPage() {
           ) : !autoClient ? (
             <p className="text-xs text-slate-600 py-8 text-center">Select a client to see what&apos;s waiting.</p>
           ) : autoRows.length === 0 ? (
-            <p className="text-xs text-slate-600 py-8 text-center">Nothing approved and waiting for this client.</p>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Approved &amp; waiting</label>
+                <AutoModeToggle mode={autoMode} onChange={setAutoMode} />
+                {autoMode === "risk" && (
+                  <span className="text-[10px] text-amber-400">QC-rejected and QC-unsure creatives are shown — sending them overrides QC on the record.</span>
+                )}
+              </div>
+              <p className="text-xs text-slate-600 py-8 text-center">
+                {autoMode === "risk"
+                  ? "Nothing waiting even in Risk — this client has no approved, QC-rejected, or QC-unsure creatives."
+                  : "Nothing approved and waiting for this client. If QC held creatives back, switch to Risk to see them."}
+              </p>
+            </div>
           ) : (
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -2304,19 +2338,7 @@ export default function SocialPublisherPage() {
                   </label>
                   {/* Risk mode shows what QC refused, so the founder can judge it
                       himself. It is never remembered — see autoMode. */}
-                  <div className="flex bg-slate-950 border border-slate-900 rounded-lg p-0.5 text-[10px] font-bold">
-                    {(["clear", "risk"] as const).map((m) => (
-                      <button key={m} onClick={() => setAutoMode(m)}
-                        title={m === "risk" ? "Also show creatives QC rejected or could not vouch for, with the reason" : "Only creatives that passed QC"}
-                        className={`px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-md cursor-pointer transition-colors ${
-                          autoMode === m
-                            ? m === "risk" ? "bg-amber-600 text-black" : "bg-indigo-600 text-white"
-                            : "text-slate-500 hover:text-white"
-                        }`}>
-                        {m === "risk" ? "Risk" : "Clear"}
-                      </button>
-                    ))}
-                  </div>
+                  <AutoModeToggle mode={autoMode} onChange={setAutoMode} />
                   {autoMode === "risk" && (
                     <span className="text-[10px] text-amber-400">QC-rejected and QC-unsure creatives are shown — sending them overrides QC on the record.</span>
                   )}
