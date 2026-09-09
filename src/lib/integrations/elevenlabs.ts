@@ -13,7 +13,7 @@
 const API = "https://api.elevenlabs.io/v1/text-to-speech";
 
 /** The founder's chosen voice. ELEVENLABS_VOICE_ID overrides it without a deploy. */
-const DEFAULT_VOICE = "dxhwlBCxCrnzRlP4wDeE";
+const DEFAULT_VOICE = "wDsJlOXPqcvIUKdLXjDs";
 /** Turbo keeps the reply quick; the multilingual model is the quality option. */
 const DEFAULT_MODEL = "eleven_turbo_v2_5";
 
