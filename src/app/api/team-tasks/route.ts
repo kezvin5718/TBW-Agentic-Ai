@@ -15,15 +15,20 @@ async function requireStaff() {
   return { user, role };
 }
 
-// Link team_members without a login to a matching profile by name, then
-// backfill tasks.assignee_id so "My Tasks" lights up the day someone signs up.
+// Two-way sync between the board's members and portal logins.
+// Forward: a board row without a login links to a matching profile by name,
+// and that person's old tasks pick up assignee_id, so "My Tasks" lights up
+// the day they sign up. Reverse: an employee login with no board row gets
+// one — without it, a hire added in Team & Access can never be assigned.
 async function syncMemberProfiles(admin: ReturnType<typeof createServiceRoleClient>) {
-  const { data: unlinked } = await admin.from("team_members").select("id, name").is("profile_id", null).eq("active", true);
-  if (!unlinked || unlinked.length === 0) return;
-  const { data: profiles } = await admin.from("profiles").select("id, name").in("role", ["founder", "employee"]);
+  const [{ data: members }, { data: profiles }] = await Promise.all([
+    admin.from("team_members").select("id, name, profile_id, active"),
+    admin.from("profiles").select("id, name, role").in("role", ["founder", "employee"]),
+  ]);
   if (!profiles || profiles.length === 0) return;
+  const all = members || [];
 
-  for (const member of unlinked) {
+  for (const member of all.filter((m) => !m.profile_id && m.active)) {
     const m = (member.name || "").trim().toLowerCase();
     if (!m) continue;
     // Board names are first names ("Yashpal"); logins are full names, and the
@@ -33,10 +38,29 @@ async function syncMemberProfiles(admin: ReturnType<typeof createServiceRoleClie
       return pn === m || pn.split(/\s+/).includes(m);
     });
     if (match) {
+      member.profile_id = match.id;
       await admin.from("team_members").update({ profile_id: match.id }).eq("id", member.id);
       await admin.from("tasks").update({ assignee_id: match.id })
         .ilike("assignee_name", member.name).is("assignee_id", null);
     }
+  }
+
+  // Reverse direction: employee logins nobody put on the board yet.
+  const linked = new Set(all.map((m) => m.profile_id).filter(Boolean));
+  for (const p of profiles) {
+    if (p.role !== "employee" || linked.has(p.id)) continue;
+    const pn = (p.name || "").trim();
+    const words = pn.toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) continue;
+    // Skip anyone already on the board under a shorter or differently-spaced
+    // name — including deactivated rows: switched off stays switched off, and
+    // a second login for the same person must not become a second column.
+    const known = all.some((m) => {
+      const mn = (m.name || "").trim().toLowerCase();
+      return !!mn && (mn === words.join(" ") || words.includes(mn) || mn.replace(/\s+/g, "") === words.join(""));
+    });
+    if (known) continue;
+    await admin.from("team_members").insert({ name: pn, profile_id: p.id, active: true });
   }
 }
 
