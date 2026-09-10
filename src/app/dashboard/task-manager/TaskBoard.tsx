@@ -449,6 +449,13 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
     </div>
   );
 
+  /**
+   * One row, two shapes. From md: up it is the 12-column grid, unchanged. Below
+   * that the same cells restack into three lines the eye can actually follow —
+   * the task, then who has it and when it landed, then when it is due and what
+   * can be done about it — because on a phone the wide grid falls apart into
+   * scraps of 10px text nobody can read.
+   */
   const oneLine = (t: Task) => {
     const isOpen = !!expanded[t.id];
     const overdue = !!t.deadline && new Date(t.deadline).getTime() < now && t.status !== "done";
@@ -458,15 +465,15 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
     return (
       <div key={t.id}
         className="rounded-lg border border-slate-900 bg-slate-950/60 hover:border-slate-800 transition-colors">
-      <div className="grid grid-cols-12 gap-2 items-center px-3 py-2">
+      <div className="grid grid-cols-12 gap-x-2 gap-y-1.5 md:gap-2 items-center px-3 py-2.5 md:py-2">
         <div className="col-span-12 md:col-span-4 flex items-center gap-2 min-w-0">
           <button onClick={() => toggleExpanded(t.id)} title={isOpen ? "Hide the full task" : "Show the full task"}
-            className="shrink-0 -ml-1 p-1 rounded text-slate-600 hover:text-indigo-400 cursor-pointer">
+            className="shrink-0 -ml-1 p-2 lg:p-1 min-h-[40px] min-w-[40px] lg:min-h-0 lg:min-w-0 rounded text-slate-400 md:text-slate-600 hover:text-indigo-400 cursor-pointer">
             <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? "rotate-180" : ""}`} />
           </button>
           <span className={`shrink-0 w-2 h-2 rounded-full ${PRIORITY_DOT[t.priority] || PRIORITY_DOT.medium}`} title={`Priority: ${t.priority}`} />
           <button onClick={() => toggleExpanded(t.id)} title={t.title || ""}
-            className="min-w-0 text-left text-xs font-semibold text-white truncate py-1.5 -my-1.5 hover:text-indigo-300 cursor-pointer">
+            className="min-w-0 text-left text-[13px] md:text-xs font-semibold text-white truncate py-1.5 -my-1.5 hover:text-indigo-300 cursor-pointer">
             {t.title || "Untitled task"}
           </button>
           {t.source === "whatsapp" && <MessageSquare className="w-3 h-3 shrink-0 text-emerald-500" aria-label="From WhatsApp" />}
@@ -474,43 +481,43 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
           {t.source === "excel_import" && <FileSpreadsheet className="w-3 h-3 shrink-0 text-slate-600" aria-label="Imported" />}
         </div>
 
-        <div className="col-span-6 md:col-span-2 min-w-0">
+        <div className="col-span-4 md:col-span-2 min-w-0">
           {t.clients?.name
-            ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-950/40 border border-indigo-900 text-indigo-300 truncate inline-block max-w-full">{t.clients.name}</span>
-            : <span className="text-[10px] text-slate-700">—</span>}
+            ? <span className="text-[11px] md:text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-950/40 border border-indigo-900 text-indigo-300 truncate inline-block max-w-full">{t.clients.name}</span>
+            : <span className="text-[11px] md:text-[10px] text-slate-400 md:text-slate-700">—</span>}
         </div>
 
-        <div className="col-span-6 md:col-span-2 flex items-center gap-1.5 min-w-0">
+        <div className="col-span-4 md:col-span-2 flex items-center gap-1.5 min-w-0">
           <Avatar name={t.assignee_name || "?"} url={member?.avatar_url} size={18} rounded="rounded-full" />
-          <span className="text-[10px] text-slate-300 truncate">{t.assignee_name || "Unassigned"}</span>
+          <span className="text-[11px] md:text-[10px] text-slate-300 truncate">{t.assignee_name || "Unassigned"}</span>
         </div>
 
-        <div className="col-span-6 md:col-span-2 text-[10px] font-mono text-slate-500" title={`Assigned ${assignedOn.toLocaleString("en-IN")}`}>
+        <div className="col-span-4 md:col-span-2 min-w-0 text-right md:text-left text-[11px] md:text-[10px] font-mono text-slate-400 md:text-slate-500" title={`Assigned ${assignedOn.toLocaleString("en-IN")}`}>
           {assignedOn.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-          <span className="text-slate-700"> · {ageDays === 0 ? "today" : `${ageDays}d ago`}</span>
+          <span className="text-slate-400 md:text-slate-700"> · {ageDays === 0 ? "today" : `${ageDays}d ago`}</span>
         </div>
 
-        <div className="col-span-6 md:col-span-2 flex items-center justify-end gap-1.5">
-          <span className={`flex items-center gap-1 text-[10px] font-mono font-bold ${overdue ? "text-red-400" : "text-slate-500"}`}>
+        <div className="col-span-12 md:col-span-2 flex items-center justify-between md:justify-end gap-1.5">
+          <span className={`flex items-center gap-1 text-[11px] md:text-[10px] font-mono font-bold ${overdue ? "text-red-400" : "text-slate-400 md:text-slate-500"}`}>
             {overdue ? <AlertTriangle className="w-3 h-3" /> : <Calendar className="w-3 h-3" />}
-            {t.deadline ? new Date(t.deadline).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : <span className="text-slate-600 font-normal">no deadline</span>}
+            {t.deadline ? new Date(t.deadline).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : <span className="text-slate-400 md:text-slate-600 font-normal">no deadline</span>}
           </span>
           {busy === t.id ? <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" /> : (
             <>
               <select value={t.status} disabled={!!busy} onChange={(e) => patch(t.id, { status: e.target.value })}
-                className={`text-[9px] font-bold rounded-md px-1.5 py-0.5 border cursor-pointer focus:outline-none ${STATUS_STYLE[t.status]}`}>
+                className={`text-[11px] md:text-[9px] font-bold rounded-md px-2 md:px-1.5 py-1.5 md:py-0.5 min-h-[40px] lg:min-h-0 border cursor-pointer focus:outline-none ${STATUS_STYLE[t.status]}`}>
                 <option value="todo">To Do</option>
                 <option value="in_progress">In Progress</option>
                 <option value="review">Review</option>
                 <option value="done">Done</option>
               </select>
               <button onClick={() => openEdit(t)} disabled={!!busy} title="Edit task"
-                className="p-1 rounded text-slate-700 hover:text-indigo-400 cursor-pointer disabled:opacity-40">
+                className="p-2 lg:p-1 min-h-[40px] min-w-[40px] lg:min-h-0 lg:min-w-0 rounded text-slate-400 md:text-slate-700 hover:text-indigo-400 cursor-pointer disabled:opacity-40">
                 <Pencil className="w-3 h-3" />
               </button>
               {canDelete && (
                 <button onClick={() => remove(t.id)} disabled={!!busy} title="Delete task"
-                  className="p-1 rounded text-slate-700 hover:text-rose-400 cursor-pointer disabled:opacity-40">
+                  className="p-2 lg:p-1 min-h-[40px] min-w-[40px] lg:min-h-0 lg:min-w-0 rounded text-slate-400 md:text-slate-700 hover:text-rose-400 cursor-pointer disabled:opacity-40">
                   <Trash2 className="w-3 h-3" />
                 </button>
               )}
@@ -689,9 +696,9 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
           { label: "Overdue", value: stats.overdue, cls: "text-red-400" },
           { label: "In Review", value: stats.review, cls: "text-blue-400" },
         ].map((s) => (
-          <div key={s.label} className="bg-slate-950/40 border border-slate-900 rounded-2xl p-4">
+          <div key={s.label} className="bg-slate-950/40 border border-slate-900 rounded-2xl p-3 sm:p-4">
             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{s.label}</p>
-            <h3 className={`text-2xl font-extrabold ${s.cls}`}>{s.value}</h3>
+            <h3 className={`text-xl sm:text-2xl font-extrabold ${s.cls}`}>{s.value}</h3>
           </div>
         ))}
       </div>
@@ -702,22 +709,22 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
           <input
             value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
             placeholder="Task — e.g. 'suvarna rakhi grid 3 posts'"
-            className="md:col-span-2 text-xs bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-indigo-600"
+            className="md:col-span-2 text-sm md:text-xs min-h-[40px] lg:min-h-0 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-indigo-600"
           />
-          <select value={form.clientId} onChange={(e) => setForm({ ...form, clientId: e.target.value })} className="text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
+          <select value={form.clientId} onChange={(e) => setForm({ ...form, clientId: e.target.value })} className="text-sm md:text-xs min-h-[40px] lg:min-h-0 bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
             <option value="">Client…</option>
             {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          <select value={form.assigneeName} onChange={(e) => setForm({ ...form, assigneeName: e.target.value })} className="text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
+          <select value={form.assigneeName} onChange={(e) => setForm({ ...form, assigneeName: e.target.value })} className="text-sm md:text-xs min-h-[40px] lg:min-h-0 bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
             <option value="">Assign to…</option>
             {team.map((m) => <option key={m.id} value={m.name}>{m.name}{awayLabel(m.away_until) ? ` — ${awayLabel(m.away_until)}` : ""}</option>)}
           </select>
-          <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
+          <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="text-sm md:text-xs min-h-[40px] lg:min-h-0 bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
             {Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
           <div className="flex items-center gap-2">
-            <input type="date" value={form.deadline} onChange={(e) => setForm({ ...form, deadline: e.target.value })} className="flex-1 text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 focus:outline-none" />
-            <button onClick={addTask} disabled={saving || !form.title.trim()} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer disabled:opacity-50">
+            <input type="date" value={form.deadline} onChange={(e) => setForm({ ...form, deadline: e.target.value })} className="flex-1 text-sm md:text-xs min-h-[40px] lg:min-h-0 bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 focus:outline-none" />
+            <button onClick={addTask} disabled={saving || !form.title.trim()} className="px-3 py-2 min-h-[40px] lg:min-h-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer disabled:opacity-50">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
             </button>
           </div>

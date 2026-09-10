@@ -118,3 +118,8 @@ html.light .signal { color: #0e7490; text-shadow: none; }
 /* Ambient grid overlay — dark hairlines in day view */
 .tbw-grid-layer { position: absolute; inset: 0; pointer-events: none; z-index: 0; background-image: linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px); background-size: 80px 80px; }
 html.light .tbw-grid-layer { background-image: linear-gradient(rgba(0,0,0,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.045) 1px, transparent 1px); }
+
+/* Scrolling tab strips hide their scrollbar — the pills themselves show there
+   is more to the side. Used by Task Manager and Brand Brain tab bars. */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }

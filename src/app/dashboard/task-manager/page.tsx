@@ -42,14 +42,16 @@ export default function TaskManagerPage() {
         </p>
       </div>
 
-      <div className="flex flex-wrap bg-slate-950 border border-slate-900 rounded-xl p-1 text-[10px] font-bold uppercase tracking-wider w-fit max-w-full">
+      {/* One line on a phone — four tabs wrapping into a ragged second row read
+          as two separate controls. Below md: they scroll sideways instead. */}
+      <div className="flex flex-nowrap overflow-x-auto no-scrollbar snap-x md:flex-wrap md:overflow-visible bg-slate-950 border border-slate-900 rounded-xl p-1 text-[10px] font-bold uppercase tracking-wider w-fit max-w-full">
         {tabs.map((t) => {
           const Icon = t.icon;
           return (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
-              className={`px-4 py-2 rounded-lg cursor-pointer transition-all flex items-center gap-2 ${
+              className={`shrink-0 snap-start px-4 py-2 rounded-lg cursor-pointer transition-all flex items-center gap-2 ${
                 tab === t.key ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"
               }`}
             >

@@ -202,7 +202,7 @@ export default function GlobalErrorMonitor() {
     <div className="fixed bottom-4 right-4 z-[100] flex flex-col items-end space-y-2">
       {/* Expanded panel */}
       {open && (
-        <div className="w-[min(92vw,420px)] max-h-[70vh] bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl shadow-black/60 flex flex-col overflow-hidden">
+        <div className="w-[min(calc(100vw-1.5rem),420px)] max-h-[70vh] bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl shadow-black/60 flex flex-col overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-slate-900 bg-slate-950">
             <div className="flex items-center space-x-2">
               {hasIssues ? <AlertTriangle className="w-4 h-4 text-rose-400" /> : <ShieldCheck className="w-4 h-4 text-emerald-400" />}
@@ -247,14 +247,17 @@ export default function GlobalErrorMonitor() {
         </div>
       )}
 
-      {/* Floating badge (always visible) */}
+      {/* Floating badge (always visible).
+          On a small screen a healthy monitor shrinks to the bug alone — it sits
+          over the page, and "Monitoring" is not worth covering a row control
+          for. Trouble keeps its full width: an error must stay loud anywhere. */}
       <button
         onClick={() => setOpen((o) => !o)}
         title={hasIssues ? `${issues.length} issue(s) detected — click to view & copy` : "System healthy — monitoring in background"}
-        className={`relative flex items-center space-x-2 px-3.5 py-2.5 rounded-full border shadow-lg font-bold text-xs cursor-pointer transition-all ${
+        className={`relative flex items-center space-x-2 rounded-full border shadow-lg font-bold text-xs cursor-pointer transition-all ${
           hasIssues
-            ? "bg-rose-950/90 border-rose-800 text-rose-200 shadow-rose-950/50"
-            : "bg-slate-950/90 border-slate-800 text-slate-400 hover:text-white"
+            ? "px-3.5 py-2.5 bg-rose-950/90 border-rose-800 text-rose-200 shadow-rose-950/50"
+            : "p-2.5 lg:px-3.5 lg:py-2.5 bg-slate-950/90 border-slate-800 text-slate-400 hover:text-white"
         }`}
       >
         {hasIssues ? (
@@ -269,7 +272,7 @@ export default function GlobalErrorMonitor() {
         ) : (
           <>
             <Bug className="w-4 h-4 text-emerald-400" />
-            <span>Monitoring</span>
+            <span className="hidden lg:inline">Monitoring</span>
           </>
         )}
       </button>
