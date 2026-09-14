@@ -68,8 +68,46 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ success: true, tasks });
 }
 
+/** One client's place on a festival, as the Add panel decides it. */
+interface Allotment { clientId: string; teamMemberId: string | null; tagline: string | null }
+
 /**
- * POST — put clients on a festival. Body: { festivalId, clientIds: [] }
+ * What the caller asked for, in one shape.
+ *
+ * The Add panel now sends the whole decision — client, designer, line — but the
+ * old bare `clientIds` is still a valid way to ask, and answers exactly as it
+ * always did: nobody named, nothing written, the PM left to suggest. First
+ * mention of a client wins, because a list someone built by clicking can name
+ * the same brand twice.
+ */
+function readAllotments(clients: unknown, clientIds: unknown): Allotment[] {
+  const raw: Allotment[] = Array.isArray(clients)
+    ? clients.map((c) => {
+        const e = (c || {}) as Record<string, unknown>;
+        return {
+          clientId: typeof e.clientId === "string" ? e.clientId : "",
+          teamMemberId: typeof e.teamMemberId === "string" && e.teamMemberId ? e.teamMemberId : null,
+          tagline: String(e.tagline || "").trim().slice(0, 300) || null,
+        };
+      })
+    : (Array.isArray(clientIds) ? clientIds : []).map((id) => ({
+        clientId: typeof id === "string" ? id : "",
+        teamMemberId: null,
+        tagline: null,
+      }));
+
+  const seen = new Set<string>();
+  return raw.filter((a) => {
+    if (!a.clientId || seen.has(a.clientId)) return false;
+    seen.add(a.clientId);
+    return true;
+  });
+}
+
+/**
+ * POST — put clients on a festival.
+ * Body: { festivalId, clients: [{ clientId, teamMemberId?, tagline? }] }
+ *    or { festivalId, clientIds: [] }
  *
  * Each new client gets a real task first, then the festival row that points at
  * it. Adding the same client twice is a thing people do, so clients already on
@@ -79,8 +117,8 @@ export async function POST(request: NextRequest) {
   const guard = await requireStaff();
   if (guard.error) return guard.error;
 
-  const { festivalId, clientIds } = await request.json();
-  const asked = [...new Set((Array.isArray(clientIds) ? clientIds : []).filter((c): c is string => typeof c === "string" && !!c))];
+  const { festivalId, clientIds, clients } = await request.json();
+  const asked = readAllotments(clients, clientIds);
   if (!festivalId) return NextResponse.json({ error: "festivalId required" }, { status: 400 });
   if (asked.length === 0) return NextResponse.json({ error: "Pick at least one client." }, { status: 400 });
 
@@ -91,48 +129,80 @@ export async function POST(request: NextRequest) {
 
   const [{ data: existing }, { data: clientRows }] = await Promise.all([
     admin.from("festival_tasks").select("client_id").eq("festival_id", festivalId),
-    admin.from("clients").select("id, name").in("id", asked),
+    admin.from("clients").select("id, name").in("id", asked.map((a) => a.clientId)),
   ]);
   const already = new Set((existing || []).map((r) => r.client_id as string));
   const names = new Map((clientRows || []).map((c) => [c.id as string, c.name as string]));
-  const fresh = asked.filter((id) => !already.has(id) && names.has(id));
+  const fresh = asked.filter((a) => !already.has(a.clientId) && names.has(a.clientId));
 
   if (fresh.length === 0) {
     return NextResponse.json({ success: true, added: 0, message: "Those clients were already on this festival." });
   }
 
-  // The festival's own date is the deadline; a festival with no date on it
-  // still needs the work to land somewhere, so a week out.
-  const deadline = festival.scheduled_at
-    ? new Date(festival.scheduled_at as string).toISOString()
+  // The creative has to be ready before the day itself, so the deadline sits
+  // two days ahead of the festival. A festival that is already nearly here
+  // cannot ask for work in the past, so it asks for it now. A festival with no
+  // date on it still needs the work to land somewhere, so a week out.
+  const twoDaysBefore = festival.scheduled_at
+    ? new Date(festival.scheduled_at as string).getTime() - 2 * 24 * 3600 * 1000
+    : null;
+  const deadline = twoDaysBefore !== null
+    ? new Date(Math.max(twoDaysBefore, Date.now())).toISOString()
     : new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
+
+  // tasks.assignee_id is a PROFILE id, not a team_members id — Team & Access
+  // links the two, and a member with no login simply has no profile. Every
+  // named designer is looked up once, here, rather than per row.
+  const memberIds = [...new Set(fresh.map((a) => a.teamMemberId).filter((id): id is string => !!id))];
+  const members = new Map<string, { name: string | null; profileId: string | null }>();
+  if (memberIds.length > 0) {
+    const { data: memberRows } = await admin.from("team_members").select("id, name, profile_id").in("id", memberIds);
+    for (const m of memberRows || []) {
+      members.set(m.id as string, { name: (m.name as string | null) || null, profileId: (m.profile_id as string | null) || null });
+    }
+  }
+  /** A designer the panel named but Team & Access no longer knows is nobody. */
+  const chosen = (a: Allotment) => (a.teamMemberId ? members.get(a.teamMemberId) || null : null);
 
   const { data: madeTasks, error: taskErr } = await admin
     .from("tasks")
-    .insert(fresh.map((clientId) => ({
-      title: `${festival.name} — ${names.get(clientId)}`,
-      description: null,
-      client_id: clientId,
-      type: "design",
-      priority: "medium",
-      status: "todo",
-      deadline,
-      source: "festival",
-      assignee_name: null,
-      metadata: { festival_id: festivalId },
-    })))
+    .insert(fresh.map((a) => {
+      const who = chosen(a);
+      return {
+        title: `${festival.name} — ${names.get(a.clientId)}`,
+        // The designer reads the line on their own board, not on this one.
+        description: a.tagline,
+        client_id: a.clientId,
+        type: "design",
+        priority: "medium",
+        status: "todo",
+        deadline,
+        source: "festival",
+        // Team Tasks groups its columns by this name, so it is what files the
+        // row under the right designer.
+        assignee_name: who?.name || null,
+        assignee_id: who?.profileId || null,
+        metadata: { festival_id: festivalId },
+      };
+    }))
     .select("id, client_id");
   if (taskErr) return NextResponse.json({ error: taskErr.message }, { status: 500 });
 
   const taskByClient = new Map((madeTasks || []).map((t) => [t.client_id as string, t.id as string]));
   const { data: madeRows, error: rowErr } = await admin
     .from("festival_tasks")
-    .insert(fresh.map((clientId) => ({
-      festival_id: festivalId,
-      client_id: clientId,
-      task_id: taskByClient.get(clientId) || null,
-      status: "todo",
-    })))
+    .insert(fresh.map((a) => {
+      const who = chosen(a);
+      return {
+        festival_id: festivalId,
+        client_id: a.clientId,
+        task_id: taskByClient.get(a.clientId) || null,
+        status: "todo",
+        tagline: a.tagline,
+        team_member_id: who ? a.teamMemberId : null,
+        assignee_name: who?.name || null,
+      };
+    }))
     .select("id, client_id");
   if (rowErr) {
     // Never leave tasks on the board for festival rows that failed to exist.
@@ -150,20 +220,22 @@ export async function POST(request: NextRequest) {
       .eq("id", taskId);
   }
 
-  // Festival creatives are born with nobody on them by design; the PM may name
-  // someone when it is certain, and otherwise leaves them for the board.
+  // A designer a person chose is never second-guessed, so the PM is only asked
+  // about the rows that arrived empty; those it may name when it is certain,
+  // and otherwise leaves for the board.
   const { autoAssignTask } = await import("@/lib/pm-auto-assign");
-  for (const clientId of fresh) {
-    const taskId = taskByClient.get(clientId);
+  for (const a of fresh) {
+    if (a.teamMemberId) continue;
+    const taskId = taskByClient.get(a.clientId);
     if (!taskId) continue;
-    const put = await autoAssignTask({ taskId, title: `${festival.name} — ${names.get(clientId)}`, clientId, taskType: "design" });
+    const put = await autoAssignTask({ taskId, title: `${festival.name} — ${names.get(a.clientId)}`, clientId: a.clientId, taskType: "design" });
     // The festival row keeps its own copy of who is on it; without this the
     // board would offer to assign someone the task already has.
     if (put) {
       await admin.from("festival_tasks")
         .update({ team_member_id: put.teamMemberId, assignee_name: put.name })
         .eq("festival_id", festivalId)
-        .eq("client_id", clientId);
+        .eq("client_id", a.clientId);
     }
   }
 

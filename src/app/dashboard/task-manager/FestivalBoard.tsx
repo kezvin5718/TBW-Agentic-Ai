@@ -44,6 +44,10 @@ const stageOf = (t: { status: string }): Stage =>
 /** Waiting on an eye first, then work under way, then work not started. */
 const PENDING_ORDER: Record<string, number> = { review: 0, in_progress: 1, todo: 2 };
 
+/** What the Add panel decides for one picked client before anything is made. */
+interface Allotment { teamMemberId: string; tagline: string }
+const EMPTY_ALLOT: Allotment = { teamMemberId: "", tagline: "" };
+
 /**
  * Who is making which brand's festival creative.
  *
@@ -62,6 +66,10 @@ export default function FestivalBoard() {
   const [showAdd, setShowAdd] = useState(false);
   const [search, setSearch] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
+  // The whole decision is made in the panel now — who makes each client's
+  // creative and what it says. Kept per client, so un-picking a brand forgets
+  // what was chosen against it and re-picking starts clean.
+  const [allot, setAllot] = useState<Record<string, Allotment>>({});
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // One ask per client that still has nobody on it, cached by the pair.
@@ -136,6 +144,25 @@ export default function FestivalBoard() {
     } finally { setBusy(null); }
   };
 
+  const allotOf = (clientId: string) => allot[clientId] || EMPTY_ALLOT;
+  const setAllotField = (clientId: string, field: keyof Allotment, value: string) =>
+    setAllot((prev) => ({ ...prev, [clientId]: { ...(prev[clientId] || EMPTY_ALLOT), [field]: value } }));
+
+  /** Picking a client opens its row; un-picking takes the row away with it. */
+  const togglePick = (clientId: string) => {
+    const on = picked.includes(clientId);
+    setPicked((p) => (on ? p.filter((x) => x !== clientId) : [...p, clientId]));
+    if (on) setAllot((prev) => { const next = { ...prev }; delete next[clientId]; return next; });
+  };
+
+  /** One brand, one designer, twelve times over — so say it once instead. */
+  const sameDesignerForAll = (teamMemberId: string) =>
+    setAllot((prev) => {
+      const next = { ...prev };
+      for (const clientId of picked) next[clientId] = { ...(next[clientId] || EMPTY_ALLOT), teamMemberId };
+      return next;
+    });
+
   const addClients = async () => {
     if (picked.length === 0) return;
     setSaving(true);
@@ -143,11 +170,20 @@ export default function FestivalBoard() {
     try {
       const res = await fetch("/api/festival-tasks", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ festivalId, clientIds: picked }),
+        // The whole allotment travels in one go: client, designer, line.
+        body: JSON.stringify({
+          festivalId,
+          clients: picked.map((clientId) => ({
+            clientId,
+            teamMemberId: allotOf(clientId).teamMemberId || null,
+            tagline: allotOf(clientId).tagline.trim() || null,
+          })),
+        }),
       });
       const d = await res.json();
       setNotice(d.message || d.error || null);
       setPicked([]);
+      setAllot({});
       setSearch("");
       setShowAdd(false);
       await load(festivalId);
@@ -155,10 +191,14 @@ export default function FestivalBoard() {
   };
 
   // Festival creatives are design work, so the question is always
-  // (this client, design). Asked once per distinct client with an empty row,
-  // one after another rather than in a burst.
+  // (this client, design). Asked once per distinct client with an empty row —
+  // on the board or freshly picked in the panel — one after another rather
+  // than in a burst, and answered out of the one cache either can read.
   useEffect(() => {
-    const wanted = [...new Set(tasks.filter((t) => !t.team_member_id).map((t) => t.client_id))];
+    const wanted = [...new Set([
+      ...tasks.filter((t) => !t.team_member_id).map((t) => t.client_id),
+      ...picked,
+    ])];
     const missing = wanted.filter((c) => !(suggestionKey(c, "design") in suggested));
     if (missing.length === 0) return;
     let alive = true;
@@ -173,9 +213,10 @@ export default function FestivalBoard() {
     // `suggested` is the cache being filled; depending on it would re-run the
     // effect for every answer that arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks]);
+  }, [tasks, picked]);
 
   const onFestival = useMemo(() => new Set(tasks.map((t) => t.client_id)), [tasks]);
+  const clientName = useMemo(() => new Map(clients.map((c) => [c.id, c.name])), [clients]);
   const byName = (a: FestivalTask, b: FestivalTask) =>
     (a.clients?.name || "").localeCompare(b.clients?.name || "");
   // Anything waiting on a manager's eye comes before work still being made.
@@ -188,6 +229,11 @@ export default function FestivalBoard() {
   const inReview = pending.filter((t) => stageOf(t) === "review").length;
 
   const searchable = clients.filter((c) => c.name.toLowerCase().includes(search.toLowerCase().trim()));
+  // The shortcut only reads back a name while every picked row is truly on that
+  // designer; one row changed afterwards and it goes back to "Assign to…".
+  const sharedDesigner = picked.length > 0 && picked.every((c) => allotOf(c).teamMemberId === allotOf(picked[0]).teamMemberId)
+    ? allotOf(picked[0]).teamMemberId
+    : "";
 
   const row = (t: FestivalTask) => {
     const stage = stageOf(t);
@@ -290,7 +336,7 @@ export default function FestivalBoard() {
               const on = picked.includes(c.id);
               return (
                 <button key={c.id} disabled={already}
-                  onClick={() => setPicked((p) => (on ? p.filter((x) => x !== c.id) : [...p, c.id]))}
+                  onClick={() => togglePick(c.id)}
                   className={`min-h-10 px-3 py-2 rounded-lg text-[11px] font-bold border cursor-pointer disabled:cursor-not-allowed ${
                     already ? "bg-slate-900/40 border-slate-900 text-slate-700"
                       : on ? "bg-indigo-600 border-indigo-500 text-white"
@@ -302,6 +348,56 @@ export default function FestivalBoard() {
             })}
             {searchable.length === 0 && <p className="text-[11px] text-slate-600 py-2">No client matches that.</p>}
           </div>
+
+          {/* One row per brand picked: who makes it, and the line it carries.
+              The tasks are made with all of that already on them, so nobody has
+              to come back and fill the same board in twice. */}
+          {picked.length > 0 && (
+            <div className="space-y-2 border-t border-slate-900 pt-3">
+              {picked.length > 1 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Same designer for all</span>
+                  <select value={sharedDesigner} onChange={(e) => sameDesignerForAll(e.target.value)}
+                    className="min-h-10 text-[10px] font-bold bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
+                    <option value="">Assign to…</option>
+                    {team.map((m) => <option key={m.id} value={m.id}>{m.name}{awayLabel(m.away_until) ? ` — ${awayLabel(m.away_until)}` : ""}</option>)}
+                  </select>
+                </div>
+              )}
+
+              {picked.map((clientId) => {
+                const a = allotOf(clientId);
+                const s = suggested[suggestionKey(clientId, "design")];
+                const suggestId = s?.teamMemberId || null;
+                return (
+                  <div key={clientId} className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-semibold min-w-[110px] truncate text-white">
+                      {clientName.get(clientId) || "Unknown client"}
+                    </span>
+
+                    <select value={a.teamMemberId} onChange={(e) => setAllotField(clientId, "teamMemberId", e.target.value)}
+                      className="min-h-10 text-[10px] font-bold bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
+                      <option value="">Assign to…</option>
+                      {team.map((m) => <option key={m.id} value={m.id}>{m.name}{awayLabel(m.away_until) ? ` — ${awayLabel(m.away_until)}` : ""}</option>)}
+                    </select>
+
+                    {/* A suggestion, not a decision: festival work is assigned
+                        on purpose, so this waits to be clicked. */}
+                    {!a.teamMemberId && suggestId && (
+                      <button onClick={() => setAllotField(clientId, "teamMemberId", suggestId)} title={s?.reason}
+                        className="min-h-10 px-2.5 py-2 rounded-lg border border-dashed border-indigo-700 text-[10px] font-bold text-indigo-300 hover:bg-indigo-950/40 cursor-pointer">
+                        suggest: {s?.name}
+                      </button>
+                    )}
+
+                    <input value={a.tagline} onChange={(e) => setAllotField(clientId, "tagline", e.target.value)}
+                      placeholder="Tagline (optional)…"
+                      className="flex-1 min-w-[160px] min-h-10 text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-slate-200 placeholder:text-slate-700 focus:outline-none focus:border-indigo-600" />
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           <button onClick={addClients} disabled={saving || picked.length === 0}
             className="flex items-center gap-1.5 min-h-10 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold cursor-pointer disabled:opacity-40">
