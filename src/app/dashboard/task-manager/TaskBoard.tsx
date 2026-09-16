@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Avatar from "../Avatar";
-import { fmtIST, fmtISTDate } from "@/lib/time";
+import { fmtIST, istToday } from "@/lib/time";
 import { fetchSuggestion, suggestionKey, type RouteSuggestion } from "@/lib/task-suggestion";
 import { uploadTaskFile, humanSize } from "@/lib/drive-upload-client";
 import {
@@ -24,6 +24,8 @@ interface Task {
   client_id: string | null;
   created_at: string;
   completed_at: string | null;
+  /** How many times the deadline has been pushed to a later day. Server-kept. */
+  reschedule_count?: number | null;
   clients?: { name: string } | null;
   attachments?: Attachment[];
 }
@@ -47,8 +49,50 @@ const TYPE_LABEL: Record<string, string> = {
   image: "Image", video: "Video", ads: "Ads", other: "Task",
 };
 const PRIORITY_DOT: Record<string, string> = {
-  urgent: "bg-red-500", high: "bg-rose-400", medium: "bg-amber-400", low: "bg-slate-600",
+  urgent: "bg-rose-500", high: "bg-rose-400", medium: "bg-amber-400", low: "bg-slate-600",
 };
+
+/**
+ * Two answers, not four.
+ *
+ * The board writes `medium` or `urgent` now, but years of rows carry `low` and
+ * `high` and nobody is rewriting them: anything that isn't `urgent` reads as
+ * Normal, which is what those rows always meant in practice.
+ */
+const isUrgent = (t: { priority: string }) => t.priority === "urgent";
+/**
+ * The Indian calendar day an instant falls on, "YYYY-MM-DD" — what a date input
+ * wants and what the completed strip groups by. The browser's own day is the
+ * wrong answer for anyone reading the board from outside India.
+ */
+const istDayOf = (d: string | null | undefined) =>
+  d ? new Date(d).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }) : "";
+/** The clock time of a finish, in IST — "17:40". */
+const istTimeOf = (d: string | null | undefined) =>
+  d ? new Date(d).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
+
+/** Rose, wherever the task is drawn. Colour is the whole feature. */
+function UrgentChip() {
+  return (
+    <span className="shrink-0 text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-950/40 border border-rose-900 text-rose-400">
+      Urgent
+    </span>
+  );
+}
+
+/** How often this one has been pushed. Ten pushes is a signal, not a number. */
+function RescheduleBadge({ n }: { n: number | null | undefined }) {
+  const count = Number(n) || 0;
+  if (count < 1) return null;
+  return (
+    <span title={`Rescheduled ${count} time(s)`}
+      className={`shrink-0 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+        count >= 10 ? "bg-amber-950/40 border-amber-900 text-amber-400" : "bg-slate-900 border-slate-800 text-slate-400"
+      }`}>
+      ↻ {count}
+    </span>
+  );
+}
 /** Away today, or away until a day still ahead. */
 export function awayLabel(awayUntil: string | null | undefined): string | null {
   if (!awayUntil) return null;
@@ -64,6 +108,8 @@ const SOURCE_LABEL: Record<string, string> = {
   excel_import: "Excel import", sheet_scan: "Job sheet", plan: "Plan",
   festival: "Festival",
 };
+/** One key, one question: was the completed strip left open? */
+const COMPLETED_STRIP_KEY = "tbw.taskboard.completedStrip";
 const STATUS_STYLE: Record<string, string> = {
   todo: "bg-slate-900 border-slate-800 text-slate-400",
   in_progress: "bg-blue-950/40 border-blue-900 text-blue-400",
@@ -139,6 +185,21 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   // employee the founder granted it to) and echoed on every load, so the button
   // never appears where pressing it could only return a 403.
   const [canDelete, setCanDelete] = useState(false);
+  // And whether they may hand work to someone else — the same named grant,
+  // decided by the API. Without it nothing is draggable and the edit modal
+  // shows the name rather than a dropdown.
+  const [canMove, setCanMove] = useState(false);
+  // The card in the air, and the column it is hovering over.
+  const [dragTask, setDragTask] = useState<string | null>(null);
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+  // What the server refused, in its own words — a forged reassignment, or the
+  // 50th push of a task nobody is ever going to do.
+  const [actionError, setActionError] = useState<string | null>(null);
+  // Board mode only: the day's finishes, fetched separately because the board
+  // itself is showing open work.
+  const [doneTasks, setDoneTasks] = useState<Task[]>([]);
+  const [completedOpen, setCompletedOpen] = useState(false);
+  const [completedDate, setCompletedDate] = useState(istToday());
   // A job sheet read from an image, waiting for a human to check and assign.
   const [scanning, setScanning] = useState(false);
   const [scan, setScan] = useState<null | {
@@ -164,7 +225,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
       assigneeName: t.assignee_name || "",
       type: t.type || "other",
       priority: t.priority || "medium",
-      deadline: t.deadline ? new Date(t.deadline).toISOString().slice(0, 10) : "",
+      deadline: istDayOf(t.deadline),
     });
   };
 
@@ -173,7 +234,10 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
     await patch(editTask.id, {
       title: editForm.title,
       clientId: editForm.clientId || null,
-      assigneeName: editForm.assigneeName,
+      // Only send the name when this account may change it — the server refuses
+      // the field outright, and an editor without the grant is still allowed to
+      // fix a title.
+      ...(canMove ? { assigneeName: editForm.assigneeName } : {}),
       type: editForm.type,
       priority: editForm.priority,
       // null, not undefined: clearing the field has to actually clear it.
@@ -192,11 +256,43 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
         setTeam(d.team || []);
         setClients(d.clients || []);
         setCanDelete(!!d.canDelete);
+        setCanMove(!!d.canMove);
       }
     } catch { /* ignore */ } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { fetchAll(tab); }, [tab, fetchAll]);
+
+  // The completed strip remembers whether it was left open — a founder who
+  // reads it every morning shouldn't have to unfold it every morning.
+  useEffect(() => {
+    if (mode !== "board") return;
+    try { setCompletedOpen(localStorage.getItem(COMPLETED_STRIP_KEY) === "1"); } catch { /* private mode */ }
+  }, [mode]);
+
+  const toggleCompleted = () => {
+    setCompletedOpen((open) => {
+      const next = !open;
+      try { localStorage.setItem(COMPLETED_STRIP_KEY, next ? "1" : "0"); } catch { /* private mode */ }
+      return next;
+    });
+  };
+
+  // Finished work is its own question — asked only when the strip is open, and
+  // again when the date changes, so the answer is never a day stale.
+  useEffect(() => {
+    if (mode !== "board" || !completedOpen) return;
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/team-tasks?status=done", { cache: "no-store" });
+        if (!res.ok || !alive) return;
+        const d = await res.json();
+        setDoneTasks(d.tasks || []);
+      } catch { /* the strip simply stays empty */ }
+    })();
+    return () => { alive = false; };
+  }, [mode, completedOpen, completedDate]);
 
   useEffect(() => {
     if (mode !== "team") return;
@@ -226,12 +322,41 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
     } finally { setPmBusy(false); }
   };
 
+  // A refusal now has something to say — a task pushed fifty times, or a move
+  // this account was never granted — so the answer is read, not thrown away.
   const patch = async (id: string, fields: Record<string, unknown>) => {
     setBusy(id);
+    setActionError(null);
     try {
-      await fetch("/api/team-tasks", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, ...fields }) });
+      const res = await fetch("/api/team-tasks", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, ...fields }) });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setActionError(d.error || "That change didn't go through.");
+      }
       await fetchAll(tab);
     } finally { setBusy(null); }
+  };
+
+  /**
+   * A card let go over someone else's column.
+   *
+   * Only the name moves — not the status, not the deadline, not the priority —
+   * because dragging is how a manager says "you take this", and nothing else.
+   * The column redraws immediately and the reload puts the server's answer
+   * (including a refusal) back on screen a moment later.
+   */
+  const dropOnColumn = async (colName: string) => {
+    const id = dragTask;
+    setDragTask(null);
+    setDragOverCol(null);
+    if (!id || !canMove) return;
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+    const target = colName === "Unassigned" ? "" : colName;
+    // Dropped back where it started: nothing happened.
+    if ((task.assignee_name || "").toLowerCase() === target.toLowerCase()) return;
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, assignee_name: target || null } : t)));
+    await patch(id, { assigneeName: target });
   };
 
   const remove = async (id: string) => {
@@ -368,6 +493,30 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   }, [tasks]);
 
   /**
+   * The day's finishes, per designer.
+   *
+   * "What went out today" is a different question from "what is left", and the
+   * board could only ever answer the second. Grouped by the name on the task
+   * because that is how the founder reads it — down a person, not down a clock.
+   * Whoever finished nothing simply isn't here; unassigned work sits last.
+   */
+  const completedGroups = useMemo(() => {
+    const onDate = doneTasks.filter((t) => t.status === "done" && istDayOf(t.completed_at) === completedDate);
+    const groups = new Map<string, Task[]>();
+    for (const t of onDate) {
+      const name = (t.assignee_name || "").trim() || "Unassigned";
+      groups.set(name, [...(groups.get(name) || []), t]);
+    }
+    return [...groups.entries()]
+      .map(([name, items]) => ({
+        name,
+        member: team.find((m) => m.name.toLowerCase() === name.toLowerCase()),
+        items: items.sort((a, b) => (a.completed_at || "").localeCompare(b.completed_at || "")),
+      }))
+      .sort((a, b) => (a.name === "Unassigned" ? 1 : b.name === "Unassigned" ? -1 : a.name.localeCompare(b.name)));
+  }, [doneTasks, completedDate, team]);
+
+  /**
    * Who earns a card on the team page: everyone with a portal account (an
    * empty plate on a real teammate is information), plus anyone else only
    * while tasks are allotted to them. Names that never signed up and hold
@@ -404,6 +553,29 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
    */
   const toggleExpanded = (id: string) => setExpanded((p) => ({ ...p, [id]: !p[id] }));
 
+  /**
+   * Normal or Urgent, and nothing in between.
+   *
+   * The four-level select asked a question nobody in the studio answers the
+   * same way twice. This one asks the only question that changes what anyone
+   * does today, and the answer is a colour.
+   */
+  const priorityToggle = (value: string, onPick: (p: string) => void) => (
+    <div className="flex items-center gap-1 bg-slate-950 border border-slate-800 rounded-lg p-1 min-h-[40px] lg:min-h-0">
+      {([["medium", "Normal"], ["urgent", "Urgent"]] as const).map(([p, label]) => {
+        const on = p === "urgent" ? value === "urgent" : value !== "urgent";
+        return (
+          <button key={p} type="button" onClick={() => onPick(p)}
+            className={`flex-1 rounded-md px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider cursor-pointer transition-colors ${
+              on ? (p === "urgent" ? "bg-rose-600 text-white" : "bg-indigo-600 text-white") : "text-slate-500 hover:text-white"
+            }`}>
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+
   const metaChip = (label: string, value: string) => (
     <span key={label} className="text-[9px] bg-slate-900/60 border border-slate-800 rounded px-1.5 py-0.5 whitespace-nowrap">
       <span className="font-bold uppercase tracking-wider text-slate-600">{label}</span>
@@ -427,11 +599,23 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
         : <p className="text-[11px] text-slate-600 italic">No description was written.</p>}
       <div className="flex flex-wrap gap-1">
         {metaChip("Type", TYPE_LABEL[t.type] || t.type || "Task")}
-        {metaChip("Priority", t.priority || "medium")}
+        {metaChip("Priority", isUrgent(t) ? "Urgent" : "Normal")}
         {metaChip("Client", t.clients?.name || "—")}
-        {metaChip("Due", t.deadline ? fmtISTDate(t.deadline) : "no deadline")}
         {metaChip("Assigned", fmtIST(t.created_at))}
         {metaChip("From", SOURCE_LABEL[t.source] || t.source || "Manager")}
+      </div>
+      {/* Pushing a job to tomorrow is the commonest edit on the board, and it
+          used to mean opening the modal. Here it is one tap — and the server
+          counts every push to a later day, which is why the badge sits beside
+          it rather than anywhere else. */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-600">Due</span>
+        <input type="date" value={istDayOf(t.deadline)} disabled={busy === t.id}
+          onChange={(e) => patch(t.id, { deadline: e.target.value || null })}
+          title="Move this task's deadline — later dates are counted"
+          className="min-h-[40px] lg:min-h-0 text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-300 cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-600 disabled:opacity-50" />
+        {!t.deadline && <span className="text-[10px] text-slate-600">no deadline yet</span>}
+        <RescheduleBadge n={t.reschedule_count} />
       </div>
       {(t.attachments || []).length > 0 && (
         <div className="flex flex-wrap gap-1.5">
@@ -464,7 +648,9 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
     const member = team.find((m) => m.name.toLowerCase() === (t.assignee_name || "").toLowerCase());
     return (
       <div key={t.id}
-        className="rounded-lg border border-slate-900 bg-slate-950/60 hover:border-slate-800 transition-colors">
+        className={`rounded-lg border transition-colors ${isUrgent(t)
+          ? "border-rose-900/60 border-l-2 border-l-rose-500 bg-rose-950/10 hover:border-rose-800"
+          : "border-slate-900 bg-slate-950/60 hover:border-slate-800"}`}>
       <div className="grid grid-cols-12 gap-x-2 gap-y-1.5 md:gap-2 items-center px-3 py-2.5 md:py-2">
         <div className="col-span-12 md:col-span-4 flex items-center gap-2 min-w-0">
           <button onClick={() => toggleExpanded(t.id)} title={isOpen ? "Hide the full task" : "Show the full task"}
@@ -479,6 +665,8 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
           {t.source === "whatsapp" && <MessageSquare className="w-3 h-3 shrink-0 text-emerald-500" aria-label="From WhatsApp" />}
           {t.source === "call" && <MessageSquare className="w-3 h-3 shrink-0 text-indigo-400" aria-label="From a call" />}
           {t.source === "excel_import" && <FileSpreadsheet className="w-3 h-3 shrink-0 text-slate-600" aria-label="Imported" />}
+          {isUrgent(t) && <UrgentChip />}
+          <RescheduleBadge n={t.reschedule_count} />
         </div>
 
         <div className="col-span-4 md:col-span-2 min-w-0">
@@ -589,6 +777,14 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
         </div>
       )}
 
+      {/* What the server said no to, in the server's own words. */}
+      {actionError && (
+        <div className="bg-rose-950/30 border border-rose-900/60 rounded-xl p-3 text-xs text-rose-300 flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /><span className="flex-1">{actionError}</span>
+          <button onClick={() => setActionError(null)} className="text-rose-500 hover:text-white cursor-pointer shrink-0"><X className="w-3.5 h-3.5" /></button>
+        </div>
+      )}
+
       {/* Job sheet review — read from the image, checked by a human before it
           becomes work on the board. */}
       {scan && (
@@ -688,6 +884,64 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
         </div>
       )}
 
+      {/* Completed — by designer. Folded away by default: the board is about
+          what is left, and this is the answer to the other question, kept one
+          click from the top of the page. */}
+      {mode === "board" && (
+        <div className="bg-slate-950/40 border border-slate-900 rounded-2xl">
+          <div className="flex items-center justify-between gap-2 flex-wrap px-3.5 py-2.5">
+            <button onClick={toggleCompleted}
+              title={completedOpen ? "Hide finished work" : "Show what was finished"}
+              className="flex items-center gap-2 min-h-[40px] lg:min-h-0 text-xs font-bold text-white cursor-pointer hover:text-indigo-300">
+              <ChevronDown className={`w-3.5 h-3.5 text-indigo-400 transition-transform ${completedOpen ? "rotate-180" : ""}`} />
+              <span>Completed — by designer</span>
+            </button>
+            {completedOpen && (
+              <div className="flex items-center gap-2">
+                <input type="date" value={completedDate} onChange={(e) => setCompletedDate(e.target.value || istToday())}
+                  title="Which day's finishes to show"
+                  className="min-h-[40px] lg:min-h-0 text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-300 cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-600" />
+                <span className="text-[10px] text-slate-600 font-mono">
+                  {completedGroups.reduce((n, g) => n + g.items.length, 0)} done
+                </span>
+              </div>
+            )}
+          </div>
+          {completedOpen && (
+            <div className="px-3.5 pb-3 space-y-3">
+              {completedGroups.length === 0 ? (
+                <p className="text-[11px] text-slate-600">Nothing completed on this date.</p>
+              ) : completedGroups.map((g) => (
+                <div key={g.name} className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Avatar name={g.name} url={g.member?.avatar_url} size={20} rounded="rounded-full" />
+                    <span className="text-[11px] font-bold text-white truncate">{g.name}</span>
+                    <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{g.items.length}</span>
+                  </div>
+                  <div className="space-y-1 pl-1">
+                    {g.items.map((t) => (
+                      <div key={t.id}
+                        className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 ${isUrgent(t)
+                          ? "border-rose-900/60 border-l-2 border-l-rose-500 bg-rose-950/10"
+                          : "border-slate-900 bg-slate-950/60"}`}>
+                        <Check className="w-3 h-3 shrink-0 text-emerald-500" />
+                        <span className="min-w-0 flex-1 text-[11px] text-slate-300 truncate" title={t.title || ""}>{t.title || "Untitled"}</span>
+                        {t.clients?.name && (
+                          <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-950/40 border border-indigo-900 text-indigo-300 truncate max-w-[120px]">{t.clients.name}</span>
+                        )}
+                        {isUrgent(t) && <UrgentChip />}
+                        <RescheduleBadge n={t.reschedule_count} />
+                        <span className="shrink-0 text-[10px] font-mono text-slate-500">{istTimeOf(t.completed_at)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
@@ -722,6 +976,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
           <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="text-sm md:text-xs min-h-[40px] lg:min-h-0 bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
             {Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
+          {priorityToggle(form.priority, (p) => setForm({ ...form, priority: p }))}
           <div className="flex items-center gap-2">
             <input type="date" value={form.deadline} onChange={(e) => setForm({ ...form, deadline: e.target.value })} className="flex-1 text-sm md:text-xs min-h-[40px] lg:min-h-0 bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 focus:outline-none" />
             <button onClick={addTask} disabled={saving || !form.title.trim()} className="px-3 py-2 min-h-[40px] lg:min-h-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer disabled:opacity-50">
@@ -842,8 +1097,15 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
           {columns.map((col) => {
             const late = col.items.filter((t) => t.deadline && new Date(t.deadline).getTime() < now && t.status !== "done").length;
             const isCollapsed = !!collapsed[col.name];
+            // Only a permitted drag makes a column a target — without the grant
+            // there is nothing in the air and nothing lights up.
+            const dropping = canMove && !!dragTask && dragOverCol === col.name;
             return (
-              <div key={col.name} className={`w-72 shrink-0 snap-start md:w-auto border rounded-2xl bg-slate-950/50 ${late > 0 ? "border-rose-900/50" : "border-slate-900"}`}>
+              <div key={col.name}
+                onDragOver={canMove && dragTask ? (e) => { e.preventDefault(); setDragOverCol(col.name); } : undefined}
+                onDragLeave={canMove ? () => setDragOverCol((c) => (c === col.name ? null : c)) : undefined}
+                onDrop={canMove ? (e) => { e.preventDefault(); dropOnColumn(col.name); } : undefined}
+                className={`w-72 shrink-0 snap-start md:w-auto border rounded-2xl bg-slate-950/50 transition-shadow ${late > 0 ? "border-rose-900/50" : "border-slate-900"} ${dropping ? "ring-2 ring-indigo-500" : ""}`}>
                 <button onClick={() => setCollapsed((p) => ({ ...p, [col.name]: !p[col.name] }))}
                   title={isCollapsed ? "Show tasks" : "Hide tasks"}
                   className="w-full flex items-center justify-between px-3.5 py-2.5 cursor-pointer hover:bg-slate-900/40 rounded-2xl">
@@ -932,7 +1194,14 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                       const overdue = !!t.deadline && new Date(t.deadline).getTime() < now && t.status !== "done";
                       const isOpen = !!expanded[t.id];
                       return (
-                        <div key={t.id} className="bg-slate-950/60 border border-slate-900/70 rounded-lg">
+                        <div key={t.id}
+                          draggable={canMove}
+                          onDragStart={canMove ? (e) => { setDragTask(t.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", t.id); } : undefined}
+                          onDragEnd={canMove ? () => { setDragTask(null); setDragOverCol(null); } : undefined}
+                          title={canMove ? "Drag onto another person to hand it over" : undefined}
+                          className={`rounded-lg border ${isUrgent(t)
+                            ? "border-rose-900/60 border-l-2 border-l-rose-500 bg-rose-950/10"
+                            : "bg-slate-950/60 border-slate-900/70"} ${canMove ? "cursor-grab active:cursor-grabbing" : ""} ${dragTask === t.id ? "opacity-40" : ""}`}>
                         <div className="flex items-center gap-2 text-[10px] px-2 py-1.5">
                           <button onClick={() => toggleExpanded(t.id)} title={isOpen ? "Hide the full task" : "Show the full task"}
                             className="shrink-0 -ml-1 p-1 rounded text-slate-600 hover:text-indigo-400 cursor-pointer">
@@ -946,6 +1215,8 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                             {t.title || "Untitled"}
                           </button>
                           {t.clients?.name && <span className="text-slate-600 truncate max-w-[80px]">{t.clients.name}</span>}
+                          {isUrgent(t) && <UrgentChip />}
+                          <RescheduleBadge n={t.reschedule_count} />
                           <span className={`font-mono shrink-0 ${overdue ? "text-rose-400 font-bold" : "text-slate-500"}`}>
                             {t.deadline ? new Date(t.deadline).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) : "—"}
                           </span>
@@ -1003,11 +1274,21 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
               </div>
               <div>
                 <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Assigned to</span>
-                <select value={editForm.assigneeName} onChange={(e) => setEditForm({ ...editForm, assigneeName: e.target.value })}
-                  className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
-                  <option value="">Unassigned</option>
-                  {team.map((m) => <option key={m.id} value={m.name}>{m.name}{awayLabel(m.away_until) ? ` — ${awayLabel(m.away_until)}` : ""}</option>)}
-                </select>
+                {/* Changing the name here is the same act as dragging the card,
+                    so it asks for the same grant. Without it the name is a fact
+                    to read, not a field. */}
+                {canMove ? (
+                  <select value={editForm.assigneeName} onChange={(e) => setEditForm({ ...editForm, assigneeName: e.target.value })}
+                    className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
+                    <option value="">Unassigned</option>
+                    {team.map((m) => <option key={m.id} value={m.name}>{m.name}{awayLabel(m.away_until) ? ` — ${awayLabel(m.away_until)}` : ""}</option>)}
+                  </select>
+                ) : (
+                  <p title="Only the founder, or someone they've granted it to, can move tasks between people."
+                    className="w-full text-xs bg-slate-950/60 border border-slate-900 rounded-lg px-2 py-2 text-slate-400 truncate">
+                    {editForm.assigneeName || "Unassigned"}
+                  </p>
+                )}
               </div>
               <div>
                 <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Type</span>
@@ -1018,16 +1299,13 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
               </div>
               <div>
                 <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Priority</span>
-                <select value={editForm.priority} onChange={(e) => setEditForm({ ...editForm, priority: e.target.value })}
-                  className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 cursor-pointer focus:outline-none">
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                  <option value="urgent">Urgent</option>
-                </select>
+                {priorityToggle(editForm.priority, (p) => setEditForm({ ...editForm, priority: p }))}
               </div>
               <div className="col-span-2">
-                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Deadline</span>
+                <span className="text-[9px] font-bold text-slate-500 uppercase mb-1 flex items-center gap-2">
+                  <span>Deadline</span>
+                  <RescheduleBadge n={editTask.reschedule_count} />
+                </span>
                 <input type="date" value={editForm.deadline} onChange={(e) => setEditForm({ ...editForm, deadline: e.target.value })}
                   className="w-full text-xs bg-slate-950 border border-slate-800 rounded-lg px-2 py-2 text-slate-300 focus:outline-none" />
                 <p className="text-[9px] text-slate-600 mt-1">Leave empty when there is no fixed date — set one when it&apos;s urgent.</p>

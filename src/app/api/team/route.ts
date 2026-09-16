@@ -13,7 +13,7 @@ export async function GET() {
   const admin = createServiceRoleClient();
   const { data, error } = await admin
     .from("profiles")
-    .select("id, name, role, brand_name, approved, permissions, can_delete_tasks, created_at, avatar_url, designation, phone, about")
+    .select("id, name, role, brand_name, approved, permissions, can_delete_tasks, can_move_tasks, created_at, avatar_url, designation, phone, about")
     .order("created_at", { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -68,6 +68,10 @@ export async function PATCH(request: NextRequest) {
     // Deleting a task is destructive and unrecoverable, so it is granted per
     // person rather than to the employee role as a whole.
     patch.can_delete_tasks = !!allowed;
+  } else if (action === "set_task_move") {
+    // Moving a task to someone else's name is a scheduling decision, not an
+    // edit, so it is granted per person the same way deletion is.
+    patch.can_move_tasks = !!allowed;
   } else {
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   }

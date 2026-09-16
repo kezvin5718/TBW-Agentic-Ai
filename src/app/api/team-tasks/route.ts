@@ -1,7 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
+import { utcToIstWallClock } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
+
+/** How many times a task may be pushed before the board stops helping. */
+const RESCHEDULE_CAP = 50;
+
+/**
+ * The Indian calendar day an instant falls on, "YYYY-MM-DD".
+ *
+ * A deadline nudged from 9am to 6pm on the same day is not a reschedule — it is
+ * the same day's work. Only the day matters, and only the Indian one: compared
+ * in UTC, anything set before 5:30am reads as the day before.
+ */
+function istDay(instant: string | Date): string {
+  return utcToIstWallClock(instant).slice(0, 10);
+}
 
 const TASK_TYPES = ["copy", "image", "video", "ads", "design", "video_edit", "ai_video", "script", "planning", "packaging", "print", "other"];
 const STATUSES = ["todo", "in_progress", "review", "done"];
@@ -79,7 +94,7 @@ export async function GET(request: NextRequest) {
 
   let q = admin
     .from("tasks")
-    .select("id, title, description, type, status, priority, deadline, source, assignee_name, assignee_id, client_id, created_at, completed_at, clients(name)")
+    .select("id, title, description, type, status, priority, deadline, source, assignee_name, assignee_id, client_id, created_at, completed_at, reschedule_count, clients(name)")
     .is("plan_id", null)
     .order("priority", { ascending: false })
     .order("deadline", { ascending: true, nullsFirst: false })
@@ -121,7 +136,11 @@ export async function GET(request: NextRequest) {
   }
   const tasksWithFiles = (tasks || []).map((t) => ({ ...t, attachments: filesByTask.get(t.id as string) || [] }));
 
-  return NextResponse.json({ success: true, tasks: tasksWithFiles, team: teamWithPhotos, clients: clients || [], canDelete: await mayDeleteTasks(user.id, role) });
+  return NextResponse.json({
+    success: true, tasks: tasksWithFiles, team: teamWithPhotos, clients: clients || [],
+    canDelete: await mayDeleteTasks(user.id, role),
+    canMove: await mayMoveTasks(user.id, role),
+  });
 }
 
 // POST — create a task. Body: { title, description?, clientId?, type?, assigneeName?, priority?, deadline? }
@@ -167,7 +186,7 @@ export async function POST(request: NextRequest) {
 
 // PATCH — update a task. Body: { id, status?, assigneeName?, priority?, deadline?, title?, clientId?, type? }
 export async function PATCH(request: NextRequest) {
-  const { user } = await requireStaff();
+  const { user, role } = await requireStaff();
   if (!user) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const body = await request.json();
@@ -181,7 +200,14 @@ export async function PATCH(request: NextRequest) {
     patch.status = body.status;
     patch.completed_at = body.status === "done" ? new Date().toISOString() : null;
   }
+  // Handing work to someone else — by drag, or by the modal's dropdown — is the
+  // one edit that needs the named grant. The name and the profile id move
+  // together: a name nobody has a board row for writes the name and a null id,
+  // exactly as creating a task does.
   if (body.assigneeName !== undefined) {
+    if (!(await mayMoveTasks(user.id, role))) {
+      return NextResponse.json({ error: "You don't have permission to move tasks between people — ask the founder to grant it in Team & Access." }, { status: 403 });
+    }
     const name = (body.assigneeName || "").trim() || null;
     patch.assignee_name = name;
     patch.assignee_id = null;
@@ -193,7 +219,25 @@ export async function PATCH(request: NextRequest) {
   if (body.priority !== undefined && PRIORITIES.includes(body.priority)) patch.priority = body.priority;
   if (body.type !== undefined && TASK_TYPES.includes(body.type)) patch.type = body.type;
   // Explicit null clears it; absent leaves it alone.
-  if (body.deadline !== undefined) patch.deadline = body.deadline ? new Date(body.deadline).toISOString() : null;
+  //
+  // A deadline pushed to a LATER Indian day is a reschedule, and the count is
+  // kept here rather than trusted from the client — it is the one number on the
+  // task nobody may edit. Pulling a date forward, or giving a dateless task its
+  // first one, is not a push and costs nothing.
+  if (body.deadline !== undefined) {
+    const next = body.deadline ? new Date(body.deadline).toISOString() : null;
+    patch.deadline = next;
+    const { data: before } = await admin.from("tasks").select("deadline, reschedule_count").eq("id", body.id).maybeSingle();
+    const was = before?.deadline ? istDay(before.deadline as string) : null;
+    const now = next ? istDay(next) : null;
+    if (was && now && now > was) {
+      const count = Number(before?.reschedule_count) || 0;
+      if (count >= RESCHEDULE_CAP) {
+        return NextResponse.json({ error: `This task has been rescheduled ${RESCHEDULE_CAP} times — it cannot be pushed again. Finish it or delete it.` }, { status: 400 });
+      }
+      patch.reschedule_count = count + 1;
+    }
+  }
   if (body.title !== undefined && (body.title || "").trim()) patch.title = body.title.trim();
   if (body.clientId !== undefined) patch.client_id = body.clientId || null;
 
@@ -216,6 +260,20 @@ async function mayDeleteTasks(userId: string, role: string): Promise<boolean> {
   const admin = createServiceRoleClient();
   const { data } = await admin.from("profiles").select("can_delete_tasks").eq("id", userId).maybeSingle();
   return !!data?.can_delete_tasks;
+}
+
+/**
+ * Who may move a task onto another person's name. Founders always; employees
+ * only by named grant (profiles.can_move_tasks), the same shape as deletion.
+ * Reassignment isn't destructive, but it decides someone else's day — so it
+ * stays a decision the founder hands out, not one the whole team holds.
+ */
+async function mayMoveTasks(userId: string, role: string): Promise<boolean> {
+  if (role === "founder") return true;
+  if (role !== "employee") return false;
+  const admin = createServiceRoleClient();
+  const { data } = await admin.from("profiles").select("can_move_tasks").eq("id", userId).maybeSingle();
+  return !!data?.can_move_tasks;
 }
 
 // DELETE — remove a task. Body: { id }
