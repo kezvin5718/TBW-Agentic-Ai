@@ -7,7 +7,7 @@ import { fetchSuggestion, suggestionKey, type RouteSuggestion } from "@/lib/task
 import { uploadTaskFile, humanSize } from "@/lib/drive-upload-client";
 import {
   Loader2, Plus, X, Check, Users, Rows3,
-  Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2, Pencil, ScanLine, ChevronDown, Paperclip,
+  Calendar, AlertTriangle, MessageSquare, FileSpreadsheet, Trash2, Pencil, ScanLine, ChevronDown, ChevronLeft, ChevronRight, Paperclip,
 } from "lucide-react";
 
 interface Task {
@@ -80,14 +80,23 @@ function UrgentChip() {
   );
 }
 
-/** How often this one has been pushed. Ten pushes is a signal, not a number. */
-function RescheduleBadge({ n }: { n: number | null | undefined }) {
+/**
+ * How often this one has been pushed. Ten pushes is a signal, not a number.
+ *
+ * On an open row a zero is noise — nothing has happened to that task yet, and a
+ * badge on every card buys nothing. On finished work it is the answer: asked
+ * "how many times was this pushed", "none" is a reply, and a missing badge is
+ * not. So `showZero` on the completed calendar, nowhere else.
+ */
+function RescheduleBadge({ n, showZero = false }: { n: number | null | undefined; showZero?: boolean }) {
   const count = Number(n) || 0;
-  if (count < 1) return null;
+  if (count < 1 && !showZero) return null;
   return (
     <span title={`Rescheduled ${count} time(s)`}
       className={`shrink-0 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border ${
-        count >= 10 ? "bg-amber-950/40 border-amber-900 text-amber-400" : "bg-slate-900 border-slate-800 text-slate-400"
+        count >= 10 ? "bg-amber-950/40 border-amber-900 text-amber-400"
+          : count < 1 ? "bg-slate-900/60 border-slate-900 text-slate-600"
+          : "bg-slate-900 border-slate-800 text-slate-400"
       }`}>
       ↻ {count}
     </span>
@@ -116,6 +125,187 @@ const STATUS_STYLE: Record<string, string> = {
   review: "bg-amber-950/40 border-amber-900 text-amber-400",
   done: "bg-emerald-950/40 border-emerald-900 text-emerald-400",
 };
+
+/** Monday first — the studio's week, not the spreadsheet's. */
+const WEEK_HEAD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/**
+ * Finished work, as a calendar rather than a queue.
+ *
+ * Pouring every finished task into one per-designer list answers nothing: at
+ * twenty-four rows a person, "what went out on the 16th" is a scroll, and the
+ * founder asks it by date. So: a month with a count on every day, and under it
+ * the day you picked, read down a person the way the rest of the board reads.
+ *
+ * Whatever is passed in is the whole universe — there is no fetch here, and no
+ * API knows about this view. Bucketing is Indian-calendar throughout; the
+ * browser's own day is the wrong answer for anyone reading from outside India.
+ */
+function CompletedCalendar({ tasks, team }: { tasks: Task[]; team: Member[] }) {
+  const today = istToday();
+  const [month, setMonth] = useState(() => today.slice(0, 7));
+  // Today when we open on this month; nothing when the arrows have carried us
+  // somewhere else, because picking a day for the founder there would only be
+  // picking the wrong one.
+  const [selected, setSelected] = useState(() => today);
+
+  /** Every finish filed under the Indian day it happened on. One pass serves both halves. */
+  const byDay = useMemo(() => {
+    const map = new Map<string, Task[]>();
+    for (const t of tasks) {
+      if (t.status !== "done") continue;
+      const day = istDayOf(t.completed_at);
+      if (!day) continue;
+      map.set(day, [...(map.get(day) || []), t]);
+    }
+    return map;
+  }, [tasks]);
+
+  /**
+   * The month as 7-column rows: leading blanks to reach Monday, then the days,
+   * then blanks to close the last week. Plain calendar arithmetic on the key
+   * string — no instant is converted, so no zone can shift it.
+   */
+  const cells = useMemo(() => {
+    const [y, m] = month.split("-").map(Number);
+    const lead = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + 6) % 7;
+    const length = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const out: (string | null)[] = Array(lead).fill(null);
+    for (let d = 1; d <= length; d++) out.push(`${month}-${String(d).padStart(2, "0")}`);
+    while (out.length % 7 !== 0) out.push(null);
+    return out;
+  }, [month]);
+
+  const monthLabel = new Date(`${month}-01T12:00:00Z`)
+    .toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "long", year: "numeric" });
+  const monthTotal = cells.reduce((n, key) => n + (key ? (byDay.get(key)?.length || 0) : 0), 0);
+
+  const goMonth = (delta: number) => {
+    const [y, m] = month.split("-").map(Number);
+    const moved = new Date(Date.UTC(y, m - 1 + delta, 1));
+    const key = `${moved.getUTCFullYear()}-${String(moved.getUTCMonth() + 1).padStart(2, "0")}`;
+    setMonth(key);
+    setSelected(key === today.slice(0, 7) ? today : "");
+  };
+
+  /**
+   * The chosen day, designer by designer.
+   *
+   * Grouped by the name on the task because that is how the founder reads it —
+   * down a person, not down a clock. Whoever finished nothing simply isn't
+   * here; unassigned work sits last.
+   */
+  const groups = useMemo(() => {
+    const onDay = selected ? (byDay.get(selected) || []) : [];
+    const buckets = new Map<string, Task[]>();
+    for (const t of onDay) {
+      const name = (t.assignee_name || "").trim() || "Unassigned";
+      buckets.set(name, [...(buckets.get(name) || []), t]);
+    }
+    return [...buckets.entries()]
+      .map(([name, items]) => ({
+        name,
+        member: team.find((m) => m.name.toLowerCase() === name.toLowerCase()),
+        items: items.sort((a, b) => (a.completed_at || "").localeCompare(b.completed_at || "")),
+      }))
+      .sort((a, b) => (a.name === "Unassigned" ? 1 : b.name === "Unassigned" ? -1 : a.name.localeCompare(b.name)));
+  }, [byDay, selected, team]);
+
+  const dayLabel = selected
+    ? new Date(`${selected}T12:00:00Z`).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "numeric", month: "short" })
+    : "";
+
+  return (
+    <div className="space-y-3">
+      {/* The month, and the two arrows that reach the ones before it. */}
+      <div className="flex items-center justify-between gap-2">
+        <button onClick={() => goMonth(-1)} title="Previous month"
+          className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg border border-slate-900 bg-slate-950/60 text-slate-400 hover:text-indigo-300 hover:border-indigo-700 cursor-pointer">
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        <div className="min-w-0 text-center">
+          <p className="text-xs font-bold text-white truncate">{monthLabel}</p>
+          <p className="text-[10px] font-mono text-slate-600">{monthTotal} done this month</p>
+        </div>
+        <button onClick={() => goMonth(1)} title="Next month"
+          className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg border border-slate-900 bg-slate-950/60 text-slate-400 hover:text-indigo-300 hover:border-indigo-700 cursor-pointer">
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Seven equal columns, so the grid fits a phone without the page sliding
+          sideways. The count is the whole point of a cell: a bare number means
+          nothing went out that day. */}
+      <div className="grid grid-cols-7 gap-1">
+        {WEEK_HEAD.map((d, i) => (
+          <span key={i} className="text-[8px] sm:text-[9px] font-bold uppercase tracking-wider text-slate-600 text-center pb-0.5">
+            <span className="hidden sm:inline">{d}</span><span className="sm:hidden">{d[0]}</span>
+          </span>
+        ))}
+        {cells.map((key, i) => {
+          if (!key) return <span key={`blank-${i}`} />;
+          const n = byDay.get(key)?.length || 0;
+          const isToday = key === today;
+          const isPicked = key === selected;
+          return (
+            <button key={key} onClick={() => setSelected(key)}
+              title={`${key} — ${n} finished`}
+              className={`min-h-[40px] rounded-lg border px-0.5 py-1 flex flex-col items-center justify-center gap-0.5 cursor-pointer transition-colors ${
+                isPicked ? "bg-indigo-600 border-indigo-500 text-white"
+                  : n > 0 ? "bg-slate-950/60 border-slate-800 text-slate-200 hover:border-indigo-700"
+                  : "bg-transparent border-slate-900 text-slate-600 hover:border-slate-800"
+              } ${isToday && !isPicked ? "ring-1 ring-indigo-500" : ""}`}>
+              <span className="text-[11px] font-bold leading-none">{Number(key.slice(8))}</span>
+              {n > 0 && (
+                <span className={`text-[8px] font-mono font-bold leading-none px-1 py-0.5 rounded-full ${
+                  isPicked ? "bg-white/20 text-white" : "bg-emerald-950/60 border border-emerald-900 text-emerald-400"
+                }`}>{n}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* The day itself. Same row as the board has always drawn — title, client,
+          urgency, how often it was pushed, and the IST clock time it landed. */}
+      {!selected ? (
+        <p className="text-[11px] text-slate-600">Pick a day.</p>
+      ) : groups.length === 0 ? (
+        <p className="text-[11px] text-slate-600">Nothing completed on this day.</p>
+      ) : (
+        <div className="space-y-3 pt-1 border-t border-slate-900">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 pt-2">{dayLabel}</p>
+          {groups.map((g) => (
+            <div key={g.name} className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Avatar name={g.name} url={g.member?.avatar_url} size={20} rounded="rounded-full" />
+                <span className="text-[11px] font-bold text-white truncate">{g.name}</span>
+                <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{g.items.length}</span>
+              </div>
+              <div className="space-y-1 pl-1">
+                {g.items.map((t) => (
+                  <div key={t.id}
+                    className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 ${isUrgent(t)
+                      ? "border-rose-900/60 border-l-2 border-l-rose-500 bg-rose-950/10"
+                      : "border-slate-900 bg-slate-950/60"}`}>
+                    <Check className="w-3 h-3 shrink-0 text-emerald-500" />
+                    <span className="min-w-0 flex-1 text-[11px] text-slate-300 truncate" title={t.title || ""}>{t.title || "Untitled"}</span>
+                    {t.clients?.name && (
+                      <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-950/40 border border-indigo-900 text-indigo-300 truncate max-w-[120px]">{t.clients.name}</span>
+                    )}
+                    {isUrgent(t) && <UrgentChip />}
+                    <RescheduleBadge n={t.reschedule_count} showZero />
+                    <span className="shrink-0 text-[10px] font-mono text-slate-500">{istTimeOf(t.completed_at)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * One data layer, two faces.
@@ -199,7 +389,6 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   // itself is showing open work.
   const [doneTasks, setDoneTasks] = useState<Task[]>([]);
   const [completedOpen, setCompletedOpen] = useState(false);
-  const [completedDate, setCompletedDate] = useState(istToday());
   // A job sheet read from an image, waiting for a human to check and assign.
   const [scanning, setScanning] = useState(false);
   const [scan, setScan] = useState<null | {
@@ -279,9 +468,10 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   };
 
   // Finished work is its own question — asked only when the strip is open, and
-  // again when the date changes, so the answer is never a day stale.
+  // not at all on the Completed tab, where `tasks` already IS the finished set.
+  // One view, one fetch.
   useEffect(() => {
-    if (mode !== "board" || !completedOpen) return;
+    if (mode !== "board" || !completedOpen || tab === "done") return;
     let alive = true;
     (async () => {
       try {
@@ -292,7 +482,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
       } catch { /* the strip simply stays empty */ }
     })();
     return () => { alive = false; };
-  }, [mode, completedOpen, completedDate]);
+  }, [mode, completedOpen, tab]);
 
   useEffect(() => {
     if (mode !== "team") return;
@@ -493,28 +683,14 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   }, [tasks]);
 
   /**
-   * The day's finishes, per designer.
+   * What the strip and the Completed tab are looking at.
    *
-   * "What went out today" is a different question from "what is left", and the
-   * board could only ever answer the second. Grouped by the name on the task
-   * because that is how the founder reads it — down a person, not down a clock.
-   * Whoever finished nothing simply isn't here; unassigned work sits last.
+   * "What went out" is a different question from "what is left", and the board
+   * could only ever answer the second — hence the separate fetch. On the
+   * Completed tab there is nothing to fetch: the board is already holding the
+   * finished rows, so the strip reads those instead of asking twice.
    */
-  const completedGroups = useMemo(() => {
-    const onDate = doneTasks.filter((t) => t.status === "done" && istDayOf(t.completed_at) === completedDate);
-    const groups = new Map<string, Task[]>();
-    for (const t of onDate) {
-      const name = (t.assignee_name || "").trim() || "Unassigned";
-      groups.set(name, [...(groups.get(name) || []), t]);
-    }
-    return [...groups.entries()]
-      .map(([name, items]) => ({
-        name,
-        member: team.find((m) => m.name.toLowerCase() === name.toLowerCase()),
-        items: items.sort((a, b) => (a.completed_at || "").localeCompare(b.completed_at || "")),
-      }))
-      .sort((a, b) => (a.name === "Unassigned" ? 1 : b.name === "Unassigned" ? -1 : a.name.localeCompare(b.name)));
-  }, [doneTasks, completedDate, team]);
+  const completedSource = tab === "done" ? tasks : doneTasks;
 
   /**
    * Who earns a card on the team page: everyone with a portal account (an
@@ -896,47 +1072,12 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
               <ChevronDown className={`w-3.5 h-3.5 text-indigo-400 transition-transform ${completedOpen ? "rotate-180" : ""}`} />
               <span>Completed — by designer</span>
             </button>
-            {completedOpen && (
-              <div className="flex items-center gap-2">
-                <input type="date" value={completedDate} onChange={(e) => setCompletedDate(e.target.value || istToday())}
-                  title="Which day's finishes to show"
-                  className="min-h-[40px] lg:min-h-0 text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-300 cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-600" />
-                <span className="text-[10px] text-slate-600 font-mono">
-                  {completedGroups.reduce((n, g) => n + g.items.length, 0)} done
-                </span>
-              </div>
-            )}
           </div>
+          {/* The lone date input is gone: the calendar below IS the date
+              picker, and it shows which days are worth picking. */}
           {completedOpen && (
-            <div className="px-3.5 pb-3 space-y-3">
-              {completedGroups.length === 0 ? (
-                <p className="text-[11px] text-slate-600">Nothing completed on this date.</p>
-              ) : completedGroups.map((g) => (
-                <div key={g.name} className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <Avatar name={g.name} url={g.member?.avatar_url} size={20} rounded="rounded-full" />
-                    <span className="text-[11px] font-bold text-white truncate">{g.name}</span>
-                    <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{g.items.length}</span>
-                  </div>
-                  <div className="space-y-1 pl-1">
-                    {g.items.map((t) => (
-                      <div key={t.id}
-                        className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 ${isUrgent(t)
-                          ? "border-rose-900/60 border-l-2 border-l-rose-500 bg-rose-950/10"
-                          : "border-slate-900 bg-slate-950/60"}`}>
-                        <Check className="w-3 h-3 shrink-0 text-emerald-500" />
-                        <span className="min-w-0 flex-1 text-[11px] text-slate-300 truncate" title={t.title || ""}>{t.title || "Untitled"}</span>
-                        {t.clients?.name && (
-                          <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-950/40 border border-indigo-900 text-indigo-300 truncate max-w-[120px]">{t.clients.name}</span>
-                        )}
-                        {isUrgent(t) && <UrgentChip />}
-                        <RescheduleBadge n={t.reschedule_count} />
-                        <span className="shrink-0 text-[10px] font-mono text-slate-500">{istTimeOf(t.completed_at)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
+            <div className="px-3.5 pb-3">
+              <CompletedCalendar tasks={completedSource} team={team} />
             </div>
           )}
         </div>
@@ -1063,17 +1204,24 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
       {/* Content */}
       {loading ? (
         <div className="py-16 flex justify-center"><Loader2 className="w-6 h-6 text-indigo-500 animate-spin" /></div>
-      ) : mode === "board" && filtered.length === 0 ? (
+      ) : mode === "board" && tab !== "done" && filtered.length === 0 ? (
         <p className="text-xs text-slate-600 py-16 text-center">No tasks here. Add one above, or create tasks from the WhatsApp Task Bar.</p>
       ) : null}
 
+      {/* Completed, in both faces. The flat list and the per-member columns of
+          finished work are gone — nobody reads a year of finishes backwards.
+          A month, and the day you tap on it, is the whole question. */}
+      {!loading && tab === "done" && (
+        <CompletedCalendar tasks={filtered} team={team} />
+      )}
+
       {/* Board tab: the whole picture — every pending task, soonest due first. */}
-      {!loading && mode === "board" && filtered.length > 0 && (
+      {!loading && mode === "board" && tab !== "done" && filtered.length > 0 && (
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-xs font-bold text-white flex items-center gap-2">
               <Rows3 className="w-3.5 h-3.5 text-indigo-400" />
-              <span>{tab === "done" ? "Completed" : "All pending tasks"}</span>
+              <span>All pending tasks</span>
               <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-900 rounded-full px-1.5 py-0.5">{byUrgency.length}</span>
             </h3>
             <span className="text-[10px] text-slate-600">{SORT_LABEL[sortBy]}</span>
@@ -1089,8 +1237,9 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
         </div>
       )}
 
-      {/* Team tab: who is carrying what — every member's whole plate, full width. */}
-      {!loading && mode === "team" && (
+      {/* Team tab: who is carrying what — every member's whole plate, full width.
+          Only ever open work: finished tasks answer to the calendar above. */}
+      {!loading && mode === "team" && tab !== "done" && (
         // Below md the columns swipe sideways instead of stacking into one
         // endless scroll; from md it is today's grid, untouched.
         <div className="flex overflow-x-auto snap-x snap-mandatory md:overflow-visible md:grid md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
