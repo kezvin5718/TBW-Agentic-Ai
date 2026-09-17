@@ -222,15 +222,18 @@ export async function PATCH(request: NextRequest) {
   //
   // A deadline pushed to a LATER Indian day is a reschedule, and the count is
   // kept here rather than trusted from the client — it is the one number on the
-  // task nobody may edit. Pulling a date forward, or giving a dateless task its
-  // first one, is not a push and costs nothing.
+  // task nobody may edit. Pulling a date forward costs nothing. A dateless task
+  // gaining its first date is only a reschedule when the caller SAID so
+  // (body.reschedule, the board's Reschedule button): half the board's tasks
+  // are born without deadlines, and "I'll do it tomorrow" on one of those is
+  // exactly the push the founder wants counted.
   if (body.deadline !== undefined) {
     const next = body.deadline ? new Date(body.deadline).toISOString() : null;
     patch.deadline = next;
     const { data: before } = await admin.from("tasks").select("deadline, reschedule_count").eq("id", body.id).maybeSingle();
     const was = before?.deadline ? istDay(before.deadline as string) : null;
     const now = next ? istDay(next) : null;
-    if (was && now && now > was) {
+    if (now && (was ? now > was : body.reschedule === true)) {
       const count = Number(before?.reschedule_count) || 0;
       if (count >= RESCHEDULE_CAP) {
         return NextResponse.json({ error: `This task has been rescheduled ${RESCHEDULE_CAP} times — it cannot be pushed again. Finish it or delete it.` }, { status: 400 });

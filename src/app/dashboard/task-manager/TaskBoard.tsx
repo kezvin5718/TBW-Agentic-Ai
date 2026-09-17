@@ -70,6 +70,11 @@ const istDayOf = (d: string | null | undefined) =>
 /** The clock time of a finish, in IST — "17:40". */
 const istTimeOf = (d: string | null | undefined) =>
   d ? new Date(d).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false }) : "—";
+/** Today-in-India plus n days, "YYYY-MM-DD" — what "Tomorrow" means here. */
+const istDayPlus = (n: number) => {
+  const [y, m, d] = istToday().split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+};
 
 /** Rose, wherever the task is drawn. Colour is the whole feature. */
 function UrgentChip() {
@@ -382,6 +387,8 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
   // The card in the air, and the column it is hovering over.
   const [dragTask, setDragTask] = useState<string | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+  // Which task's Reschedule options are open — one at a time, like a menu.
+  const [reschedFor, setReschedFor] = useState<string | null>(null);
   // What the server refused, in its own words — a forged reassignment, or the
   // 50th push of a task nobody is ever going to do.
   const [actionError, setActionError] = useState<string | null>(null);
@@ -781,17 +788,43 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
         {metaChip("From", SOURCE_LABEL[t.source] || t.source || "Manager")}
       </div>
       {/* Pushing a job to tomorrow is the commonest edit on the board, and it
-          used to mean opening the modal. Here it is one tap — and the server
-          counts every push to a later day, which is why the badge sits beside
-          it rather than anywhere else. */}
+          used to mean opening the modal. The Reschedule button makes the push a
+          named act: every use of it is counted — even a task born with no
+          deadline being told "tomorrow" — which is what makes the ↻ number
+          honest. The bare date input stays for corrections; it only counts
+          when it moves an existing deadline later. */}
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-[9px] font-bold uppercase tracking-wider text-slate-600">Due</span>
         <input type="date" value={istDayOf(t.deadline)} disabled={busy === t.id}
           onChange={(e) => patch(t.id, { deadline: e.target.value || null })}
-          title="Move this task's deadline — later dates are counted"
+          title="Correct this task's deadline — moving an existing one later is counted"
           className="min-h-[40px] lg:min-h-0 text-[11px] bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-300 cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-600 disabled:opacity-50" />
         {!t.deadline && <span className="text-[10px] text-slate-600">no deadline yet</span>}
+        <button onClick={() => setReschedFor((v) => (v === t.id ? null : t.id))} disabled={busy === t.id}
+          title="Push this task — every reschedule is counted on the task"
+          className={`min-h-[40px] lg:min-h-0 inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-lg border cursor-pointer disabled:opacity-50 ${
+            reschedFor === t.id
+              ? "bg-indigo-600 border-indigo-500 text-white"
+              : "bg-slate-950 border-slate-800 text-slate-300 hover:text-white hover:border-indigo-600"
+          }`}>
+          ↻ Reschedule
+        </button>
         <RescheduleBadge n={t.reschedule_count} />
+        {reschedFor === t.id && (
+          <span className="inline-flex items-center gap-1.5 flex-wrap">
+            {([["Tomorrow", 1], ["+2 days", 2]] as const).map(([label, days]) => (
+              <button key={label} disabled={busy === t.id}
+                onClick={() => { setReschedFor(null); patch(t.id, { deadline: istDayPlus(days), reschedule: true }); }}
+                className="min-h-[40px] lg:min-h-0 text-[10px] font-bold px-2.5 py-1 rounded-lg border border-amber-900 bg-amber-950/30 text-amber-300 hover:bg-amber-950/60 cursor-pointer disabled:opacity-50">
+                {label}
+              </button>
+            ))}
+            <input type="date" min={istToday()} disabled={busy === t.id}
+              onChange={(e) => { if (!e.target.value) return; setReschedFor(null); patch(t.id, { deadline: e.target.value, reschedule: true }); }}
+              title="Reschedule to a specific date"
+              className="min-h-[40px] lg:min-h-0 text-[10px] bg-slate-950 border border-amber-900 rounded-lg px-2 py-1 text-amber-300 cursor-pointer [color-scheme:dark] focus:outline-none focus:border-amber-600 disabled:opacity-50" />
+          </span>
+        )}
       </div>
       {(t.attachments || []).length > 0 && (
         <div className="flex flex-wrap gap-1.5">
