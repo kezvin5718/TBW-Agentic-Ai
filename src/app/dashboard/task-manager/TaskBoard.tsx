@@ -542,8 +542,11 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
    * The column redraws immediately and the reload puts the server's answer
    * (including a refusal) back on screen a moment later.
    */
-  const dropOnColumn = async (colName: string) => {
-    const id = dragTask;
+  const dropOnColumn = async (colName: string, droppedId?: string) => {
+    // The payload travels in the event itself as well as in state: state is
+    // what draws the highlight, but the drop must work even if a re-render
+    // raced the drag and state never caught up.
+    const id = dragTask || droppedId || null;
     setDragTask(null);
     setDragOverCol(null);
     if (!id || !canMove) return;
@@ -1284,9 +1287,11 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
             const dropping = canMove && !!dragTask && dragOverCol === col.name;
             return (
               <div key={col.name}
-                onDragOver={canMove && dragTask ? (e) => { e.preventDefault(); setDragOverCol(col.name); } : undefined}
+                // preventDefault on dragover is what PERMITS a drop at all, so
+                // it cannot wait on dragTask state — gate on the grant alone.
+                onDragOver={canMove ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setDragOverCol(col.name); } : undefined}
                 onDragLeave={canMove ? () => setDragOverCol((c) => (c === col.name ? null : c)) : undefined}
-                onDrop={canMove ? (e) => { e.preventDefault(); dropOnColumn(col.name); } : undefined}
+                onDrop={canMove ? (e) => { e.preventDefault(); dropOnColumn(col.name, e.dataTransfer.getData("text/plain")); } : undefined}
                 className={`w-72 shrink-0 snap-start md:w-auto border rounded-2xl bg-slate-950/50 transition-shadow ${late > 0 ? "border-rose-900/50" : "border-slate-900"} ${dropping ? "ring-2 ring-indigo-500" : ""}`}>
                 <button onClick={() => setCollapsed((p) => ({ ...p, [col.name]: !p[col.name] }))}
                   title={isCollapsed ? "Show tasks" : "Hide tasks"}
@@ -1378,7 +1383,15 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                       return (
                         <div key={t.id}
                           draggable={canMove}
-                          onDragStart={canMove ? (e) => { setDragTask(t.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", t.id); } : undefined}
+                          // setData must happen inside the event, but the state
+                          // write is DEFERRED: re-rendering the dragged node
+                          // while dragstart is still settling makes Chrome
+                          // cancel the whole drag on the spot.
+                          onDragStart={canMove ? (e) => {
+                            e.dataTransfer.effectAllowed = "move";
+                            e.dataTransfer.setData("text/plain", t.id);
+                            window.setTimeout(() => setDragTask(t.id), 0);
+                          } : undefined}
                           onDragEnd={canMove ? () => { setDragTask(null); setDragOverCol(null); } : undefined}
                           title={canMove ? "Drag onto another person to hand it over" : undefined}
                           className={`rounded-lg border ${isUrgent(t)
