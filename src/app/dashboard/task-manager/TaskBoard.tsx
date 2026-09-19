@@ -313,6 +313,20 @@ function CompletedCalendar({ tasks, team }: { tasks: Task[]; team: Member[] }) {
 }
 
 /**
+ * The finger's version of a drag, in three numbers.
+ *
+ * Long enough that a tap is still a tap; a finger that has travelled before the
+ * timer fires was scrolling the page or swiping the columns, and the native pan
+ * must win; and the strip at each screen edge that drags the columns along so
+ * the designer off-screen is still reachable.
+ */
+const LIFT_MS = 350;
+const LIFT_SLOP = 10;
+const EDGE_PX = 48;
+/** The ghost rides above and to the right of the fingertip, where it is visible. */
+const ghostAt = (x: number, y: number) => `translate3d(${Math.round(x + 14)}px, ${Math.round(y - 46)}px, 0)`;
+
+/**
  * One data layer, two faces.
  *
  * "board" answers "what is outstanding across the agency, soonest first".
@@ -557,6 +571,149 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
     if ((task.assignee_name || "").toLowerCase() === target.toLowerCase()) return;
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, assignee_name: target || null } : t)));
     await patch(id, { assigneeName: target });
+  };
+
+  /**
+   * The same hand-over, made with a finger.
+   *
+   * HTML5 drag events do not exist on a touchscreen — a phone never fires
+   * dragstart, so the mouse path below is simply dead there. This is the whole
+   * gesture rebuilt from pointer events: press and hold, and the card lifts
+   * into the very same `dragTask`/`dragOverCol` machinery the mouse uses, so
+   * the dim, the ring and the drop are one implementation, not two. Nothing
+   * here runs for a mouse pointer, and nothing here runs without the grant.
+   */
+  const colsRef = useRef<HTMLDivElement | null>(null);
+  const ghostRef = useRef<HTMLDivElement | null>(null);
+  // Only the ghost's EXISTENCE is state. Its position is written straight onto
+  // the node, because a setState per pointermove would re-render every column
+  // sixty times a second and the drag would stutter.
+  const [ghost, setGhost] = useState<{ x: number; y: number; title: string } | null>(null);
+  const touchRef = useRef<{
+    id: string | null; title: string; pointerId: number;
+    startX: number; startY: number; x: number; y: number;
+    timer: number | null; raf: number | null; edge: number;
+    lifted: boolean; card: HTMLElement | null;
+  }>({ id: null, title: "", pointerId: -1, startX: 0, startY: 0, x: 0, y: 0, timer: null, raf: null, edge: 0, lifted: false, card: null });
+  // The drop closes over this render's tasks and grant; the gesture's handlers
+  // were built at pointerdown and would otherwise be reading a stale board.
+  const dropRef = useRef(dropOnColumn);
+  useEffect(() => { dropRef.current = dropOnColumn; });
+  // Whatever is still attached mid-drag, so an unmount can pull it all down.
+  const endRef = useRef<((dropCol: string | null) => void) | null>(null);
+  useEffect(() => () => { endRef.current?.(null); }, []);
+
+  const startTouchDrag = (e: React.PointerEvent<HTMLDivElement>, t: Task) => {
+    if (e.pointerType !== "touch" || !canMove) return;
+    // A second finger during a drag is not a second drag.
+    if (touchRef.current.id) return;
+    // Pressing a control is pressing that control — the status select and the
+    // pencil must stay reachable with a thumb.
+    if ((e.target as HTMLElement).closest("button,select,input,a,textarea")) return;
+
+    const st = touchRef.current;
+    const card = e.currentTarget;
+    st.id = t.id;
+    st.title = t.title || "Untitled";
+    st.pointerId = e.pointerId;
+    st.startX = st.x = e.clientX;
+    st.startY = st.y = e.clientY;
+    st.lifted = false;
+    st.edge = 0;
+    st.card = card;
+
+    /** Whose column is under the fingertip — the ghost can't intercept it. */
+    const hoverAt = (x: number, y: number) => {
+      const col = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-col]")?.dataset.col ?? null;
+      // Same answer, same object: React bails out and nothing re-renders.
+      setDragOverCol((c) => (c === col ? c : col));
+      return col;
+    };
+
+    /**
+     * Every exit runs through here — dropped, released over nothing, cancelled
+     * by the system, or unmounted mid-drag. Nothing added above survives it.
+     */
+    const finish = (dropCol: string | null) => {
+      if (st.timer !== null) { window.clearTimeout(st.timer); st.timer = null; }
+      if (st.raf !== null) { cancelAnimationFrame(st.raf); st.raf = null; }
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onCancel);
+      // Never added when the lift never happened; removing it then is a no-op.
+      document.removeEventListener("touchmove", onTouchMove);
+      const { id, lifted } = st;
+      if (lifted) {
+        try { st.card?.releasePointerCapture(st.pointerId); } catch { /* the finger is already gone */ }
+        document.body.style.removeProperty("user-select");
+        document.body.style.removeProperty("-webkit-user-select");
+        // The snap is the phone's column swipe; it was only ever in the way.
+        colsRef.current?.style.removeProperty("scroll-snap-type");
+        setGhost(null);
+      }
+      st.id = null; st.card = null; st.lifted = false; st.edge = 0; st.pointerId = -1;
+      endRef.current = null;
+      if (!lifted) return;
+      if (dropCol && id) dropRef.current(dropCol, id);
+      else { setDragTask(null); setDragOverCol(null); }
+    };
+
+    /** Held long enough: the card is in the air. */
+    const lift = () => {
+      st.timer = null;
+      if (!st.id) return;
+      st.lifted = true;
+      try { navigator.vibrate?.(30); } catch { /* not every phone has one */ }
+      // Capture keeps pointermove coming once the finger leaves the card; where
+      // it is unavailable the document listeners carry the drag by themselves.
+      try { st.card?.setPointerCapture(st.pointerId); } catch { /* document it is */ }
+      // React props are passive — the page would scroll under the drag.
+      document.addEventListener("touchmove", onTouchMove, { passive: false });
+      document.body.style.setProperty("user-select", "none");
+      document.body.style.setProperty("-webkit-user-select", "none");
+      colsRef.current?.style.setProperty("scroll-snap-type", "none");
+      setDragTask(st.id);
+      setGhost({ x: st.x, y: st.y, title: st.title });
+      hoverAt(st.x, st.y);
+    };
+
+    /** A few pixels a frame while the finger sits in an edge strip. */
+    const stepScroll = () => {
+      const box = colsRef.current;
+      if (!st.lifted || !box || st.edge === 0) { st.raf = null; return; }
+      box.scrollLeft += st.edge * 14;
+      // The columns moved under a finger that didn't — re-ask who is under it.
+      hoverAt(st.x, st.y);
+      st.raf = requestAnimationFrame(stepScroll);
+    };
+
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== st.pointerId) return;
+      st.x = ev.clientX; st.y = ev.clientY;
+      if (!st.lifted) {
+        // Travelled before the timer: this was a scroll or a column swipe.
+        if (Math.abs(st.x - st.startX) > LIFT_SLOP || Math.abs(st.y - st.startY) > LIFT_SLOP) finish(null);
+        return;
+      }
+      if (ghostRef.current) ghostRef.current.style.transform = ghostAt(st.x, st.y);
+      hoverAt(st.x, st.y);
+      st.edge = st.x < EDGE_PX ? -1 : st.x > window.innerWidth - EDGE_PX ? 1 : 0;
+      // The loop stops itself the frame after the finger leaves the strip.
+      if (st.edge !== 0 && st.raf === null) st.raf = requestAnimationFrame(stepScroll);
+    };
+
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== st.pointerId) return;
+      finish(st.lifted ? hoverAt(ev.clientX, ev.clientY) : null);
+    };
+    const onCancel = (ev: PointerEvent) => { if (ev.pointerId === st.pointerId) finish(null); };
+    const onTouchMove = (ev: TouchEvent) => { if (ev.cancelable) ev.preventDefault(); };
+
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onCancel);
+    endRef.current = finish;
+    st.timer = window.setTimeout(lift, LIFT_MS);
   };
 
   const remove = async (id: string) => {
@@ -1278,7 +1435,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
       {!loading && mode === "team" && tab !== "done" && (
         // Below md the columns swipe sideways instead of stacking into one
         // endless scroll; from md it is today's grid, untouched.
-        <div className="flex overflow-x-auto snap-x snap-mandatory md:overflow-visible md:grid md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
+        <div ref={colsRef} className="flex overflow-x-auto snap-x snap-mandatory md:overflow-visible md:grid md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
           {columns.map((col) => {
             const late = col.items.filter((t) => t.deadline && new Date(t.deadline).getTime() < now && t.status !== "done").length;
             const isCollapsed = !!collapsed[col.name];
@@ -1287,6 +1444,10 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
             const dropping = canMove && !!dragTask && dragOverCol === col.name;
             return (
               <div key={col.name}
+                // What a fingertip lands on. elementFromPoint gives back
+                // whatever chip or label is under it; the column is the nearest
+                // ancestor carrying this.
+                data-col={col.name}
                 // preventDefault on dragover is what PERMITS a drop at all, so
                 // it cannot wait on dragTask state — gate on the grant alone.
                 onDragOver={canMove ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setDragOverCol(col.name); } : undefined}
@@ -1393,7 +1554,12 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                             window.setTimeout(() => setDragTask(t.id), 0);
                           } : undefined}
                           onDragEnd={canMove ? () => { setDragTask(null); setDragOverCol(null); } : undefined}
-                          title={canMove ? "Drag onto another person to hand it over" : undefined}
+                          // The touchscreen's own path into the same drag. It
+                          // leaves the mouse alone: a mouse pointerdown returns
+                          // on the first line and the HTML5 handlers above run
+                          // exactly as they always have.
+                          onPointerDown={canMove ? (e) => startTouchDrag(e, t) : undefined}
+                          title={canMove ? "Drag — or, on a phone, press and hold — onto another person to hand it over" : undefined}
                           className={`rounded-lg border ${isUrgent(t)
                             ? "border-rose-900/60 border-l-2 border-l-rose-500 bg-rose-950/10"
                             : "bg-slate-950/60 border-slate-900/70"} ${canMove ? "cursor-grab active:cursor-grabbing" : ""} ${dragTask === t.id ? "opacity-40" : ""}`}>
@@ -1442,6 +1608,16 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* The card in the air, drawn once and then moved by hand. It must never
+          be what elementFromPoint finds under the finger, hence pointer-events-none. */}
+      {ghost && (
+        <div ref={ghostRef} aria-hidden
+          style={{ transform: ghostAt(ghost.x, ghost.y) }}
+          className="fixed left-0 top-0 z-50 pointer-events-none max-w-[55vw] truncate rounded-lg border border-indigo-500 bg-slate-900/95 px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-lg shadow-black/60">
+          {ghost.title}
         </div>
       )}
 
