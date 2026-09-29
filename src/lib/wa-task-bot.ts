@@ -82,6 +82,13 @@ function splitIntoClusters(rows: InboxRow[]): InboxRow[][] {
 
 export async function runWhatsAppTaskBot(): Promise<BotResult> {
   const out: BotResult = { clusters: 0, drafted: 0, skipped: 0, errors: [] };
+
+  // The founder's credit switch. Messages keep arriving and keep being stored;
+  // only the model runs stop. Nothing is marked clustered, so the day the
+  // switch comes back on, the whole backlog is read in one pass.
+  const { isWhatsAppAiOn } = await import("@/lib/whatsapp-ai-switch");
+  if (!(await isWhatsAppAiOn())) return out;
+
   const admin = createServiceRoleClient();
 
   // Only messages the bot hasn't considered yet. Note this is clustered_at,

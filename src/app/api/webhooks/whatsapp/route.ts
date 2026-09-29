@@ -241,20 +241,27 @@ Generate a JSON object: { "classification": "category" }`;
     };
 
     let classification = "other";
-    try {
-      const aiResponse = await complete({
-        purpose: "whatsapp-bot",
-        model: MODEL_FAST,
-        system: systemPrompt,
-        messages: [{ role: "user", content: userMessage }],
-        jsonSchema,
-      });
+    // With the WhatsApp AI switched off, everything reads as "other": the
+    // message is stored exactly as always, but no model is paid to look at it
+    // and no reply is drafted further down (drafting keys off "question").
+    const { isWhatsAppAiOn } = await import("@/lib/whatsapp-ai-switch");
+    const aiOn = await isWhatsAppAiOn();
+    if (aiOn) {
+      try {
+        const aiResponse = await complete({
+          purpose: "whatsapp-bot",
+          model: MODEL_FAST,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userMessage }],
+          jsonSchema,
+        });
 
-      if (aiResponse) {
-        classification = safeJsonParse(aiResponse, { classification: "other" }).classification || "other";
+        if (aiResponse) {
+          classification = safeJsonParse(aiResponse, { classification: "other" }).classification || "other";
+        }
+      } catch (llmErr) {
+        console.error("LLM classification failed, defaulting to other:", llmErr);
       }
-    } catch (llmErr) {
-      console.error("LLM classification failed, defaulting to other:", llmErr);
     }
 
     console.log(`Message classified as: ${classification}`);

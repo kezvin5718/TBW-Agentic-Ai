@@ -21,6 +21,16 @@ export async function POST() {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // The founder's credit switch. Rows stay un-extracted while it is off, so
+  // turning it back on processes the backlog rather than losing it.
+  const { isWhatsAppAiOn } = await import("@/lib/whatsapp-ai-switch");
+  if (!(await isWhatsAppAiOn())) {
+    return NextResponse.json(
+      { error: "WhatsApp AI is switched off to save credits. The founder can turn it back on from the WhatsApp Reader page." },
+      { status: 400 }
+    );
+  }
+
   const admin = createServiceRoleClient();
   const { data: rows } = await admin
     .from("wa_inbox")

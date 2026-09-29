@@ -19,6 +19,31 @@ export default function WhatsAppReaderPage() {
   const [qrImg, setQrImg] = useState<string | null>(null);
   const [relinking, setRelinking] = useState(false);
   const lastQr = useRef<string | null>(null);
+  // The AI's credit switch — reading happens regardless; only the model runs
+  // (task drafts, classification, extraction) obey this.
+  const [aiOn, setAiOn] = useState<boolean | null>(null);
+  const [aiCanToggle, setAiCanToggle] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/whatsapp-ai", { cache: "no-store" });
+        if (res.ok) { const d = await res.json(); setAiOn(!!d.on); setAiCanToggle(!!d.canToggle); }
+      } catch { /* the page works without it */ }
+    })();
+  }, []);
+
+  const toggleAi = async () => {
+    if (aiOn === null || aiBusy) return;
+    const next = !aiOn;
+    if (!next && !window.confirm("Switch the WhatsApp AI off? Messages are still received and stored, but no task drafts, no classification and no extraction will run — and no credits will be spent — until it is switched back on.")) return;
+    setAiBusy(true);
+    try {
+      const res = await fetch("/api/whatsapp-ai", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on: next }) });
+      if (res.ok) setAiOn(next);
+    } finally { setAiBusy(false); }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -68,6 +93,31 @@ export default function WhatsAppReaderPage() {
         </h1>
         <p className="text-sm text-slate-500 mt-1">Link the dedicated WhatsApp number that reads your client groups. Scan the QR below from that phone — link or re-link anytime, right here.</p>
       </div>
+
+      {/* The credit switch. Reading is free and never stops; the AI passes over
+          what was read are what cost money, and this is their one off button. */}
+      {aiOn !== null && (
+        <div className={`rounded-2xl border p-4 flex items-center justify-between gap-3 flex-wrap ${aiOn ? "bg-slate-950/60 border-slate-900" : "bg-amber-950/20 border-amber-900/50"}`}>
+          <div className="min-w-0">
+            <p className="text-xs font-bold text-white">WhatsApp AI {aiOn ? "is on" : "is off"}</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {aiOn
+                ? "Task drafts, message classification and extraction are running — these spend OpenRouter credits."
+                : "No credits are being spent. Messages are still received and stored; switch on to process the backlog."}
+            </p>
+          </div>
+          {aiCanToggle && (
+            <button onClick={toggleAi} disabled={aiBusy}
+              className={`min-h-[40px] lg:min-h-0 text-xs font-bold px-4 py-2 rounded-lg border cursor-pointer disabled:opacity-50 ${
+                aiOn
+                  ? "bg-slate-950 border-slate-800 text-slate-300 hover:text-white hover:border-rose-700"
+                  : "bg-emerald-600 border-emerald-500 text-white hover:bg-emerald-500"
+              }`}>
+              {aiBusy ? "…" : aiOn ? "Switch off" : "Switch on"}
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="bg-slate-950/60 border border-slate-900 rounded-2xl p-6 flex flex-col items-center space-y-4">
         <div className="flex items-center justify-between w-full">
