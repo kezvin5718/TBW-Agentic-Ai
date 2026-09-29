@@ -443,6 +443,11 @@ export default function SocialPublisherPage() {
   const [spreadDate, setSpreadDate] = useState(istToday());
   const [spreadStart, setSpreadStart] = useState("09:00");
   const [spreadGap, setSpreadGap] = useState(45);
+  // How the slots spread across the calendar: all in one day minutes apart
+  // (manual — the original behaviour), one per day, or one every 2nd day. The
+  // daily modes are what "one creative, many times" is usually FOR: the same
+  // story runs a week without anyone uploading it seven times.
+  const [spreadMode, setSpreadMode] = useState<"manual" | "everyday" | "alternate">("manual");
 
   const patchSlot = (key: string, patch: Partial<StorySlot>) =>
     setStorySlots((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -457,9 +462,14 @@ export default function SocialPublisherPage() {
     const [h, m] = (spreadStart || "09:00").split(":").map(Number);
     const base = new Date(`${spreadDate}T00:00:00`);
     base.setHours(h || 0, m || 0, 0, 0);
+    // Daily cadences move whole calendar days and keep the wall-clock time;
+    // manual keeps the one-day, minutes-apart spread it always had.
+    const dayStep = spreadMode === "everyday" ? 1 : spreadMode === "alternate" ? 2 : 0;
     setStorySlots((rows) =>
       rows.map((r, i) => {
-        const at = new Date(base.getTime() + i * Math.max(1, spreadGap) * 60000);
+        const at = dayStep > 0
+          ? new Date(base.getFullYear(), base.getMonth(), base.getDate() + i * dayStep, base.getHours(), base.getMinutes())
+          : new Date(base.getTime() + i * Math.max(1, spreadGap) * 60000);
         return {
           ...r,
           date: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`,
@@ -2764,26 +2774,48 @@ export default function SocialPublisherPage() {
             </label>
             <div className="flex items-end gap-2 flex-wrap">
               <div>
+                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Spread</span>
+                <div className="flex bg-slate-950 border border-slate-800 rounded-lg p-0.5 text-[10px] font-bold">
+                  {([["manual", "Manual"], ["everyday", "Everyday"], ["alternate", "Alternate day"]] as const).map(([v, label]) => (
+                    <button key={v} onClick={() => setSpreadMode(v)}
+                      title={v === "manual" ? "All on one date, minutes apart" : v === "everyday" ? "One slot per day, same time" : "One slot every 2nd day, same time"}
+                      className={`px-2.5 py-1.5 min-h-[40px] lg:min-h-0 rounded-md cursor-pointer transition-colors ${
+                        spreadMode === v ? "bg-indigo-600 text-white" : "text-slate-500 hover:text-white"
+                      }`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
                 <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Start date</span>
                 <input type="date" value={spreadDate} min={istToday()} onClick={openPicker} onChange={(e) => setSpreadDate(e.target.value)}
                   className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
               </div>
               <div>
-                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">First story at</span>
+                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">{spreadMode === "manual" ? "First story at" : "Every day at"}</span>
                 <input type="time" value={spreadStart} onClick={openPicker} onChange={(e) => setSpreadStart(e.target.value)}
                   className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
               </div>
-              <div>
-                <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Gap (minutes)</span>
-                <input type="number" min={1} value={spreadGap} onChange={(e) => setSpreadGap(Number(e.target.value) || 1)}
-                  className="w-24 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500" />
-              </div>
+              {spreadMode === "manual" && (
+                <div>
+                  <span className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Gap (minutes)</span>
+                  <input type="number" min={1} value={spreadGap} onChange={(e) => setSpreadGap(Number(e.target.value) || 1)}
+                    className="w-24 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500" />
+                </div>
+              )}
               <button onClick={spreadEvenly}
                 className="px-4 py-2 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-500 text-[11px] font-bold text-slate-300 hover:text-white cursor-pointer">
                 Apply to all {storySlots.length} slots
               </button>
             </div>
-            <p className="text-[10px] text-slate-600">Times run past midnight onto the next day rather than wrapping back to the morning.</p>
+            <p className="text-[10px] text-slate-600">
+              {spreadMode === "manual"
+                ? "Times run past midnight onto the next day rather than wrapping back to the morning."
+                : spreadMode === "everyday"
+                ? `Slot 1 on the start date, then one slot per day — all at the same time. ${storySlots.length} slots cover ${storySlots.length} days.`
+                : `One slot every 2nd day at the same time. ${storySlots.length} slots cover ${storySlots.length * 2 - 1} days.`}
+            </p>
           </div>
 
           {/* The slots */}
