@@ -829,6 +829,10 @@ export default function SocialPublisherPage() {
   // Per-row times. Several videos can share a day at hours the team chooses,
   // rather than being forced onto one time plus automatic spacing.
   const [autoTimes, setAutoTimes] = useState<Record<string, string>>({});
+  // Story repeats. The same story on many days used to mean uploading the same
+  // file once per day; now one row carries it, and the server unrolls the days
+  // from this row's slot. No entry means Manual — the row goes out once.
+  const [autoRepeat, setAutoRepeat] = useState<Record<string, { mode: "everyday" | "alternate"; times: number }>>({});
   // Gap between posts that land on the same day. Null means nobody is spaced
   // automatically and the times on the rows are the only source.
   const [gapMins, setGapMins] = useState<number | null>(5);
@@ -975,6 +979,7 @@ export default function SocialPublisherPage() {
       setAutoOrder(rows.map((r) => r.id));
       setAutoDates({});
       setAutoTimes({});
+      setAutoRepeat({});
       setAutoSkip(new Set());
       // Deliberately not awaited: the list is already usable, and a slow Drive
       // is not allowed to hold it back.
@@ -1113,19 +1118,45 @@ export default function SocialPublisherPage() {
   const gapLabel = gapMins === null ? "set by hand"
     : gapMins >= 60 ? `${gapMins / 60}h` : `${gapMins}m`;
 
+  /** 2–30, and an emptied box means the default week rather than nothing. */
+  const clampTimes = (n: number) => (!n ? 7 : Math.min(30, Math.max(2, Math.round(n))));
+  /** This row's repeat, if it is a story that has one. Nothing else repeats. */
+  const repeatOf = (r: AutoRow) => (r.content_type === "story" ? autoRepeat[r.id] : undefined);
+  /** A calendar date moved on by whole days — the same sum the server does. */
+  const shiftYmd = (date: string, days: number) => {
+    const [y, m, d] = date.split("-").map(Number);
+    return new Date(Date.UTC(y, (m || 1) - 1, (d || 1) + days)).toISOString().slice(0, 10);
+  };
+  /** "2026-10-07" → "7 Oct". Already an IST calendar date, so read as-is. */
+  const dayLabel = (date: string) =>
+    new Date(`${date}T00:00:00Z`).toLocaleDateString("en-IN", { timeZone: "UTC", day: "numeric", month: "short" });
+  // What actually goes out: a repeated story counts once per day it runs.
+  const autoOccurrences = autoReady.reduce((n, r) => {
+    const rep = repeatOf(r);
+    return n + (rep ? clampTimes(rep.times) : 1);
+  }, 0);
+
   const sendAutomation = async () => {
     setAutoSending(true);
     setNotice(null);
     try {
       // The per-row time matters here, not the base one: two posts sharing a day
       // are five minutes apart and must be sent that way.
+      //
+      // A repeated story is still one item: the server unrolls the days from
+      // this first slot, so the upload is sent, and retired, once.
       const items = orderedRows
         .filter((r) => !!schedule[r.id])
-        .map((r) => ({
-          uploadId: r.id,
-          caption: autoCaptions[r.id] ?? r.caption ?? "",
-          scheduledFor: `${schedule[r.id].date}T${schedule[r.id].time}`,
-        }));
+        .map((r) => {
+          const rep = repeatOf(r);
+          return {
+            uploadId: r.id,
+            caption: autoCaptions[r.id] ?? r.caption ?? "",
+            scheduledFor: `${schedule[r.id].date}T${schedule[r.id].time}`,
+            ...(rep ? { repeat: { mode: rep.mode, times: clampTimes(rep.times) } } : {}),
+          };
+        });
+      const repeated = items.filter((i) => i.repeat);
 
       const res = await fetch("/api/social-publisher/automation", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -1135,10 +1166,15 @@ export default function SocialPublisherPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not schedule");
       const skipNote = (data.skipped || []).length ? ` Skipped: ${(data.skipped as string[]).join(" ")}` : "";
+      // Said in days, not posts — "7 posts" on two platforms reads as a
+      // mistake when what happened is one story, a week long.
+      const repeatNote = repeated.length === 0 ? ""
+        : repeated.length === 1 ? ` Story scheduled ${repeated[0].repeat?.times} times.`
+        : ` ${repeated.length} stories repeated — ${data.occurrences ?? "?"} runs in all.`;
       setNotice({
         ok: data.failed === 0,
         text: (data.failed === 0
-          ? `${data.scheduled} creative(s) scheduled — ${data.posts} post(s) queued. They're in the Library now.`
+          ? `${data.scheduled} creative(s) scheduled — ${data.posts} post(s) queued. They're in the Library now.${repeatNote}`
           : `${data.posts} queued, ${data.failed} failed. Do NOT send again — the ones that worked are already scheduled. Retry the failures from the Library.`)
           + (data.message ? ` (${data.message})` : "") + skipNote,
       });
@@ -2270,10 +2306,10 @@ export default function SocialPublisherPage() {
                 </div>
               </div>
 
-              {(Object.keys(autoDates).length > 0 || Object.keys(autoTimes).length > 0) && (
-                <button onClick={() => { setAutoDates({}); setAutoTimes({}); }}
+              {(Object.keys(autoDates).length > 0 || Object.keys(autoTimes).length > 0 || Object.keys(autoRepeat).length > 0) && (
+                <button onClick={() => { setAutoDates({}); setAutoTimes({}); setAutoRepeat({}); }}
                   className="px-3 py-2 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-bold text-slate-400 hover:text-white cursor-pointer">
-                  Reset {Object.keys(autoDates).length + Object.keys(autoTimes).length} change(s)
+                  Reset {Object.keys(autoDates).length + Object.keys(autoTimes).length + Object.keys(autoRepeat).length} change(s)
                 </button>
               )}
             </div>
@@ -2361,6 +2397,9 @@ export default function SocialPublisherPage() {
                 const slot = schedule[r.id];
                 const date = slot?.date || autoDates[r.id] || "";
                 const skipped = autoSkip.has(r.id);
+                const rep = repeatOf(r);
+                const repTimes = rep ? clampTimes(rep.times) : 1;
+                const repStep = rep?.mode === "alternate" ? 2 : 1;
                 return (
                   <div
                     key={r.id}
@@ -2479,6 +2518,53 @@ export default function SocialPublisherPage() {
                           )}
                         </div>
                       )}
+                      {/* One story, many days. The slot above is the first day;
+                          the rest follow it at the same time, so they never
+                          share a day with anything the checks above look at. */}
+                      {r.content_type === "story" && (
+                        <div className="flex items-center justify-end gap-1 flex-wrap">
+                          <span className="text-[9px] font-bold text-slate-500 uppercase">Repeat</span>
+                          <select
+                            value={rep?.mode ?? "manual"}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setAutoRepeat((p) => {
+                                const n = { ...p };
+                                if (v === "everyday" || v === "alternate") n[r.id] = { mode: v, times: p[r.id]?.times ?? 7 };
+                                else delete n[r.id];
+                                return n;
+                              });
+                            }}
+                            title="Post this same story on more days, at the same time"
+                            className={`bg-slate-950 border rounded-lg px-1.5 py-1 min-h-[40px] lg:min-h-0 text-[11px] cursor-pointer [color-scheme:dark] focus:outline-none ${
+                              rep ? "border-indigo-600 text-white" : "border-slate-800 text-slate-400"
+                            }`}>
+                            <option value="manual">Manual</option>
+                            <option value="everyday">Everyday</option>
+                            <option value="alternate">Alternate days</option>
+                          </select>
+                          {rep && (
+                            <label className="flex items-center gap-0.5 text-[11px] font-bold text-slate-400" title="How many days in all, 2–30">
+                              <span>×</span>
+                              <input
+                                type="number" min={2} max={30} step={1}
+                                value={rep.times || ""}
+                                onChange={(e) => {
+                                  const n = parseInt(e.target.value, 10);
+                                  setAutoRepeat((p) => ({ ...p, [r.id]: { ...rep, times: Number.isNaN(n) ? 0 : n } }));
+                                }}
+                                onBlur={() => setAutoRepeat((p) => (p[r.id] ? { ...p, [r.id]: { ...p[r.id], times: clampTimes(p[r.id].times) } } : p))}
+                                className="w-[52px] bg-slate-950 border border-indigo-600 rounded-lg px-1.5 py-1 min-h-[40px] lg:min-h-0 text-[11px] text-white focus:outline-none"
+                              />
+                            </label>
+                          )}
+                        </div>
+                      )}
+                      {rep && slot && (
+                        <p className="text-[9px] text-slate-500 text-right max-w-[220px] leading-snug">
+                          Runs {repTimes} times · {dayLabel(slot.date)} → {dayLabel(shiftYmd(slot.date, (repTimes - 1) * repStep))} · {repStep === 1 ? "same time daily" : "every 2nd day"}
+                        </p>
+                      )}
                       {slot?.outOfOrder && (
                         <span className="text-[9px] font-bold text-amber-400" title="This posts before the one above it">⚠ out of order</span>
                       )}
@@ -2488,11 +2574,12 @@ export default function SocialPublisherPage() {
                       {slot?.collides && (
                         <span className="text-[9px] font-bold text-rose-400" title="Same instant as the post above — set a time or pick a gap">⚠ same time</span>
                       )}
-                      {(autoDates[r.id] || autoTimes[r.id]) && (
+                      {(autoDates[r.id] || autoTimes[r.id] || autoRepeat[r.id]) && (
                         <button
                           onClick={() => {
                             setAutoDates((d) => { const n = { ...d }; delete n[r.id]; return n; });
                             setAutoTimes((t) => { const n = { ...t }; delete n[r.id]; return n; });
+                            setAutoRepeat((p) => { const n = { ...p }; delete n[r.id]; return n; });
                           }}
                           className="text-[9px] font-bold text-slate-600 hover:text-white cursor-pointer min-h-[40px] lg:min-h-0">reset</button>
                       )}
@@ -2513,12 +2600,12 @@ export default function SocialPublisherPage() {
               <p className="text-[11px] text-slate-500">
                 {autoReady.length === 0
                   ? "Nothing selected — every row is skipped or has no date."
-                  : <>Will schedule <span className="signal">{autoReady.length * autoPlatforms.length}</span> post(s) — {autoReady.length} creative(s) × {autoPlatforms.length} platform(s){autoSameDay > 0 ? `, with ${autoSameDay} spaced 5 minutes apart on a shared day` : `, all at ${autoTime}`}.</>}
+                  : <>Will schedule <span className="signal">{autoOccurrences * autoPlatforms.length}</span> post(s) — {autoReady.length} creative(s){autoOccurrences > autoReady.length ? ` (${autoOccurrences} runs with story repeats)` : ""} × {autoPlatforms.length} platform(s){autoSameDay > 0 ? `, with ${autoSameDay} spaced 5 minutes apart on a shared day` : `, all at ${autoTime}`}.</>}
               </p>
               <button onClick={sendAutomation} disabled={autoSending || autoReady.length === 0 || autoPlatforms.length === 0}
                 className={`w-full px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 transition-all ${!autoSending && autoReady.length > 0 && autoPlatforms.length > 0 ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>
                 {autoSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                <span>{autoSending ? "Scheduling — this can take a minute…" : `Post via RecurPost (${autoReady.length * autoPlatforms.length})`}</span>
+                <span>{autoSending ? "Scheduling — this can take a minute…" : `Post via RecurPost (${autoOccurrences * autoPlatforms.length})`}</span>
               </button>
             </div>
           )}

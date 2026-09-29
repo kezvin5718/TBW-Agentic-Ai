@@ -17,6 +17,37 @@ function recurPostIdOf(res: unknown): number | null {
 }
 
 /**
+ * A story repeat, as the screen asked for it — or null for "just the once".
+ *
+ * Anything that is not exactly one of the two modes is read as no repeat at
+ * all, rather than guessed at: a wrong guess here is a week of stories nobody
+ * meant to post. The count is held to 2–30 whatever arrives.
+ */
+function repeatPlanOf(raw: unknown): { step: number; times: number } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { mode, times } = raw as { mode?: unknown; times?: unknown };
+  if (mode !== "everyday" && mode !== "alternate") return null;
+  const n = Math.round(Number(times));
+  if (!Number.isFinite(n)) return null;
+  return { step: mode === "everyday" ? 1 : 2, times: Math.min(30, Math.max(2, n)) };
+}
+
+/**
+ * "2026-10-01T19:00" moved on by whole calendar days, same wall-clock time.
+ *
+ * Done on the date itself, not on the instant: adding 24 hours to a converted
+ * UTC time is the kind of arithmetic that lands a 23:30 story on the wrong day
+ * the moment anything about the conversion shifts. The time part is carried
+ * across untouched. Null when the slot is not in the shape the screen sends.
+ */
+function shiftWallClockDays(wallClock: string, days: number): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(T.*)$/.exec(String(wallClock).trim());
+  if (!m) return null;
+  const date = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + days)).toISOString().slice(0, 10);
+  return `${date}${m[4]}`;
+}
+
+/**
  * GET /api/social-publisher/automation?clientId=…
  *
  * Everything approved and waiting for this client, captions already written.
@@ -135,9 +166,13 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/social-publisher/automation
- * Body: { clientId, platforms[], items: [{ uploadId, caption, scheduledFor }] }
+ * Body: { clientId, platforms[], items: [{ uploadId, caption, scheduledFor, repeat? }] }
  *
  * Schedules the whole list in one go and retires each creative from the hub.
+ *
+ * A story row may carry repeat: { mode: "everyday" | "alternate", times } —
+ * one upload, many days. It is unrolled into one occurrence per day before
+ * anything is sent, so every day goes out exactly as a row of its own would.
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -208,7 +243,7 @@ export async function POST(request: NextRequest) {
   }
 
   const platforms: string[] = Array.isArray(body.platforms) ? body.platforms.filter(Boolean) : [];
-  const items: Array<{ uploadId: string; caption?: string; scheduledFor: string }> = Array.isArray(body.items) ? body.items : [];
+  const items: Array<{ uploadId: string; caption?: string; scheduledFor: string; repeat?: unknown }> = Array.isArray(body.items) ? body.items : [];
 
   if (!clientId) return NextResponse.json({ error: "Select a client" }, { status: 400 });
   if (platforms.length === 0) return NextResponse.json({ error: "Select at least one platform" }, { status: 400 });
@@ -265,7 +300,31 @@ export async function POST(request: NextRequest) {
   const riskRun = body.risk === true;
   const overridden: string[] = [];
 
-  for (const item of items) {
+  // Story repeats, unrolled. Each day becomes an item of its own — same upload,
+  // same caption, the slot moved on by whole days — so the send loop below
+  // never has to know a repeat exists. Only a story is ever repeated: the
+  // screen never offers it on anything else, and anything that claims
+  // otherwise goes out once, exactly as it always did.
+  const occurrences = items.flatMap((item) => {
+    const { repeat, ...plain } = item;
+    const plan = repeatPlanOf(repeat);
+    if (!plan || byId.get(item.uploadId)?.content_type !== "story") return [plain];
+    const days: typeof plain[] = [];
+    for (let k = 0; k < plan.times; k++) {
+      const scheduledFor = shiftWallClockDays(item.scheduledFor, k * plan.step);
+      // A slot in a shape we cannot move is sent once rather than not at all.
+      if (!scheduledFor) return [plain];
+      days.push({ ...plain, scheduledFor });
+    }
+    return days;
+  });
+
+  // A video that could not be prepared once will not be prepared on its second
+  // day either. Remembered so a repeated story is tried — and reported — once,
+  // not once per day.
+  const stageFailed = new Map<string, string>();
+
+  for (const item of occurrences) {
     const upload = byId.get(item.uploadId);
     if (!upload) { skipped.push(`${item.uploadId} — no longer in the hub.`); continue; }
     // Re-checked at send time: a batch can be rejected between loading the
@@ -291,10 +350,13 @@ export async function POST(request: NextRequest) {
     let publishUrl = upload.file_url as string;
     if (isVideo) {
       if (stagedCache.has(publishUrl)) publishUrl = stagedCache.get(publishUrl)!;
+      else if (stageFailed.has(publishUrl)) continue;
       else {
         const staged = await toPublishableVideoUrl(publishUrl);
         if (!staged.url) {
-          results.push({ uploadId: upload.id, platform: "-", ok: false, detail: staged.error || "Could not prepare the video." });
+          const detail = staged.error || "Could not prepare the video.";
+          stageFailed.set(publishUrl, detail);
+          results.push({ uploadId: upload.id, platform: "-", ok: false, detail });
           continue;
         }
         stagedCache.set(upload.file_url as string, staged.url);
@@ -417,9 +479,14 @@ export async function POST(request: NextRequest) {
     success: failed.length === 0,
     scheduled: doneUploads.size,
     posts: posted.length,
+    // Days sent in all, repeats unrolled — what lets the screen say "story
+    // scheduled 7 times" rather than leave the team to divide.
+    occurrences: occurrences.length,
     failed: failed.length,
     message,
     results,
-    skipped,
+    // A repeated story that is no longer approved is refused on every one of
+    // its days; the reason only needs saying once.
+    skipped: [...new Set(skipped)],
   });
 }
