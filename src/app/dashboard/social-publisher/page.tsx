@@ -843,6 +843,10 @@ export default function SocialPublisherPage() {
   // file once per day; now one row carries it, and the server unrolls the days
   // from this row's slot. No entry means Manual — the row goes out once.
   const [autoRepeat, setAutoRepeat] = useState<Record<string, { mode: "everyday" | "alternate"; times: number }>>({});
+  // Send-as, for posts and reels: the feed, the Story instead, or both. No
+  // entry means Feed — the row goes out exactly as it was uploaded. The server
+  // unrolls the Story pass from this row's slot, like a repeat.
+  const [autoAs, setAutoAs] = useState<Record<string, "feed" | "story" | "both">>({});
   // Gap between posts that land on the same day. Null means nobody is spaced
   // automatically and the times on the rows are the only source.
   const [gapMins, setGapMins] = useState<number | null>(5);
@@ -990,6 +994,7 @@ export default function SocialPublisherPage() {
       setAutoDates({});
       setAutoTimes({});
       setAutoRepeat({});
+      setAutoAs({});
       setAutoSkip(new Set());
       // Deliberately not awaited: the list is already usable, and a slow Drive
       // is not allowed to hold it back.
@@ -1140,11 +1145,20 @@ export default function SocialPublisherPage() {
   /** "2026-10-07" → "7 Oct". Already an IST calendar date, so read as-is. */
   const dayLabel = (date: string) =>
     new Date(`${date}T00:00:00Z`).toLocaleDateString("en-IN", { timeZone: "UTC", day: "numeric", month: "short" });
-  // What actually goes out: a repeated story counts once per day it runs.
+  /** Where this row goes. Only a post or a reel can be re-routed; the rest go as uploaded. */
+  const sendAsOf = (r: AutoRow): "feed" | "story" | "both" =>
+    (r.content_type === "post" || r.content_type === "reel") ? (autoAs[r.id] ?? "feed") : "feed";
+  // What actually goes out: a repeated story counts once per day it runs, and
+  // a post sent as feed + Story counts twice.
   const autoOccurrences = autoReady.reduce((n, r) => {
     const rep = repeatOf(r);
-    return n + (rep ? clampTimes(rep.times) : 1);
+    return n + (rep ? clampTimes(rep.times) : sendAsOf(r) === "both" ? 2 : 1);
   }, 0);
+  // The Story passes only land on Instagram and Facebook, so the post count
+  // is worked out per pass rather than runs × every platform picked.
+  const autoStoryPasses = autoReady.filter((r) => sendAsOf(r) !== "feed").length;
+  const autoStoryPlatforms = autoPlatforms.filter((p) => p === "instagram" || p === "facebook").length;
+  const autoPosts = (autoOccurrences - autoStoryPasses) * autoPlatforms.length + autoStoryPasses * autoStoryPlatforms;
 
   const sendAutomation = async () => {
     setAutoSending(true);
@@ -1159,11 +1173,15 @@ export default function SocialPublisherPage() {
         .filter((r) => !!schedule[r.id])
         .map((r) => {
           const rep = repeatOf(r);
+          // Feed is left off the wire entirely, so an untouched row sends
+          // exactly what it always did.
+          const as = sendAsOf(r);
           return {
             uploadId: r.id,
             caption: autoCaptions[r.id] ?? r.caption ?? "",
             scheduledFor: `${schedule[r.id].date}T${schedule[r.id].time}`,
             ...(rep ? { repeat: { mode: rep.mode, times: clampTimes(rep.times) } } : {}),
+            ...(as !== "feed" ? { sendAs: as } : {}),
           };
         });
       const repeated = items.filter((i) => i.repeat);
@@ -2316,10 +2334,10 @@ export default function SocialPublisherPage() {
                 </div>
               </div>
 
-              {(Object.keys(autoDates).length > 0 || Object.keys(autoTimes).length > 0 || Object.keys(autoRepeat).length > 0) && (
-                <button onClick={() => { setAutoDates({}); setAutoTimes({}); setAutoRepeat({}); }}
+              {(Object.keys(autoDates).length > 0 || Object.keys(autoTimes).length > 0 || Object.keys(autoRepeat).length > 0 || Object.keys(autoAs).length > 0) && (
+                <button onClick={() => { setAutoDates({}); setAutoTimes({}); setAutoRepeat({}); setAutoAs({}); }}
                   className="px-3 py-2 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-bold text-slate-400 hover:text-white cursor-pointer">
-                  Reset {Object.keys(autoDates).length + Object.keys(autoTimes).length + Object.keys(autoRepeat).length} change(s)
+                  Reset {Object.keys(autoDates).length + Object.keys(autoTimes).length + Object.keys(autoRepeat).length + Object.keys(autoAs).length} change(s)
                 </button>
               )}
             </div>
@@ -2410,6 +2428,7 @@ export default function SocialPublisherPage() {
                 const rep = repeatOf(r);
                 const repTimes = rep ? clampTimes(rep.times) : 1;
                 const repStep = rep?.mode === "alternate" ? 2 : 1;
+                const as = sendAsOf(r);
                 return (
                   <div
                     key={r.id}
@@ -2479,23 +2498,33 @@ export default function SocialPublisherPage() {
                         <p className="text-[10px] text-slate-600">Stories carry no caption — both platforms drop the text.</p>
                       ) : (
                         <div className="space-y-1">
-                          <div className="flex items-start gap-1.5">
+                          {/* Sent only as a Story, the caption has nowhere to
+                              go — the box stays, greyed, so switching back to
+                              Feed finds the words still there. */}
+                          <div className={`flex items-start gap-1.5 ${as === "story" ? "opacity-40" : ""}`}>
                             <AutoTextarea
                               value={autoCaptions[r.id] ?? ""}
                               onChange={(v) => setAutoCaptions((c) => ({ ...c, [r.id]: v }))}
                               rows={3}
+                              disabled={as === "story"}
                               placeholder="Click ✨ or 'Write all captions' to generate…"
-                              className="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500 leading-relaxed"
+                              className="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500 leading-relaxed disabled:cursor-not-allowed"
                             />
                             <button
                               onClick={() => regenerateCaption(r.id)}
-                              disabled={regenId === r.id || writeAllBusy}
+                              disabled={regenId === r.id || writeAllBusy || as === "story"}
                               title="Write this caption again"
                               className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg border border-slate-800 bg-slate-950 text-slate-500 hover:text-indigo-400 hover:border-indigo-600 cursor-pointer disabled:opacity-40"
                             >
                               {regenId === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
                             </button>
                           </div>
+                          {as === "story" && (
+                            <p className="text-[10px] text-slate-500">Stories carry no caption — the creative is the whole message.</p>
+                          )}
+                          {as === "both" && (
+                            <p className="text-[10px] text-slate-600">This caption goes to the feed post only — the Story carries none.</p>
+                          )}
                           {captionErrors[r.id] && (
                             <p className="text-[10px] text-amber-400">{captionErrors[r.id]}</p>
                           )}
@@ -2570,6 +2599,32 @@ export default function SocialPublisherPage() {
                           )}
                         </div>
                       )}
+                      {/* A post or reel can go out as a Story too, or instead.
+                          Same slot; the server adds the Story pass. A story
+                          row needs none of this — it already is one. */}
+                      {(r.content_type === "post" || r.content_type === "reel") && (
+                        <div className="flex items-center justify-end gap-1 flex-wrap">
+                          <span className="text-[9px] font-bold text-slate-500 uppercase">Send as</span>
+                          <div className="flex bg-slate-950 border border-slate-800 rounded-lg p-0.5"
+                            title="Stories go to Instagram and Facebook only, with no caption">
+                            {([
+                              { v: "feed" as const, label: "Feed" },
+                              { v: "story" as const, label: "Story" },
+                              { v: "both" as const, label: "Feed + Story" },
+                            ]).map((o) => (
+                              <button key={o.v}
+                                onClick={() => setAutoAs((a) => {
+                                  const n = { ...a };
+                                  if (o.v === "feed") delete n[r.id]; else n[r.id] = o.v;
+                                  return n;
+                                })}
+                                className={`px-2 py-1 min-h-[40px] lg:min-h-0 rounded-md text-[10px] font-bold cursor-pointer transition-all whitespace-nowrap ${as === o.v ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
+                                {o.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {rep && slot && (
                         <p className="text-[9px] text-slate-500 text-right max-w-[220px] leading-snug">
                           Runs {repTimes} times · {dayLabel(slot.date)} → {dayLabel(shiftYmd(slot.date, (repTimes - 1) * repStep))} · {repStep === 1 ? "same time daily" : "every 2nd day"}
@@ -2584,12 +2639,13 @@ export default function SocialPublisherPage() {
                       {slot?.collides && (
                         <span className="text-[9px] font-bold text-rose-400" title="Same instant as the post above — set a time or pick a gap">⚠ same time</span>
                       )}
-                      {(autoDates[r.id] || autoTimes[r.id] || autoRepeat[r.id]) && (
+                      {(autoDates[r.id] || autoTimes[r.id] || autoRepeat[r.id] || autoAs[r.id]) && (
                         <button
                           onClick={() => {
                             setAutoDates((d) => { const n = { ...d }; delete n[r.id]; return n; });
                             setAutoTimes((t) => { const n = { ...t }; delete n[r.id]; return n; });
                             setAutoRepeat((p) => { const n = { ...p }; delete n[r.id]; return n; });
+                            setAutoAs((a) => { const n = { ...a }; delete n[r.id]; return n; });
                           }}
                           className="text-[9px] font-bold text-slate-600 hover:text-white cursor-pointer min-h-[40px] lg:min-h-0">reset</button>
                       )}
@@ -2610,12 +2666,12 @@ export default function SocialPublisherPage() {
               <p className="text-[11px] text-slate-500">
                 {autoReady.length === 0
                   ? "Nothing selected — every row is skipped or has no date."
-                  : <>Will schedule <span className="signal">{autoOccurrences * autoPlatforms.length}</span> post(s) — {autoReady.length} creative(s){autoOccurrences > autoReady.length ? ` (${autoOccurrences} runs with story repeats)` : ""} × {autoPlatforms.length} platform(s){autoSameDay > 0 ? `, with ${autoSameDay} spaced 5 minutes apart on a shared day` : `, all at ${autoTime}`}.</>}
+                  : <>Will schedule <span className="signal">{autoPosts}</span> post(s) — {autoReady.length} creative(s){autoOccurrences > autoReady.length ? ` (${autoOccurrences} runs with ${[autoReady.some((r) => repeatOf(r)) ? "story repeats" : "", autoReady.some((r) => sendAsOf(r) === "both") ? "Story passes" : ""].filter(Boolean).join(" and ")})` : ""} × {autoPlatforms.length} platform(s){autoSameDay > 0 ? `, with ${autoSameDay} spaced 5 minutes apart on a shared day` : `, all at ${autoTime}`}{autoStoryPasses > 0 && autoStoryPlatforms < autoPlatforms.length ? `; ${autoStoryPasses} Story pass(es) go to Instagram/Facebook only` : ""}.</>}
               </p>
               <button onClick={sendAutomation} disabled={autoSending || autoReady.length === 0 || autoPlatforms.length === 0}
                 className={`w-full px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 transition-all ${!autoSending && autoReady.length > 0 && autoPlatforms.length > 0 ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>
                 {autoSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                <span>{autoSending ? "Scheduling — this can take a minute…" : `Post via RecurPost (${autoOccurrences * autoPlatforms.length})`}</span>
+                <span>{autoSending ? "Scheduling — this can take a minute…" : `Post via RecurPost (${autoPosts})`}</span>
               </button>
             </div>
           )}

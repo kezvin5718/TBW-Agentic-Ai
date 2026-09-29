@@ -33,6 +33,17 @@ function repeatPlanOf(raw: unknown): { step: number; times: number } | null {
 }
 
 /**
+ * Where a feed creative is to go: the feed, the Story, or both.
+ *
+ * Anything other than exactly "story" or "both" is the feed — today's
+ * behaviour — rather than a guess: a wrong guess here is a caption-less Story
+ * nobody asked for.
+ */
+function sendAsOf(raw: unknown): "feed" | "story" | "both" {
+  return raw === "story" || raw === "both" ? raw : "feed";
+}
+
+/**
  * "2026-10-01T19:00" moved on by whole calendar days, same wall-clock time.
  *
  * Done on the date itself, not on the instant: adding 24 hours to a converted
@@ -166,13 +177,19 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/social-publisher/automation
- * Body: { clientId, platforms[], items: [{ uploadId, caption, scheduledFor, repeat? }] }
+ * Body: { clientId, platforms[], items: [{ uploadId, caption, scheduledFor, repeat?, sendAs? }] }
  *
  * Schedules the whole list in one go and retires each creative from the hub.
  *
  * A story row may carry repeat: { mode: "everyday" | "alternate", times } —
  * one upload, many days. It is unrolled into one occurrence per day before
  * anything is sent, so every day goes out exactly as a row of its own would.
+ *
+ * A post or reel row may carry sendAs: "feed" | "story" | "both" — the same
+ * creative sent as a Story instead of, or as well as, the feed post. Unrolled
+ * the same way, before the loop: "both" is two occurrences at one slot. A
+ * Story occurrence never carries a caption, and goes to Instagram and
+ * Facebook only.
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -243,7 +260,7 @@ export async function POST(request: NextRequest) {
   }
 
   const platforms: string[] = Array.isArray(body.platforms) ? body.platforms.filter(Boolean) : [];
-  const items: Array<{ uploadId: string; caption?: string; scheduledFor: string; repeat?: unknown }> = Array.isArray(body.items) ? body.items : [];
+  const items: Array<{ uploadId: string; caption?: string; scheduledFor: string; repeat?: unknown; sendAs?: unknown }> = Array.isArray(body.items) ? body.items : [];
 
   if (!clientId) return NextResponse.json({ error: "Select a client" }, { status: 400 });
   if (platforms.length === 0) return NextResponse.json({ error: "Select at least one platform" }, { status: 400 });
@@ -305,11 +322,25 @@ export async function POST(request: NextRequest) {
   // never has to know a repeat exists. Only a story is ever repeated: the
   // screen never offers it on anything else, and anything that claims
   // otherwise goes out once, exactly as it always did.
-  const occurrences = items.flatMap((item) => {
-    const { repeat, ...plain } = item;
+  //
+  // Send-as, unrolled in the same pass. A post or reel sent as a Story becomes
+  // one occurrence flagged asStory; sent as both, two at the same slot — the
+  // feed one exactly as today, then the Story. Only a post or a reel is ever
+  // re-routed: a story upload already is one and ignores the flag. The two
+  // never combine — repeats are offered on story rows, send-as on feed rows —
+  // so a row that somehow carries both has its repeat dropped rather than
+  // multiplied into a week of Stories nobody saw on screen.
+  type Occurrence = { uploadId: string; caption?: string; scheduledFor: string; asStory?: boolean };
+  const occurrences = items.flatMap((item): Occurrence[] => {
+    const { repeat, sendAs, ...plain } = item;
+    const kind = byId.get(item.uploadId)?.content_type;
+    const route = sendAsOf(sendAs);
+    if (route !== "feed" && (kind === "post" || kind === "reel")) {
+      return route === "story" ? [{ ...plain, asStory: true }] : [plain, { ...plain, asStory: true }];
+    }
     const plan = repeatPlanOf(repeat);
-    if (!plan || byId.get(item.uploadId)?.content_type !== "story") return [plain];
-    const days: typeof plain[] = [];
+    if (!plan || kind !== "story") return [plain];
+    const days: Occurrence[] = [];
     for (let k = 0; k < plan.times; k++) {
       const scheduledFor = shiftWallClockDays(item.scheduledFor, k * plan.step);
       // A slot in a shape we cannot move is sent once rather than not at all.
@@ -366,10 +397,21 @@ export async function POST(request: NextRequest) {
 
     const scheduledUtc = istWallClockToUtc(item.scheduledFor);
     const scheduledIso = scheduledUtc.toISOString();
-    const contentType = upload.content_type || "post";
+    // A feed creative sent as a Story is a Story from here on, in every respect:
+    // the RecurPost story params, the null caption, the social_posts record all
+    // read this one value, so there is no second place to forget.
+    const contentType = item.asStory ? "story" : (upload.content_type || "post");
     let anyOk = false;
 
     for (const platform of platforms) {
+      // Only Instagram and Facebook have Stories. Anything else selected for
+      // the run still takes the feed post; the Story pass is simply not theirs,
+      // and asking would be a certain refusal recorded as a failure.
+      if (item.asStory && platform !== "instagram" && platform !== "facebook") {
+        results.push({ uploadId: upload.id, platform, ok: false, skipped: true, detail: "Stories are Instagram/Facebook only — skipped" });
+        continue;
+      }
+
       // YouTube takes video and nothing else. Sending it an image is a
       // guaranteed RecurPost 3003 ("You Must upload Video"), and that one
       // certain failure is what used to hold the whole creative back — so the
@@ -468,11 +510,14 @@ export async function POST(request: NextRequest) {
   const failed = results.filter((r) => !r.ok && !r.skipped);
   const namesOf = (rows: typeof results) => [...new Set(rows.map((r) => r.platform))].join(", ");
   const posted = results.filter((r) => r.ok);
-  const skippedPlatforms = results.filter((r) => r.skipped);
+  // Two reasons a platform sits one out, and each says its own.
+  const storySkips = results.filter((r) => r.skipped && r.detail.startsWith("Stories"));
+  const videoSkips = results.filter((r) => r.skipped && !r.detail.startsWith("Stories"));
   const message = [
     posted.length ? `posted to ${namesOf(posted)}` : "nothing posted",
     failed.length ? `failed on ${namesOf(failed)}` : "",
-    skippedPlatforms.length ? `${namesOf(skippedPlatforms)} skipped (video only)` : "",
+    videoSkips.length ? `${namesOf(videoSkips)} skipped (video only)` : "",
+    storySkips.length ? `${namesOf(storySkips)} skipped for Stories (Instagram/Facebook only)` : "",
   ].filter(Boolean).join(" · ");
 
   return NextResponse.json({
