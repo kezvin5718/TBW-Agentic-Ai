@@ -318,7 +318,28 @@ export default function ContentHubPage() {
   const [batchProgress, setBatchProgress] = useState<Record<string, "waiting" | "uploading" | "done" | "failed">>({});
   const [batchRows, setBatchRows] = useState<UploadRow[]>([]);
   const [batchPicks, setBatchPicks] = useState<Record<string, string>>({});
-  const [batchBusy, setBatchBusy] = useState<"uploading" | "checking" | "submitting" | null>(null);
+  const [batchBusy, setBatchBusy] = useState<"uploading" | "checking" | "submitting" | "removing" | null>(null);
+
+  /** A mistaken upload leaves the batch AND the hub — gone, not hidden. */
+  const removeBatchCard = async (c: UploadRow) => {
+    if (!confirm(`Remove "${c.file_name || "this creative"}"? It is deleted from the hub — this cannot be undone.`)) return;
+    setBatchBusy("removing");
+    try {
+      const res = await fetch("/api/content-hub", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [c.id] }),
+      });
+      if (res.ok) {
+        setBatchRows((rows) => rows.filter((r) => r.id !== c.id));
+        setBatchPicks((p) => { const n = { ...p }; delete n[c.id]; return n; });
+        await fetchUploads();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error || "Could not remove it.");
+      }
+    } finally { setBatchBusy(null); }
+  };
   const [batchResults, setBatchResults] = useState<Record<string, BatchOutcome>>({});
   const batchInputRef = useRef<HTMLInputElement>(null);
   const fileKey = (f: File) => `${f.name}-${f.size}`;
@@ -879,7 +900,17 @@ export default function ContentHubPage() {
                           )}
                         </div>
                         <div className="flex-1 min-w-0 space-y-2">
-                          <p className="text-[11px] text-slate-300 font-bold break-all">{c.file_name}</p>
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-[11px] text-slate-300 font-bold break-all min-w-0">{c.file_name}</p>
+                            {/* A wrong file dies here, before it can be scheduled.
+                                Queued cards lose the button: they are posts now. */}
+                            {!v.done && (
+                              <button onClick={() => removeBatchCard(c)} disabled={!!batchBusy} title="Remove this creative — deletes it from the hub"
+                                className="shrink-0 w-8 h-8 -mt-1 -mr-1 flex items-center justify-center rounded-lg text-slate-600 hover:text-rose-400 cursor-pointer disabled:opacity-40">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
 
                           {v.pending ? (
                             <span className="inline-flex items-center gap-1 text-[10px] text-slate-500"><Loader2 className="w-3 h-3 animate-spin" /> QC is reading it…</span>
@@ -927,7 +958,17 @@ export default function ContentHubPage() {
                   })}
                 </div>
 
-                <div className="flex gap-2 flex-wrap items-center">
+                {/* Sticky so ten cards can't scroll the Submit out of existence —
+                    the founder's screenshot had it below the fold and read the
+                    feature as unfinishable. */}
+                <div className="sticky bottom-2 z-10 flex gap-2 flex-wrap items-center rounded-xl border border-slate-800 bg-slate-950/95 backdrop-blur p-2 shadow-lg shadow-black/50">
+                  {Object.keys(batchResults).length > 0 && (
+                    <span className="w-full text-[11px] font-bold text-emerald-400 px-1">
+                      ✓ {Object.values(batchResults).filter((r) => r.scheduled).length} queued
+                      {Object.values(batchResults).some((r) => !r.scheduled) &&
+                        ` · ${Object.values(batchResults).filter((r) => !r.scheduled).length} blocked — see the cards`}
+                    </span>
+                  )}
                   <button
                     type="button"
                     onClick={submitBatch}
