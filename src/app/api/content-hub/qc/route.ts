@@ -45,11 +45,93 @@ export const runtime = "nodejs";
 
 interface Verdict { verdict: "match" | "mismatch" | "unsure"; detected_brand: string; reason: string }
 
+interface RosterClient { id: string; name: string; qc_allowed_brands: string[] | null }
+
+const norm = (s: string) => s.trim().toLowerCase();
+
+/**
+ * DETECT mode — a festival creative from the batch uploader, dropped with no
+ * client chosen. The question flips from "is this <client>?" to "which of our
+ * clients is this?", and the answer is only ever a suggestion: qc_status stays
+ * "unsure" because the person who picks the client at submit is what verifies
+ * it. The one verdict that still bites is the festival one — a Holi creative
+ * filed under Diwali fails here exactly as it does for a single upload, so it
+ * can never be scheduled.
+ */
+async function detectFestivalBrand(
+  row: { file_url: string; media_type: string },
+  festivalName: string,
+  roster: RosterClient[]
+): Promise<{ status: "unsure" | "mismatch"; detected: string; detectedFestival: string; note: string }> {
+  let status: "unsure" | "mismatch" = "unsure";
+  let detected = "";
+  let detectedFestival = "";
+  let note = "";
+  try {
+    let buf = await fetchMediaBuffer(row.file_url);
+    if (row.media_type === "video") {
+      if (buf.length > 150 * 1024 * 1024) throw new Error("video too large for QC (>150MB)");
+      buf = await extractVideoFrame(buf);
+    }
+    const small = await sharp(buf).resize({ width: 768, withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer();
+    const dataUrl = `data:image/jpeg;base64,${small.toString("base64")}`;
+
+    // Sister concerns are listed so a creative carrying only the sister's name
+    // still lands on the client who owns it.
+    const related = roster
+      .filter((c) => (c.qc_allowed_brands || []).filter(Boolean).length > 0)
+      .map((c) => `"${c.name}" also appears on creatives as: ${(c.qc_allowed_brands || []).filter(Boolean).join(", ")}`);
+
+    const raw = await completeVision({
+      purpose: "qc-checks",
+      system: "You are a brand-QC checker for an ad agency. Look at the creative and identify which brand it belongs to using visible logos, brand names, product labels and text. Output ONLY JSON.",
+      prompt: `This creative was uploaded with NO brand chosen. Decide which of the agency's clients it belongs to.
+Agency clients: ${roster.map((c) => `"${c.name}"`).join(", ")}.
+${related.length > 0 ? `${related.join("\n")}\n` : ""}
+Return JSON exactly:
+{ "detected_brand": "<one client name from the list, written exactly as listed, or 'unknown'>", "reason": "<one short line>", "detected_festival": "<the festival or occasion this creative is for, or 'unknown'>", "festival_verdict": "match" | "mismatch" | "unsure" }
+
+Rules: name a client only when its logo, brand name or product labels are visible on the creative. If the branding belongs to a related name above, answer with the client it belongs to. "unknown" if no clear branding is visible or it matches none of the clients.
+
+This was filed as a festival story for: "${festivalName}". Judge the occasion from greetings, deities, symbols, colours and any festival wording on the creative. "match" if it is for ${festivalName}. "mismatch" if it is clearly for a DIFFERENT festival or occasion. "unsure" if the creative carries no festival cue at all.`,
+      imageDataUrl: dataUrl,
+    });
+    const v = safeJsonParse<{ detected_brand?: string; reason?: string; detected_festival?: string; festival_verdict?: string }>(
+      raw,
+      { detected_brand: "unknown", reason: "unparseable response" }
+    );
+    const seen = String(v.detected_brand || "").trim();
+    note = v.reason || "";
+
+    // Written as the roster spells it whenever it is one of ours, so the
+    // screen's name → client lookup is an exact match rather than a guess. The
+    // raw reading is kept only when it names nobody we know.
+    const byName = seen ? roster.find((c) => norm(c.name) === norm(seen)) : undefined;
+    const bySister = !byName && seen
+      ? roster.filter((c) => (c.qc_allowed_brands || []).some((b) => b && norm(b) === norm(seen)))
+      : [];
+    detected = byName ? byName.name : bySister.length === 1 ? bySister[0].name : seen;
+
+    detectedFestival = String(v.detected_festival || "");
+    if (v.festival_verdict === "mismatch") {
+      status = "mismatch";
+      note = `Filed under "${festivalName}" but the creative looks like ${detectedFestival || "a different occasion"}. ${note}`.trim();
+    }
+    if (row.media_type === "video") note = `${note} (judged from a video frame)`.trim();
+  } catch (err: unknown) {
+    status = "unsure";
+    note = `Check failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  return { status, detected, detectedFestival, note };
+}
+
 /**
  * POST /api/content-hub/qc — Brand QC for pending Content Hub uploads.
  * Vision-AI looks at each image (logos / brand text) and checks it against the
  * client it was uploaded under; wrong-brand uploads get flagged "mismatch".
  * Videos are skipped (v1). Processes up to 10 per call.
+ * Festival creatives uploaded without a client (the festival batch) run in
+ * detect mode instead — see detectFestivalBrand.
  */
 export async function POST() {
   const supabase = await createClient();
@@ -78,8 +160,35 @@ export async function POST() {
   let flagged = 0;
   let autoScheduled = 0;
   const touchedBatches = new Set<string>();
+  // Fetched once, and only when a detect-mode row is in this sweep. Archived
+  // clients are left out — the screen can't offer them in its dropdown either.
+  let roster: RosterClient[] | null = null;
 
   for (const row of rows) {
+    // No client on a festival creative means the batch uploader: detect, don't
+    // verify. Its batch is deliberately NOT handed to the batch verdict — that
+    // batch is ten different brands dropped together, not one delivery, so one
+    // wrong-festival creative must not reject the other nine.
+    if (row.festival_id && !row.client_id) {
+      if (!roster) {
+        const { data: live } = await admin.from("clients").select("id, name, qc_allowed_brands").is("archived_at", null);
+        roster = (live || []) as RosterClient[];
+      }
+      const festName = (row.festivals as { name?: string } | null)?.name || "the festival";
+      const d = await detectFestivalBrand(row, festName, roster);
+      await admin
+        .from("creative_uploads")
+        .update({
+          qc_status: d.status,
+          qc_detected_brand: d.detected || null,
+          qc_detected_festival: d.detectedFestival || null,
+          qc_note: d.note || null,
+        })
+        .eq("id", row.id);
+      checked++;
+      continue;
+    }
+
     const uploadedFor = (row.clients as { name?: string } | null)?.name || "Unknown";
     const festivalName = (row.festivals as { name?: string } | null)?.name || "";
     let detectedFestival = "";
