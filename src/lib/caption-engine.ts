@@ -57,7 +57,7 @@ export async function writeCaptionForClient(input: CaptionInput): Promise<Captio
   if (!clientId) return { ok: false, error: "Select a client first" };
 
   const admin = createServiceRoleClient();
-  const { data: client } = await admin.from("clients").select("name, products, target_audience").eq("id", clientId).maybeSingle();
+  const { data: client } = await admin.from("clients").select("name, products, target_audience, social_accounts").eq("id", clientId).maybeSingle();
   if (!client) return { ok: false, error: "Client not found", code: "no_client" };
   const { data: brain } = await admin
     .from("brand_brain")
@@ -105,8 +105,10 @@ export async function writeCaptionForClient(input: CaptionInput): Promise<Captio
       code: "missing_contact",
     };
   }
-  const hashtagCount = rules.hashtags || "3-6";
-  const keywordCount = rules.seo_keywords || "5-8";
+  // The founder's format (1 Oct): exactly 8 keywords and exactly 5 hashtags —
+  // unless a brand's own corrected rules say otherwise, which win as always.
+  const hashtagCount = rules.hashtags || "exactly 5";
+  const keywordCount = rules.seo_keywords || "exactly 8";
   const feedbackDigest = Array.isArray(brain?.feedback_log)
     ? (brain!.feedback_log as unknown[]).slice(-5).map((f) => (typeof f === "string" ? f : JSON.stringify(f))).join("\n")
     : "";
@@ -144,40 +146,47 @@ ${feedbackDigest ? `\nRecent feedback on past posts:\n${feedbackDigest}` : ""}
 
 ${brief ? `What this post is about: ${brief}` : "Write something on-brand and engaging for this brand."}
 
-LENGTH — this matters. The written part of the caption (the hook, the body and the closing line together) must be between 100 and 120 words. That is a real paragraph, not two lines: describe the piece, the craft, the occasion it suits and who it is for, drawing on what is actually in the creative. Count only those words — the 📍/📞 lines, the keyword line and the hashtags are not part of the count.
-
 Format the caption in EXACTLY this structure — a blank line between every block, nothing merged together, no markdown:
 
-<hook line, 1-2 emoji at the end>
+<ONE short hook line — a single line, catchy, natural, human. Not a long sentence, not a generic AI opener. An emoji only if it suits this brand's tone.>
 <blank line>
-<the body: several sentences on the piece, its craftsmanship and the occasion it suits, grounded in what's actually in the creative. This is where nearly all of the 100-120 words live.>
+<the product description: EXACTLY 2 short lines. Name the main product shown — or, if the exact product is not certain, the honest broader category. Describe what is actually visible: design, detailing, craftsmanship, style, or the occasion it suits. Natural and attractive, nothing invented.>
 <blank line>
-<one closing tagline line — no emoji>
+🏷️ <${keywordCount} plain comma-separated keyword phrases — lowercase, no # symbol, relevant to the product, the brand, the category and the location. No near-duplicate keywords.>
 <blank line>
-📍 <address>
-📞 <phone>
-<blank line>
-🏷️ <${keywordCount} plain comma-separated keyword phrases — lowercase, no # symbol, built from the product/category, brand name, and occasion>
-<blank line>
-<${hashtagCount} hashtags on one line, space-separated, each starting with #>
+<${hashtagCount} hashtags on one line, space-separated, each starting with #. Include the brand's own hashtag. Relevant only — nothing spammy or generic.>
 
-The 📍 and 📞 lines are mandatory and must both appear, exactly as given here — never altered, never abbreviated, never left out:
-📍 ${addr!.address}
-📞 ${addr!.phone}
+HARD RULES:
+- Never guess or invent weight, purity, material, price, discount, certification, gemstone, collection name or offer — only what the creative's own printed text or the brief states.
+- Never write "in this video", "in this image", "the uploaded video" or "I can see" — write it as ready-to-post copy.
+- Never use an em dash (—) anywhere.
+- Do not write the address, phone number, Instagram handle or website anywhere — those lines are appended automatically and must not be duplicated.
+- Do not write "follow @…" or cross-account promotion lines — those are appended automatically too.
+- Plain, premium, simple English. No complicated vocabulary, no robotic wording, no excessive adjectives.
 
-The address and phone number appear EXACTLY ONCE in the whole caption — only in those two lines. Never mention the address, the location, or the phone number anywhere else: not in the hook, not in the body, not in the closing line.
-
-Do not write "follow @…" or cross-account promotion lines — those are appended automatically.
-
-Output only the caption, nothing else.`,
+Output only the caption, nothing else — no options, no explanations.`,
     }],
     model: chosenModel,
-    // A 100-120 word body plus the contact block, keywords and hashtags does not
-    // fit in 400 — the old limit cut captions off mid-sentence.
-    maxTokens: 900,
+    maxTokens: 700,
   });
 
-  const text = caption.trim();
+  // The founder banned em dashes outright; a model that slips one through is
+  // corrected here rather than argued with.
+  let text = caption.trim().replace(/\s*—\s*/g, ", ");
+
+  // Exactly 8 keywords and exactly 5 hashtags — enforced, not hoped for. Only
+  // when the brand has no override of its own: a founder-corrected count wins.
+  if (!rules.seo_keywords) {
+    text = text.replace(/^(\s*🏷️\s*)(.+)$/mu, (_, pre: string, list: string) => {
+      const parts = list.split(",").map((s) => s.trim()).filter(Boolean);
+      return pre + parts.slice(0, 8).join(", ");
+    });
+  }
+  if (!rules.hashtags) {
+    text = text.replace(/^((?:#[^\s#]+\s*){6,})$/m, (line) =>
+      (line.match(/#[^\s#]+/g) || []).slice(0, 5).join(" ")
+    );
+  }
 
   // The contact block must appear exactly once — no more, no fewer. The old
   // check appended it whenever the model's wording didn't match the stored text
@@ -192,13 +201,24 @@ Output only the caption, nothing else.`,
   // once, and the model is told not to write follow-lines at all.
   const signature = String(brain?.caption_signature || "").trim();
   const signatureLines = new Set(signature.split("\n").map((l) => l.trim()).filter(Boolean));
-  const contactBlock = `📍 ${addr!.address}\n📞 ${addr!.phone}`;
+  // The client-details block, built from backend data alone — the model never
+  // types these. Address and phone are guaranteed above; the Instagram handle
+  // and website print only when they exist, no placeholders ever.
+  const socials = (client.social_accounts || {}) as Record<string, unknown>;
+  const insta = String(socials.instagram || "").trim();
+  const site = String(socials.website || "").trim();
+  const contactBlock = [
+    `📍 ${addr!.address}`,
+    `📞 ${addr!.phone}`,
+    insta ? `📩 ${insta.startsWith("@") || insta.startsWith("http") ? insta : `@${insta}`}` : null,
+    site ? `🌐 ${site}` : null,
+  ].filter(Boolean).join("\n");
   const block = signature ? `${contactBlock}\n\n${signature}` : contactBlock;
   // A model that has seen this brand's past captions may reproduce a follow-line
   // itself; an exact repeat of one is dropped so the sign-off cannot double.
   const kept = text
     .split("\n")
-    .filter((l) => !/^\s*[📍📞]/u.test(l) && !signatureLines.has(l.trim()));
+    .filter((l) => !/^\s*[📍📞📩🌐]/u.test(l) && !signatureLines.has(l.trim()));
   const tail = kept.findIndex((l) => /^\s*(🏷️|#)/u.test(l));
   if (tail === -1) kept.push("", block);
   else kept.splice(tail, 0, block, "");
@@ -210,7 +230,7 @@ Output only the caption, nothing else.`,
   // to begin with "For" still counts toward the length.
   const bodyWords = withContact
     .split("\n")
-    .filter((l) => !/^\s*(📍|📞|🏷️|#)/.test(l) && !signatureLines.has(l.trim()))
+    .filter((l) => !/^\s*(📍|📞|📩|🌐|🏷️|#)/.test(l) && !signatureLines.has(l.trim()))
     .join(" ")
     .split(/\s+/)
     .filter(Boolean).length;
