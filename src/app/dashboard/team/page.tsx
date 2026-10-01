@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { fmtIST } from "@/lib/time";
-import { Users, Loader2, Check, X, KeyRound, Mail, Phone, Trash2, Move } from "lucide-react";
+import { Users, Loader2, Check, X, KeyRound, Mail, Phone, Trash2, Move, Network } from "lucide-react";
 import Avatar from "../Avatar";
 import { SECTIONS } from "@/lib/sections";
 
@@ -15,6 +15,7 @@ interface UserRow {
   permissions: string[] | null;
   can_delete_tasks?: boolean;
   can_move_tasks?: boolean;
+  can_manage_allotment?: boolean;
   created_at: string;
   avatar_url: string | null;
   designation: string | null;
@@ -71,6 +72,19 @@ export default function TeamPage() {
       await fetch("/api/team", {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: u.id, action: "set_task_move", allowed }),
+      });
+      await load();
+    } finally { setBusy(null); }
+  };
+
+  // The festival allotment map is confidential by the founder's order, so it
+  // is granted by name too — anyone without it never sees the map exists.
+  const setAllotment = async (u: UserRow, allowed: boolean) => {
+    setBusy(u.id);
+    try {
+      await fetch("/api/team", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: u.id, action: "set_allotment", allowed }),
       });
       await load();
     } finally { setBusy(null); }
@@ -255,6 +269,21 @@ export default function TeamPage() {
                         </span>
                         <input type="checkbox" disabled={!!busy} checked={!!u.can_move_tasks}
                           onChange={(e) => setTaskMove(u, e.target.checked)} className="accent-[#FFD400] cursor-pointer" />
+                      </label>
+                    )}
+
+                    {/* Festival allotment — the same shape of grant, for the
+                        confidential map of who makes which brand's creative */}
+                    {u.role === "employee" && (
+                      <label className="flex items-center justify-between gap-3 border-t border-slate-900/70 pt-2 cursor-pointer">
+                        <span className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                          <Network className="w-3.5 h-3.5" />
+                          <span>Can manage festival allotment {u.can_manage_allotment
+                            ? <span className="text-amber-400 font-bold">· allowed</span>
+                            : <span className="text-slate-600">· not allowed</span>}</span>
+                        </span>
+                        <input type="checkbox" disabled={!!busy} checked={!!u.can_manage_allotment}
+                          onChange={(e) => setAllotment(u, e.target.checked)} className="accent-[#FFD400] cursor-pointer" />
                       </label>
                     )}
                   </div>

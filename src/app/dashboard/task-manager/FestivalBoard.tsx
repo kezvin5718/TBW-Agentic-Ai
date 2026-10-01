@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { fmtISTDate } from "@/lib/time";
 import { awayLabel } from "./TaskBoard";
 import { fetchSuggestion, suggestionKey, type RouteSuggestion } from "@/lib/task-suggestion";
-import { Loader2, Plus, Check, Trash2, Sparkles, Search, X } from "lucide-react";
+import { Loader2, Plus, Check, Trash2, Sparkles, Search, X, LayoutList, Network } from "lucide-react";
+import AllotmentMap from "./AllotmentMap";
 
 interface FestivalRow { id: string; name: string; scheduled_at: string }
 interface Member { id: string; name: string; role_title: string | null; away_until: string | null }
@@ -74,6 +75,11 @@ export default function FestivalBoard() {
   const [notice, setNotice] = useState<string | null>(null);
   // One ask per client that still has nobody on it, cached by the pair.
   const [suggested, setSuggested] = useState<Record<string, RouteSuggestion | null>>({});
+  // The allotment map is confidential: the toggle exists only once the API has
+  // said this person may see it. A 403 — or any failure — simply leaves no
+  // trace of it, and the board is the board it always was.
+  const [canAllot, setCanAllot] = useState(false);
+  const [view, setView] = useState<"board" | "map">("board");
 
   // The festivals list is the one Campaign Planning keeps; the team's clients
   // and members come from the same place the Task Board reads them.
@@ -102,6 +108,20 @@ export default function FestivalBoard() {
         }
       } catch { /* ignore */ }
     })();
+  }, []);
+
+  // Asked after the board's own lists, never in their way.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/festival-allotment", { cache: "no-store" });
+        if (!res.ok || !alive) return;
+        const d = await res.json();
+        if (alive && d.canManage === true) setCanAllot(true);
+      } catch { /* no toggle is the safe answer */ }
+    })();
+    return () => { alive = false; };
   }, []);
 
   const load = useCallback(async (id: string) => {
@@ -298,8 +318,31 @@ export default function FestivalBoard() {
     );
   };
 
+  const toggle = canAllot && (
+    <div className="flex bg-slate-950 border border-slate-900 rounded-xl p-1 text-[10px] font-bold uppercase tracking-wider w-fit">
+      {([["board", "Board", LayoutList], ["map", "Allotment map", Network]] as const).map(([key, label, Icon]) => (
+        <button key={key} onClick={() => setView(key)}
+          className={`min-h-[40px] lg:min-h-0 px-3 py-1.5 rounded-lg cursor-pointer flex items-center gap-1.5 ${
+            view === key ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"
+          }`}>
+          <Icon className="w-3.5 h-3.5" /><span>{label}</span>
+        </button>
+      ))}
+    </div>
+  );
+
+  if (canAllot && view === "map") {
+    return (
+      <div className="space-y-4">
+        {toggle}
+        <AllotmentMap festivals={festivals} defaultFestivalId={festivalId} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
+      {toggle}
       <div className="flex items-center gap-2 flex-wrap">
         <select value={festivalId} onChange={(e) => setFestivalId(e.target.value)}
           className="min-h-10 text-[11px] font-bold bg-slate-950 border border-slate-900 rounded-xl px-3 py-2.5 text-slate-200 cursor-pointer focus:outline-none">

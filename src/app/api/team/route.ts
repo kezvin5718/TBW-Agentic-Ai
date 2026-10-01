@@ -13,7 +13,7 @@ export async function GET() {
   const admin = createServiceRoleClient();
   const { data, error } = await admin
     .from("profiles")
-    .select("id, name, role, brand_name, approved, permissions, can_delete_tasks, can_move_tasks, created_at, avatar_url, designation, phone, about")
+    .select("id, name, role, brand_name, approved, permissions, can_delete_tasks, can_move_tasks, can_manage_allotment, created_at, avatar_url, designation, phone, about")
     .order("created_at", { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -72,6 +72,11 @@ export async function PATCH(request: NextRequest) {
     // Moving a task to someone else's name is a scheduling decision, not an
     // edit, so it is granted per person the same way deletion is.
     patch.can_move_tasks = !!allowed;
+  } else if (action === "set_allotment") {
+    // The festival allotment map decides who makes which brand's creative at
+    // every festival, and it is confidential — so it is granted per person the
+    // same way moving tasks is.
+    patch.can_manage_allotment = !!allowed;
   } else {
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   }
