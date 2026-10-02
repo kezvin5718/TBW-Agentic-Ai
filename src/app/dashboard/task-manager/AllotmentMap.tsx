@@ -298,7 +298,10 @@ export default function AllotmentMap({ festivals, defaultFestivalId }: { festiva
         <button onClick={runAllot} disabled={allotting || !allotFestival || nodes.length === 0}
           className="flex items-center justify-center gap-1.5 min-h-[40px] lg:min-h-0 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold cursor-pointer disabled:opacity-40">
           {allotting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
-          <span>{allotFestival ? `Allot ${allotFestival.name} — creates the tasks` : "Allot — creates the tasks"}</span>
+          {/* "Save" in the founder's sense: edits store themselves as they are
+              made; this is the act that turns the map into assigned tasks, and
+              pressing it after an update only creates what is new (dedupe). */}
+          <span>{allotFestival ? `Save & assign tasks — ${allotFestival.name}` : "Save & assign tasks"}</span>
         </button>
         <span className="text-[10px] text-slate-600 font-mono sm:ml-auto">
           {masters.length} master · {nodes.length - masters.length - standalones.length} adaptation · {standalones.length} standalone
