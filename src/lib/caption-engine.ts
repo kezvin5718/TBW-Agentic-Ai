@@ -144,25 +144,42 @@ Rules and corrections the founder has explicitly given for this brand — follow
 ${JSON.stringify(rules)}
 ${feedbackDigest ? `\nRecent feedback on past posts:\n${feedbackDigest}` : ""}
 
-${brief ? `What this post is about: ${brief}` : "Write something on-brand and engaging for this brand."}
+${brief ? `What this post is about / offer details supplied for this post: ${brief}` : "No offer or special instruction was supplied for this post."}
+${rules.current_offer ? `Current offer on record for this brand: ${JSON.stringify(rules.current_offer)}` : ""}
+
+FIRST, decide what kind of content this actually is — a product showcase, a customer testimonial or happy-customer video, a bridal video, an offer/promotion, a new collection, a store experience, an educational piece, an event, festive content, or behind-the-scenes — and write for THAT, not a product ad by default:
+- Testimonial / happy customer → write about the customer's happiness, trust and experience with the brand. If a customer's NAME is printed on the creative, use it naturally.
+- Product showcase / new collection → name the product (or the honest broader category) and describe its visible design, detailing, craftsmanship or appeal.
+- Bridal → bridal moments, wedding styling, the jewellery's place in the day.
+- Offer / promotion → lead with the offer naturally — but ONLY an offer stated in the supplied details above or printed on the creative itself. Never one of your own.
+- Store / brand video → the shopping experience, the service, the feeling of the place.
+- Festive → connect the creative to the occasion it is for.
+Do not describe your analysis anywhere in the output.
 
 Format the caption in EXACTLY this structure — a blank line between every block, nothing merged together, no markdown:
 
-<ONE short hook line — a single line, catchy, natural, human. Not a long sentence, not a generic AI opener. An emoji only if it suits this brand's tone.>
+<ONE short hook line — a single line, engaging, natural, matched to the MOOD of this creative. Not a long sentence, not a generic AI opener, not the same style of opening every time. An emoji only if it suits this brand's tone.>
 <blank line>
-<the product description: EXACTLY 2 short lines. Name the main product shown — or, if the exact product is not certain, the honest broader category. Describe what is actually visible: design, detailing, craftsmanship, style, or the occasion it suits. Natural and attractive, nothing invented.>
+<the main passage: 2 to 3 natural lines written for the content type you identified — flowing like a professionally written Instagram caption, grounded only in what is actually visible and the supplied details.>
 <blank line>
-🏷️ <${keywordCount} plain comma-separated keyword phrases — lowercase, no # symbol, relevant to the product, the brand, the category and the location. No near-duplicate keywords.>
+🏷️ <${keywordCount} plain comma-separated SEO keyword phrases — lowercase, no # symbol, drawn from the brand, the content, the product or category, the offer when there is one, and the location. No near-duplicate keywords.>
 <blank line>
-<${hashtagCount} hashtags on one line, space-separated, each starting with #. Include the brand's own hashtag. Relevant only — nothing spammy or generic.>
+<${hashtagCount} hashtags on one line, space-separated, each starting with #. Include the brand's own hashtag. Relevant to this actual creative — nothing spammy or generic.>
+
+STYLE REFERENCE — match this flow, structure and level of detail, but copy NOTHING from it (not the brand, address, phone, offer, figures, wording, keywords or hashtags; all of that comes from the current creative and the current brand only):
+"Happy customers make every sparkle more special. ✨
+
+Nothing speaks louder than the experience of our customers. At Raamya Jewels, we're delighted to see families finding jewellery they love while enjoying exceptional value with 6.5% making charges on yellow gold jewellery.
+Their smiles, trust and experience are what make every visit truly special."
 
 HARD RULES:
-- Never guess or invent weight, purity, material, price, discount, certification, gemstone, collection name or offer — only what the creative's own printed text or the brief states.
+- Never guess or invent weight, purity, material, price, making charges, discount, certification, gemstone, collection name or offer — only what the creative's own printed text or the supplied details state.
 - Never write "in this video", "in this image", "the uploaded video" or "I can see" — write it as ready-to-post copy.
 - Never use an em dash (—) anywhere.
+- Do not repeat the brand name unnecessarily.
 - Do not write the address, phone number, Instagram handle or website anywhere — those lines are appended automatically and must not be duplicated.
 - Do not write "follow @…" or cross-account promotion lines — those are appended automatically too.
-- Plain, premium, simple English. No complicated vocabulary, no robotic wording, no excessive adjectives.
+- Plain, premium, simple English. No complicated vocabulary, no robotic wording, no excessive adjectives, nothing overly poetic.
 
 Output only the caption, nothing else — no options, no explanations.`,
     }],
@@ -208,9 +225,9 @@ Output only the caption, nothing else — no options, no explanations.`,
   const insta = String(socials.instagram || "").trim();
   const site = String(socials.website || "").trim();
   const contactBlock = [
-    `📍 ${addr!.address}`,
-    `📞 ${addr!.phone}`,
-    insta ? `📩 ${insta.startsWith("@") || insta.startsWith("http") ? insta : `@${insta}`}` : null,
+    `📍 Visit us: ${addr!.address}`,
+    `📞 Call: ${addr!.phone}`,
+    insta ? `📩 DM ${insta.startsWith("@") || insta.startsWith("http") ? insta : `@${insta}`}` : null,
     site ? `🌐 ${site}` : null,
   ].filter(Boolean).join("\n");
   const block = signature ? `${contactBlock}\n\n${signature}` : contactBlock;
