@@ -836,6 +836,42 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
     (!filterClient || t.client_id === filterClient)
   ), [tasks, filterMember, filterClient]);
 
+  // Regular vs Festival. One allotment press can put nine festival tasks on
+  // every plate at once — this keeps the two kinds of work one tap apart
+  // instead of one long scroll together. Festival work is anything the
+  // festival machinery created (source "festival"); the rest is the day job.
+  const isFestivalTask = (t: Task) => t.source === "festival";
+  const [workMode, setWorkMode] = useState<"regular" | "festival">("regular");
+  // A single column can be flipped on its own; absent means follow the pills.
+  const [colWork, setColWork] = useState<Record<string, "regular" | "festival">>({});
+  useEffect(() => {
+    try { if (localStorage.getItem("tbw.taskboard.workmode") === "festival") setWorkMode("festival"); } catch { /* private mode */ }
+  }, []);
+  const setGlobalWork = (m: "regular" | "festival") => {
+    setWorkMode(m);
+    setColWork({});
+    try { localStorage.setItem("tbw.taskboard.workmode", m); } catch { /* private mode */ }
+  };
+  const workCounts = useMemo(() => {
+    const fest = filtered.filter(isFestivalTask).length;
+    return { festival: fest, regular: filtered.length - fest };
+  }, [filtered]);
+
+  /** The two pills, drawn wherever a list needs splitting. */
+  const workPills = (mode: "regular" | "festival", counts: { regular: number; festival: number }, onPick: (m: "regular" | "festival") => void, small = false) => (
+    <div className={`flex bg-slate-950 border border-slate-900 rounded-lg p-0.5 font-bold ${small ? "text-[9px]" : "text-[10px]"}`}>
+      {(["regular", "festival"] as const).map((m) => (
+        <button key={m} onClick={() => onPick(m)}
+          title={m === "festival" ? "Only festival tasks (from the Festivals system)" : "Only day-to-day tasks"}
+          className={`${small ? "px-2 py-1" : "px-2.5 py-1.5 min-h-[40px] lg:min-h-0"} rounded-md cursor-pointer transition-colors ${
+            mode === m ? "bg-indigo-600 text-white" : "text-slate-500 hover:text-white"
+          }`}>
+          {m === "festival" ? "Festival" : "Regular"} {counts[m]}
+        </button>
+      ))}
+    </div>
+  );
+
   const now = Date.now();
   const stats = useMemo(() => {
     const open = tasks.filter((t) => t.status !== "done");
@@ -1117,8 +1153,11 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
       // still the thing to do next rather than an arbitrary urgent item.
       priority: (a, b) => prio(a) - prio(b) || byDue(a, b, 1),
     };
-    return [...filtered].sort(cmp[sortBy]);
-  }, [filtered, sortBy]);
+    // The Completed tab's calendar shows everything; the open list splits.
+    const pool = tab === "done" ? filtered : filtered.filter((t) => (workMode === "festival") === isFestivalTask(t));
+    return [...pool].sort(cmp[sortBy]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, sortBy, workMode, tab]);
 
   return (
     <div className="space-y-5">
@@ -1377,6 +1416,7 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
           <option value="assigned_asc">Assigned · oldest first</option>
           <option value="priority">Priority</option>
         </select>
+        {tab !== "done" && workPills(workMode, workCounts, setGlobalWork)}
         {mode === "team" && (
           <button
             onClick={pmCanToggle ? togglePm : undefined}
@@ -1437,7 +1477,13 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
         // endless scroll; from md it is today's grid, untouched.
         <div ref={colsRef} className="flex overflow-x-auto snap-x snap-mandatory md:overflow-visible md:grid md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
           {columns.map((col) => {
+            // Late is counted over EVERYTHING on the plate — hiding festival
+            // tasks behind the Regular pill must never hide that they're late.
             const late = col.items.filter((t) => t.deadline && new Date(t.deadline).getTime() < now && t.status !== "done").length;
+            const colMode = colWork[col.name] ?? workMode;
+            const colFest = col.items.filter(isFestivalTask).length;
+            const colCounts = { festival: colFest, regular: col.items.length - colFest };
+            const shown = col.items.filter((t) => (colMode === "festival") === isFestivalTask(t));
             const isCollapsed = !!collapsed[col.name];
             // Only a permitted drag makes a column a target — without the grant
             // there is nothing in the air and nothing lights up.
@@ -1534,11 +1580,20 @@ export default function TaskBoard({ mode = "board" }: { mode?: "board" | "team" 
                     </div>
                   );
                 })()}
-                {!isCollapsed && (col.items.length === 0 ? (
-                  <p className="text-[10px] text-slate-600 px-3.5 pb-2.5">No open tasks.</p>
+                {/* Regular/Festival, one tap apart — in the space beside the
+                    away date, exactly where the founder pointed. */}
+                {!isCollapsed && (
+                  <div className="px-3.5 pb-2">
+                    {workPills(colMode, colCounts, (m) => setColWork((p) => ({ ...p, [col.name]: m })), true)}
+                  </div>
+                )}
+                {!isCollapsed && (shown.length === 0 ? (
+                  <p className="text-[10px] text-slate-600 px-3.5 pb-2.5">
+                    {col.items.length === 0 ? "No open tasks." : colMode === "festival" ? "No festival tasks — see Regular." : "No regular tasks — see Festival."}
+                  </p>
                 ) : (
                   <div className="px-2.5 pb-2.5 space-y-1">
-                    {col.items.map((t) => {
+                    {shown.map((t) => {
                       const overdue = !!t.deadline && new Date(t.deadline).getTime() < now && t.status !== "done";
                       const isOpen = !!expanded[t.id];
                       return (
