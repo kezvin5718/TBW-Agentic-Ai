@@ -39,6 +39,30 @@ export default function CallsPage() {
   const [staff, setStaff] = useState<{ id: string; name: string | null }[]>([]);
   const [ready, setReady] = useState(true);
   const [loading, setLoading] = useState(true);
+  // The call-reading credit switch — state mirrors the WhatsApp Reader's panel.
+  const [aiOn, setAiOn] = useState<boolean | null>(null);
+  const [aiCanToggle, setAiCanToggle] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/call-reading", { cache: "no-store" });
+        if (res.ok) { const d = await res.json(); setAiOn(!!d.on); setAiCanToggle(!!d.canToggle); }
+      } catch { /* the page works without it */ }
+    })();
+  }, []);
+
+  const toggleAi = async () => {
+    if (aiOn === null || aiBusy) return;
+    const next = !aiOn;
+    if (!next && !window.confirm("Switch call reading off? Recordings can still be uploaded and stored, but nothing will be transcribed or drafted into tasks — and nothing will be spent — until it is switched back on.")) return;
+    setAiBusy(true);
+    try {
+      const res = await fetch("/api/call-reading", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on: next }) });
+      if (res.ok) setAiOn(next);
+    } finally { setAiBusy(false); }
+  };
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [openTranscript, setOpenTranscript] = useState<string | null>(null);
@@ -255,6 +279,31 @@ export default function CallsPage() {
           and nothing reaches the board until you approve it.
         </p>
       </div>
+
+      {/* The credit switch — recordings can still be stored while it is off;
+          only the transcription and task-drafting spend obeys it. */}
+      {aiOn !== null && (
+        <div className={`rounded-2xl border p-4 flex items-center justify-between gap-3 flex-wrap ${aiOn ? "bg-slate-950/60 border-slate-900" : "bg-amber-950/20 border-amber-900/50"}`}>
+          <div className="min-w-0">
+            <p className="text-xs font-bold text-white">Call reading {aiOn ? "is on" : "is off"}</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {aiOn
+                ? "Recordings are transcribed and their commitments drafted as tasks — this spends on every recording."
+                : "Nothing is transcribed and nothing is spent. Recordings can still be uploaded; switch on to process them."}
+            </p>
+          </div>
+          {aiCanToggle && (
+            <button onClick={toggleAi} disabled={aiBusy}
+              className={`min-h-[40px] lg:min-h-0 text-xs font-bold px-4 py-2 rounded-lg border cursor-pointer disabled:opacity-50 ${
+                aiOn
+                  ? "bg-slate-950 border-slate-800 text-slate-300 hover:text-white hover:border-rose-700"
+                  : "bg-emerald-600 border-emerald-500 text-white hover:bg-emerald-500"
+              }`}>
+              {aiBusy ? "…" : aiOn ? "Switch off" : "Switch on"}
+            </button>
+          )}
+        </div>
+      )}
 
       {!ready && (
         <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-3 text-xs text-amber-300 flex items-start gap-2">

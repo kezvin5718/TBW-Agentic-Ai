@@ -28,6 +28,12 @@ export async function sweepCallFolders(): Promise<{
 }> {
   const notes: string[] = [];
 
+  // The founder's credit switch — a sweep that transcribes nothing scans nothing.
+  const { isCallReadingOn } = await import("@/lib/call-reading-switch");
+  if (!(await isCallReadingOn())) {
+    return { scanned: 0, processed: 0, failed: 0, notes: ["Call reading is switched off — the sweep did not run."] };
+  }
+
   if (!process.env.OPENAI_API_KEY) {
     return { scanned: 0, processed: 0, failed: 0, notes: ["OPENAI_API_KEY is not set — nothing can be transcribed."] };
   }

@@ -287,6 +287,13 @@ async function parkInDrive(callId: string): Promise<void> {
 
 /** Transcribe then draft, recording failure on the row rather than throwing away. */
 export async function processCall(callId: string): Promise<{ ok: boolean; created: number; message: string }> {
+  // The founder's credit switch. The recording stays stored exactly as it is —
+  // switching back on and pressing process reads it then.
+  const { isCallReadingOn } = await import("@/lib/call-reading-switch");
+  if (!(await isCallReadingOn())) {
+    return { ok: false, created: 0, message: "Call reading is switched off to save credits. The founder can turn it back on from the Call Notes page." };
+  }
+
   const admin = createServiceRoleClient();
   const { data: call } = await admin.from("call_recordings").select("id, audio_url, drive_file_id").eq("id", callId).single();
   if (!call) return { ok: false, created: 0, message: "Recording not found." };
