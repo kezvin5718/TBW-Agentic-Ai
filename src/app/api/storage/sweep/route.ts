@@ -25,9 +25,10 @@ export async function POST(request: NextRequest) {
     success: true,
     dryRun: result.dryRun,
     summary: result.dryRun
-      ? `Would free ${mb(result.freedBytes)} — ${result.references.archived} reference image(s), ${result.social.archived} published post file(s).`
-      : `Freed ${mb(result.freedBytes)} — ${result.references.archived} reference image(s), ${result.social.archived} published post file(s) moved to Drive.`,
+      ? `Would free ${mb(result.freedBytes)} — ${result.references.archived} reference image(s), ${result.social.archived} published post file(s), ${result.orphans.archived} orphan mirror(s).`
+      : `Freed ${mb(result.freedBytes)} — ${result.references.archived} reference image(s), ${result.social.archived} published post file(s), ${result.orphans.archived} orphan mirror(s).`,
     references: result.references,
     social: result.social,
+    orphans: result.orphans,
   });
 }

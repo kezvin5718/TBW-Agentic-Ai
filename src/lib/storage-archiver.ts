@@ -206,13 +206,78 @@ export async function sweepPublishedSocialMedia(opts: { dryRun?: boolean; graceD
   return out;
 }
 
+/**
+ * Mirror files no post ever recorded — failed sends, abandoned stagings. The
+ * published-media pass above walks POSTS, so a file with no post row is
+ * invisible to it; this one walks the social/ folder itself and releases
+ * anything no social_posts row of any age or status references. drive- copies
+ * already have their original on Drive; anything else is archived first,
+ * exactly like the published pass.
+ */
+export async function sweepOrphanMirrors(opts: { dryRun?: boolean } = {}): Promise<SweepResult> {
+  const dryRun = !!opts.dryRun;
+  const out = empty(dryRun);
+  const admin = createServiceRoleClient();
+  const driveUp = await isDriveConnected();
+
+  const { data: posts, error } = await admin
+    .from("social_posts")
+    .select("media_url, thumbnail_url")
+    .limit(5000);
+  if (error) { out.errors.push(`Could not read posts: ${error.message}`); return out; }
+  const referenced = new Set<string>();
+  for (const p of posts || []) {
+    for (const u of [p.media_url as string | null, p.thumbnail_url as string | null]) {
+      const path = u && isSupabaseUrl(u) ? pathFromUrl(u) : null;
+      if (path) referenced.add(path);
+    }
+  }
+
+  for (let offset = 0; ; offset += 1000) {
+    const { data: files, error: listErr } = await admin.storage.from(BUCKET).list("social", { limit: 1000, offset });
+    if (listErr) { out.errors.push(`Could not list social/: ${listErr.message}`); break; }
+    for (const f of files || []) {
+      if (!f.id) continue;
+      const path = `social/${f.name}`;
+      if (referenced.has(path)) continue;
+      out.scanned++;
+      const size = Number((f.metadata as { size?: number } | null)?.size || 0);
+      if (dryRun) { out.archived++; out.freedBytes += size; continue; }
+
+      const alreadyInDrive = f.name.startsWith("drive-");
+      if (!alreadyInDrive) {
+        if (!driveUp) { out.skipped.push(`${path} (Drive not connected — keeping it)`); continue; }
+        const url = admin.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+        const buf = await fetchBytes(url);
+        if (!buf) { out.errors.push(`${path}: could not read from storage`); continue; }
+        const mime = /\.(mp4|mov|webm|mkv)$/i.test(f.name) ? "video/mp4" : "image/jpeg";
+        try {
+          await uploadImageToDrive(buf, f.name, mime, undefined, monthOf(f.created_at || new Date().toISOString()), PUBLISHED_ROOT);
+        } catch (err) {
+          out.errors.push(`${path}: Drive archive failed — ${err instanceof Error ? err.message : String(err)}`);
+          continue;
+        }
+      }
+
+      const { error: rmErr } = await admin.storage.from(BUCKET).remove([path]);
+      if (rmErr) out.errors.push(`${path}: ${rmErr.message}`);
+      else { out.archived++; out.freedBytes += size; }
+    }
+    if (!files || files.length < 1000) break;
+  }
+
+  return out;
+}
+
 export async function sweepAll(opts: { dryRun?: boolean } = {}) {
   const references = await sweepStudioReferences(opts);
   const social = await sweepPublishedSocialMedia(opts);
+  const orphans = await sweepOrphanMirrors(opts);
   return {
     references,
     social,
-    freedBytes: references.freedBytes + social.freedBytes,
+    orphans,
+    freedBytes: references.freedBytes + social.freedBytes + orphans.freedBytes,
     dryRun: !!opts.dryRun,
   };
 }

@@ -55,6 +55,7 @@ export default function IntegrationsPage() {
     dryRun: boolean; summary: string;
     references?: { skipped: string[]; errors: string[] };
     social?: { skipped: string[]; errors: string[] };
+    orphans?: { skipped: string[]; errors: string[] };
   }>(null);
 
   const runSweep = async (apply: boolean) => {
@@ -584,10 +585,10 @@ export default function IntegrationsPage() {
         {sweepResult && (
           <div className="p-3 bg-slate-950/40 border border-slate-900 rounded-xl text-[11px] space-y-1.5">
             <p className={sweepResult.dryRun ? "text-amber-300 font-bold" : "text-emerald-300 font-bold"}>{sweepResult.summary}</p>
-            {[...(sweepResult.references?.skipped || []), ...(sweepResult.social?.skipped || [])].slice(0, 6).map((sk: string, i: number) => (
+            {[...(sweepResult.references?.skipped || []), ...(sweepResult.social?.skipped || []), ...(sweepResult.orphans?.skipped || [])].slice(0, 6).map((sk: string, i: number) => (
               <p key={i} className="text-slate-500">· kept: {sk}</p>
             ))}
-            {[...(sweepResult.references?.errors || []), ...(sweepResult.social?.errors || [])].map((e: string, i: number) => (
+            {[...(sweepResult.references?.errors || []), ...(sweepResult.social?.errors || []), ...(sweepResult.orphans?.errors || [])].map((e: string, i: number) => (
               <p key={i} className="text-rose-400">· {e}</p>
             ))}
           </div>
