@@ -867,6 +867,9 @@ export default function SocialPublisherPage() {
   const [writeAllTotal, setWriteAllTotal] = useState(0);
   const [captionErrors, setCaptionErrors] = useState<Record<string, string>>({});
   const [regenId, setRegenId] = useState<string | null>(null);
+  // Which rows the current batch is writing RIGHT NOW — each card can say
+  // "Writing…" itself instead of leaving the team to divide a counter.
+  const [writingIds, setWritingIds] = useState<Set<string>>(new Set());
   // Which unblessed row is being thrown away right now.
   const [autoDeleting, setAutoDeleting] = useState<string | null>(null);
 
@@ -888,14 +891,15 @@ export default function SocialPublisherPage() {
    * The background writer this screen was built to wait on has never produced a
    * caption in production, so the team needs to be able to ask for them.
    */
-  const writeAllCaptions = async () => {
+  const writeAllCaptions = async (force = false) => {
     const todo = orderedRows
-      .filter((r) => r.content_type !== "story" && !(autoCaptions[r.id] ?? "").trim())
+      .filter((r) => r.content_type !== "story" && (force || !(autoCaptions[r.id] ?? "").trim()))
       .map((r) => r.id);
     if (todo.length === 0) {
       setNotice({ ok: true, text: "Every caption box already has something in it." });
       return;
     }
+    if (force && !confirm(`Rewrite all ${todo.length} caption(s)? What's in the boxes now is replaced.`)) return;
     setWriteAllBusy(true);
     setWriteAllDone(0);
     setWriteAllTotal(todo.length);
@@ -905,11 +909,14 @@ export default function SocialPublisherPage() {
     try {
       // Eight per request: each caption is a vision read plus a writing call,
       // and asking for many more than this outlives the request's own budget.
+      // Each video in the slice is still analysed and written INDIVIDUALLY on
+      // the server — the batch is a convenience, never a combined analysis.
       for (let i = 0; i < todo.length; i += 8) {
         const slice = todo.slice(i, i + 8);
+        setWritingIds(new Set(slice));
         const res = await fetch("/api/social-publisher/auto-captions", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ uploadIds: slice }),
+          body: JSON.stringify({ uploadIds: slice, force }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not write the captions");
@@ -930,7 +937,7 @@ export default function SocialPublisherPage() {
       });
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not write the captions" });
-    } finally { setWriteAllBusy(false); }
+    } finally { setWriteAllBusy(false); setWritingIds(new Set()); }
   };
 
   /**
@@ -2409,7 +2416,15 @@ export default function SocialPublisherPage() {
                 </div>
                 <div className="flex items-center gap-3 flex-wrap">
                   <span className="text-[10px] text-slate-600">Drag a row by ⠿ to reorder — the dates follow the sequence.</span>
-                  <button onClick={writeAllCaptions} disabled={writeAllBusy}
+                  {!writeAllBusy && orderedRows.some((r) => r.content_type !== "story" && (autoCaptions[r.id] ?? "").trim()) && (
+                    <button onClick={() => writeAllCaptions(true)}
+                      title="Analyse every creative again and rewrite every caption box"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg border border-slate-800 bg-slate-950 text-[11px] font-bold text-slate-300 hover:text-white hover:border-indigo-600 cursor-pointer">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Regenerate all</span>
+                    </button>
+                  )}
+                  <button onClick={() => writeAllCaptions(false)} disabled={writeAllBusy}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[11px] font-bold text-white cursor-pointer disabled:opacity-50">
                     {writeAllBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
                     <span>{writeAllBusy ? `writing ${writeAllDone} of ${writeAllTotal}…` : "Write all captions"}</span>
@@ -2525,8 +2540,21 @@ export default function SocialPublisherPage() {
                           {as === "both" && (
                             <p className="text-[10px] text-slate-600">This caption goes to the feed post only — the Story carries none.</p>
                           )}
-                          {captionErrors[r.id] && (
-                            <p className="text-[10px] text-amber-400">{captionErrors[r.id]}</p>
+                          {/* The row says where IT is — "writing 3 of 10" above
+                              never told anyone whose caption was in flight. */}
+                          {writingIds.has(r.id) && (
+                            <p className="text-[10px] text-indigo-300 inline-flex items-center gap-1">
+                              <Loader2 className="w-3 h-3 animate-spin" /> Analyzing the video and writing…
+                            </p>
+                          )}
+                          {captionErrors[r.id] && !writingIds.has(r.id) && (
+                            <p className="text-[10px] text-amber-400 flex items-center gap-2 flex-wrap">
+                              <span>Failed: {captionErrors[r.id]}</span>
+                              <button onClick={() => regenerateCaption(r.id)} disabled={regenId === r.id || writeAllBusy}
+                                className="font-bold text-rose-300 hover:text-white underline underline-offset-2 cursor-pointer disabled:opacity-50">
+                                Retry
+                              </button>
+                            </p>
                           )}
                         </div>
                       )}

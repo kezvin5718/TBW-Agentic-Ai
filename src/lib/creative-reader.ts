@@ -7,8 +7,16 @@ import { writeFile, readFile, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 
-/** Frames sampled across a video. One cover frame misses everything after it. */
-const VIDEO_FRAMES = 3;
+/**
+ * Frames sampled across a video. One cover frame misses everything after it;
+ * three missed the middle of anything long. Five is the floor (start, quarter,
+ * middle, three-quarter, end), and longer clips earn one more for every extra
+ * twenty seconds, capped where the vision call stops getting smarter.
+ */
+const MIN_FRAMES = 5;
+const MAX_FRAMES = 10;
+const frameCountFor = (durationSeconds: number) =>
+  Math.min(MAX_FRAMES, Math.max(MIN_FRAMES, Math.ceil(durationSeconds / 20) + 4));
 const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
 
 export interface CreativeReading {
@@ -72,10 +80,11 @@ async function videoFrames(buf: Buffer): Promise<string[]> {
     const dur = duration > 1 ? duration : 8;
 
     const out: string[] = [];
-    for (let i = 0; i < VIDEO_FRAMES; i++) {
+    const count = frameCountFor(dur);
+    for (let i = 0; i < count; i++) {
       // Spread across the middle of the clip, skipping the very first and last
       // moments — those are usually a fade or a logo sting.
-      const at = Math.min(dur - 0.2, Math.max(0.2, (dur * (i + 0.6)) / VIDEO_FRAMES));
+      const at = Math.min(dur - 0.2, Math.max(0.2, (dur * (i + 0.6)) / count));
       const framePath = `${base}-${i}.jpg`;
       made.push(framePath);
       try {
