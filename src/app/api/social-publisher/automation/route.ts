@@ -283,7 +283,7 @@ export async function POST(request: NextRequest) {
   const ids = items.map((i) => i.uploadId);
   const { data: uploads } = await admin
     .from("creative_uploads")
-    .select("id, file_url, media_type, content_type, status, qc_status, thumbnail_url")
+    .select("id, file_url, file_name, media_type, content_type, status, qc_status, thumbnail_url")
     .in("id", ids);
   const byId = new Map((uploads || []).map((u) => [u.id, u]));
 
