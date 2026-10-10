@@ -25,10 +25,11 @@ export const maxDuration = 300;
  * to say "none", and anything it is not sure of is left for a person. A wrong
  * cover on a live reel is worse than no cover, so the bot never guesses.
  *
- * Three jobs share this route, because they are one feature:
+ * Four jobs share this route, because they are one feature:
  *   - multipart { pool: true }        → store the covers, hand back { url, name }
  *   - JSON { clientId, videoIds, images } → the matcher
  *   - JSON { assign: { videoId, image } } → a person's override, no AI
+ *   - JSON { adopt: { clientId, images } } → the images no video claimed become posts
  */
 
 interface PoolImage { url: string; name: string }
@@ -255,6 +256,81 @@ export async function POST(request: NextRequest) {
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     const pair: Pair = { videoId, image, confidence: null };
     return NextResponse.json({ success: true, pair });
+  }
+
+  // ---- Adopt: an image no video claimed is a post ------------------------------
+  // One uploader takes any mix now, so a standalone graphic arrives in the same
+  // drop as the reels and their covers. It is already stored — the pool put it
+  // there — so it becomes a post by being recorded, not by going up again. The
+  // row is the one the main upload writes for an image post, and QC takes it
+  // from there like any other.
+  if (body.adopt && typeof body.adopt === "object") {
+    const a = body.adopt as { clientId?: unknown; images?: unknown; batchId?: unknown };
+    const clientId = String(a.clientId || "");
+    if (!clientId) return NextResponse.json({ error: "clientId required" }, { status: 400 });
+    const raw = Array.isArray(a.images) ? a.images : [];
+    if (raw.length === 0) return NextResponse.json({ error: "images required" }, { status: 400 });
+    if (raw.length > MAX_IMAGES) return NextResponse.json({ error: `Up to ${MAX_IMAGES} images at a time` }, { status: 400 });
+
+    // Same fence as the matcher: only files our own storage handed out. One
+    // stranger in the list and nothing is recorded — this is not a way to put
+    // an arbitrary URL into the hub.
+    const images: Array<PoolImage & { size: number | null }> = [];
+    for (const v of raw) {
+      const img = cleanImage(v);
+      if (!img) return NextResponse.json({ error: "One of those images is not one of our stored files" }, { status: 400 });
+      if (images.some((x) => x.url === img.url)) continue;
+      const size = Number((v as { size?: unknown }).size);
+      images.push({ ...img, size: Number.isFinite(size) && size > 0 ? Math.round(size) : null });
+    }
+
+    const { data: client } = await admin.from("clients").select("id").eq("id", clientId).maybeSingle();
+    if (!client) return NextResponse.json({ error: "Client not found" }, { status: 404 });
+
+    // Files chosen together share a batch, as on the main upload — the posts
+    // went up in the same drop as the reels.
+    const batchId = typeof a.batchId === "string" && /^[0-9a-f-]{36}$/i.test(a.batchId) ? a.batchId : null;
+
+    // A second click must not make a second post, and a file that is a video's
+    // cover is not also a post — one cover, one video.
+    const urls = images.map((i) => i.url);
+    const [{ data: asPosts }, { data: asCovers }] = await Promise.all([
+      admin.from("creative_uploads").select("file_url").in("file_url", urls),
+      admin.from("creative_uploads").select("thumbnail_url").in("thumbnail_url", urls),
+    ]);
+    const already = new Set((asPosts || []).map((r) => r.file_url as string));
+    const covering = new Set((asCovers || []).map((r) => r.thumbnail_url as string));
+    const skipped: Array<{ url: string; name: string; reason: string }> = [];
+    const toAdopt = images.filter((img) => {
+      if (already.has(img.url)) { skipped.push({ url: img.url, name: img.name, reason: "already a post" }); return false; }
+      if (covering.has(img.url)) { skipped.push({ url: img.url, name: img.name, reason: "is a video's cover" }); return false; }
+      return true;
+    });
+    if (toAdopt.length === 0) return NextResponse.json({ success: true, uploads: [], skipped });
+
+    const { data: rows, error } = await admin
+      .from("creative_uploads")
+      .insert(
+        toAdopt.map((img) => ({
+          client_id: clientId,
+          uploaded_by: user.id,
+          file_url: img.url,
+          file_name: img.name,
+          file_size: img.size,
+          media_type: "image",
+          content_type: "post",
+          caption: "",
+          thumbnail_url: null,
+          thumbnail_name: null,
+          festival_id: null,
+          batch_id: batchId,
+          status: "uploaded",
+          qc_status: "pending",
+        }))
+      )
+      .select("*, clients(name), profiles:uploaded_by(name, avatar_url, designation)");
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, uploads: rows || [], skipped });
   }
 
   // ---- Matcher ----------------------------------------------------------------
