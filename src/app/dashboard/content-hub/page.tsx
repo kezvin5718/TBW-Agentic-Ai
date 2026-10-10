@@ -22,6 +22,8 @@ interface UploadRow {
   qc_detected_festival?: string | null;
   qc_note?: string | null;
   uploaded_by?: string | null;
+  thumbnail_url?: string | null;
+  thumbnail_name?: string | null;
   created_at: string;
   clients?: { name: string } | null;
   profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
@@ -60,6 +62,27 @@ const norm = (s: string) => s.trim().toLowerCase();
 const BATCH_MAX = 10;
 type HubTab = "regular" | "festivals";
 interface BatchOutcome { id: string; file_name: string | null; scheduled: boolean; platforms: number; notes: string[] }
+/**
+ * Covers paired by sight. A video editor's delivery is nine reels and nine
+ * covers in one drop; the covers are not posts, they belong on the reels. The
+ * same test the upload route uses for media_type decides what is a video, so
+ * the page and the record never disagree about which file is which.
+ */
+const isVideoFile = (f: File) => (f.type || "").startsWith("video") || /\.(mp4|mov|avi|mkv|webm)$/i.test(f.name);
+/** Only a post or reel drop pairs covers — a Story has no cover to give it. */
+const COVER_TYPES = ["post", "reel"];
+const isMixedDrop = (key: string, files: File[]) =>
+  COVER_TYPES.includes(key) && files.some(isVideoFile) && files.some((f) => !isVideoFile(f));
+interface PoolImage { url: string; name: string }
+interface CoverCard {
+  id: string;
+  file_name: string | null;
+  file_url: string;
+  image: PoolImage | null;
+  /** How the cover got there — the card says so, because "by sight" is a claim a person may want to check. */
+  how: "sight" | "hand" | "existing" | null;
+  note?: string;
+}
 const isDriveUrl = (u: string) => u.includes("googleusercontent.com");
 const driveOpen = (u: string) => {
   const m = u.match(/googleusercontent\.com\/d\/([^=/?]+)/);
@@ -242,6 +265,148 @@ export default function ContentHubPage() {
 
   const [uploadCount, setUploadCount] = useState<{ done: number; total: number } | null>(null);
 
+  // --- Covers by sight ------------------------------------------------------------
+  // The cards for the videos of the last mixed drop, in the order they went up,
+  // and every cover that came with them. "down" means the matcher could not
+  // run at all — nothing is lost, every card just asks a person instead.
+  const [coverCards, setCoverCards] = useState<CoverCard[]>([]);
+  const [coverPool, setCoverPool] = useState<PoolImage[]>([]);
+  const [coverState, setCoverState] = useState<"matching" | "done" | "down" | null>(null);
+  const [coverBusy, setCoverBusy] = useState<string | null>(null);
+  const coverHolders = new Map(coverCards.filter((c) => c.image).map((c) => [c.image!.url, c.id]));
+  const leftoverCovers = coverPool.filter((img) => !coverHolders.has(img.url));
+
+  /**
+   * A mixed drop: the videos go up exactly as they always have, the images go
+   * to the cover pool instead of becoming posts, and the matcher pairs them by
+   * looking. A video it is not sure about is left without a cover and flagged
+   * on its card — never given a frame-grab instead.
+   */
+  const doMixedUpload = async (contentType: string, files: File[]) => {
+    const videos = files.filter(isVideoFile);
+    const images = files.filter((f) => !isVideoFile(f));
+    setError(null);
+    setSuccess(null);
+    setUploadingType(contentType);
+    const batchId = crypto.randomUUID();
+    const total = files.length;
+    const fresh: CoverCard[] = [];
+    const failed: string[] = [];
+    const failedNames: string[] = [];
+    for (let i = 0; i < videos.length; i++) {
+      setUploadCount({ done: i, total });
+      try {
+        const fd = new FormData();
+        fd.append("file", videos[i]);
+        fd.append("clientId", selectedClient);
+        fd.append("contentType", contentType);
+        fd.append("batchId", batchId);
+        const res = await fetch("/api/content-hub", { method: "POST", body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Upload failed");
+        const row = data.upload as UploadRow;
+        fresh.push({ id: row.id, file_name: row.file_name, file_url: row.file_url, image: null, how: null });
+      } catch (err: unknown) {
+        failed.push(`${videos[i].name} (${err instanceof Error ? err.message : "failed"})`);
+        failedNames.push(videos[i].name);
+      }
+    }
+    // One request per cover so the count keeps moving on a nine-cover drop.
+    const pool: PoolImage[] = [];
+    const poolFailed: string[] = [];
+    for (let j = 0; j < images.length; j++) {
+      setUploadCount({ done: videos.length + j, total });
+      try {
+        const fd = new FormData();
+        fd.append("pool", "true");
+        fd.append("clientId", selectedClient);
+        fd.append("files[]", images[j]);
+        const res = await fetch("/api/content-hub/match-thumbnails", { method: "POST", body: fd });
+        const data = await res.json();
+        if (!res.ok || !data.images?.length) throw new Error(data.error || "Upload failed");
+        pool.push(...(data.images as PoolImage[]));
+      } catch (err: unknown) {
+        poolFailed.push(`${images[j].name} (${err instanceof Error ? err.message : "failed"})`);
+      }
+    }
+    setUploadCount(null);
+    setUploadingType(null);
+    setCoverPool(pool);
+    setCoverCards(fresh);
+    await fetchUploads();
+    runQc(); // brand-check the fresh videos in the background, same as always
+
+    const problems = [
+      ...(failed.length ? [`${failed.length} video${failed.length > 1 ? "s" : ""} failed: ${failed.slice(0, 3).join("; ")}${failed.length > 3 ? "…" : ""}`] : []),
+      ...(poolFailed.length ? [`${poolFailed.length} cover${poolFailed.length > 1 ? "s" : ""} could not be stored: ${poolFailed.slice(0, 3).join("; ")}${poolFailed.length > 3 ? "…" : ""}`] : []),
+    ];
+    if (problems.length) setError(problems.join(" · "));
+
+    if (fresh.length === 0) { setCoverState(null); return failedNames; }
+    if (pool.length === 0) {
+      // Nothing to pair with — every card simply waits for a cover.
+      setCoverState("done");
+      return failedNames;
+    }
+
+    setCoverState("matching");
+    setSuccess(`Uploaded ${fresh.length} video${fresh.length > 1 ? "s" : ""} as ${contentType}; ${pool.length} image${pool.length > 1 ? "s are" : " is"} held as covers, not posts. Matching covers by sight…`);
+    try {
+      const res = await fetch("/api/content-hub/match-thumbnails", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: selectedClient, videoIds: fresh.map((c) => c.id), images: pool }),
+      });
+      const data = await res.json();
+      if (!res.ok || !Array.isArray(data.pairs)) throw new Error(data.error || "Matcher failed");
+      const byVideo = new Map(
+        (data.pairs as Array<{ videoId: string; image: PoolImage | null; confidence: "high" | "low" | null; note?: string }>)
+          .map((p) => [p.videoId, p])
+      );
+      const matched = fresh.map((c): CoverCard => {
+        const p = byVideo.get(c.id);
+        if (!p) return c;
+        return {
+          ...c,
+          image: p.image,
+          how: p.image ? (p.confidence === "high" ? "sight" : "existing") : null,
+          note: p.note,
+        };
+      });
+      setCoverCards(matched);
+      setCoverState("done");
+      const paired = matched.filter((c) => c.image).length;
+      const waiting = matched.length - paired;
+      setSuccess(`Covers: ${paired} paired by sight${waiting ? `, ${waiting} need${waiting === 1 ? "s" : ""} one picked by hand` : ""}. Brand QC is checking the videos now…`);
+    } catch {
+      // Degrade, don't lose: the videos are up, the covers are in the pool,
+      // and every card offers the full list by hand.
+      setCoverState("down");
+      setSuccess(`Uploaded ${fresh.length} video${fresh.length > 1 ? "s" : ""} and ${pool.length} cover${pool.length > 1 ? "s" : ""}. The cover matcher is unavailable — pick each cover below.`);
+    }
+    return failedNames;
+  };
+
+  /** A person's pick, or clearing one. Same route, no AI. */
+  const assignCover = async (videoId: string, url: string) => {
+    const image = url ? coverPool.find((i) => i.url === url) || null : null;
+    setCoverBusy(videoId);
+    try {
+      const res = await fetch("/api/content-hub/match-thumbnails", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assign: { videoId, image } }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not set the cover");
+      setCoverCards((cards) => cards.map((c) => (c.id === videoId ? { ...c, image, how: image ? "hand" : null, note: undefined } : c)));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not set the cover");
+    } finally {
+      setCoverBusy(null);
+    }
+  };
+
   // Upload one or many files. Files are naturally sorted by their filename
   // numbering (1, 2, … 9, 10 — not 1, 10, 2) and uploaded sequentially so the
   // sequence is preserved for the social team.
@@ -253,6 +418,9 @@ export default function ContentHubPage() {
       return;
     }
     files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+    // Videos and images together on a post or reel card are reels and their
+    // covers. Anything else carries on below exactly as it always has.
+    if (isMixedDrop(contentType, files)) return doMixedUpload(contentType, files);
 
     setError(null);
     setSuccess(null);
@@ -573,13 +741,19 @@ export default function ContentHubPage() {
           {TYPES.map(({ key, label, Icon, desc, size, formats, accent }) => {
             const a = ACCENT[accent];
             const busy = uploadingType === key;
+            const mixed = isMixedDrop(key, staged[key] || []);
+            const stagedVideos = (staged[key] || []).filter(isVideoFile).length;
+            const stagedCovers = (staged[key]?.length || 0) - stagedVideos;
             // Match on extension as well as MIME. Listing MIME types alone
             // greys the file out in the picker whenever the OS reports
             // something unexpected — an .mp4 as application/octet-stream, a
             // .mov as video/x-quicktime — which reads as "I can't select my
             // video at all", and nothing ever reaches the staging list.
+            //
+            // The reel card takes images too now: an editor's reels arrive
+            // with their covers, and the covers are picked in the same go.
             const accept =
-              key === "reel" ? `${VIDEO_MIME},${VIDEO_EXT}`
+              key === "reel" ? `${VIDEO_MIME},${VIDEO_EXT},image/*,${IMAGE_EXT}`
               : key === "thumbnail" ? `image/*,${IMAGE_EXT}`
               : `image/*,${VIDEO_MIME},${IMAGE_EXT},${VIDEO_EXT}`;
             return (
@@ -647,6 +821,13 @@ export default function ContentHubPage() {
                       })}
                     </div>
                   )}
+                  {/* Said before the click, not after — the images in this
+                      drop will not become posts. */}
+                  {mixed && (
+                    <p className="text-[10px] text-indigo-300/90 leading-snug">
+                      Videos + images: the {stagedCovers} image{stagedCovers > 1 ? "s" : ""} will be matched to the videos by sight as covers — not posted on their own.
+                    </p>
+                  )}
                   <div className="flex gap-2">
                     <button
                       type="button"
@@ -664,6 +845,8 @@ export default function ContentHubPage() {
                         ? "⬆ Upload (pick a client above first)"
                         : (staged[key]?.length || 0) === 0
                         ? "⬆ Upload (add files first)"
+                        : mixed
+                        ? `⬆ Upload ${stagedVideos} video${stagedVideos > 1 ? "s" : ""} + ${stagedCovers} cover${stagedCovers > 1 ? "s" : ""} & match`
                         : `⬆ Upload ${staged[key].length} file${staged[key].length > 1 ? "s" : ""} & run QC`}
                     </button>
                     {(staged[key]?.length || 0) > 0 && (
@@ -680,6 +863,110 @@ export default function ContentHubPage() {
             );
           })}
         </div>
+
+        {/* Covers — one card per video from the last mixed drop, in the order
+            they went up. A card is either paired (and says how), or flagged
+            amber for a person. Nothing here ever invents a cover. */}
+        {coverCards.length > 0 && (
+          <div className="mt-5 pt-4 border-t border-slate-900 space-y-3">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="flex items-center space-x-2 min-w-0">
+                <ImageIcon className="w-5 h-5 text-indigo-400 shrink-0" />
+                <div className="min-w-0">
+                  <h4 className="text-sm font-bold text-white">Covers — paired by sight</h4>
+                  <p className="text-[11px] text-slate-500">
+                    {coverState === "matching"
+                      ? "Looking at each video beside the covers…"
+                      : `${coverCards.filter((c) => c.image).length} of ${coverCards.length} paired · ${leftoverCovers.length} cover${leftoverCovers.length === 1 ? "" : "s"} unassigned`}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={coverState === "matching" || !!coverBusy}
+                onClick={() => { setCoverCards([]); setCoverPool([]); setCoverState(null); }}
+                title="Clears these cards. Covers already set stay on the videos."
+                className="px-3 py-2 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-xs font-bold cursor-pointer disabled:opacity-40"
+              >
+                Done
+              </button>
+            </div>
+
+            {coverState === "down" && (
+              <p className="text-[11px] text-amber-300 leading-snug">
+                The cover matcher is unavailable right now. The videos and covers are all uploaded — pick each video&apos;s cover from its list.
+              </p>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {coverCards.map((c) => {
+                const matching = coverState === "matching";
+                const flagged = !matching && !c.image;
+                const busyHere = coverBusy === c.id;
+                return (
+                  <div
+                    key={c.id}
+                    className={`rounded-xl border p-3 flex gap-3 min-w-0 ${flagged ? "border-amber-700/70 bg-amber-950/10" : "border-slate-800 bg-slate-950/60"}`}
+                  >
+                    <div className="w-16 h-28 shrink-0 rounded-lg overflow-hidden bg-slate-900 border border-slate-800">
+                      {c.image ? (
+                        <a href={driveOpen(c.image.url)} target="_blank" rel="noreferrer" title={`Cover: ${c.image.name}`}>
+                          <img src={c.image.url} alt={c.image.name} className="w-full h-full object-cover" />
+                        </a>
+                      ) : (
+                        <a href={driveOpen(c.file_url)} target="_blank" rel="noreferrer" title="Open video" className="w-full h-full flex items-center justify-center text-slate-500 hover:text-indigo-400">
+                          <Film className="w-5 h-5" />
+                        </a>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <p className="text-[11px] text-slate-300 font-bold break-all">{c.file_name}</p>
+
+                      {matching ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-slate-500">
+                          <Loader2 className="w-3 h-3 animate-spin" /> Matching covers…
+                        </span>
+                      ) : c.image ? (
+                        <div className="space-y-1 min-w-0">
+                          <span title={c.note || ""} className="inline-block px-2 py-0.5 rounded-full bg-indigo-950/40 border border-indigo-900 text-indigo-300 text-[10px] font-bold">
+                            {c.how === "sight" ? "✓ Matched by sight" : c.how === "hand" ? "✓ Picked by hand" : "✓ Has a cover"}
+                          </span>
+                          <p className="text-[10px] text-slate-500 break-all">{c.image.name}</p>
+                        </div>
+                      ) : (
+                        <span
+                          title={c.note || ""}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-950/40 border border-amber-800 text-amber-300 text-[10px] font-bold ${c.note ? "cursor-help" : ""}`}
+                        >
+                          <AlertTriangle className="w-3 h-3" /> Pick thumbnail
+                        </span>
+                      )}
+
+                      {!matching && (
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={c.image?.url || ""}
+                            onChange={(e) => assignCover(c.id, e.target.value)}
+                            disabled={!!coverBusy}
+                            aria-label={c.image ? "Change cover" : "Pick thumbnail"}
+                            className={`w-full min-w-0 min-h-[40px] lg:min-h-0 bg-slate-900/60 border rounded-lg py-1.5 px-2 text-xs text-white focus:outline-none focus:border-indigo-500 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
+                              flagged ? "border-amber-700" : "border-slate-800"
+                            }`}
+                          >
+                            <option value="">{c.image ? "No cover (remove)" : "Pick thumbnail…"}</option>
+                            {c.image && <option value={c.image.url}>{c.image.name}</option>}
+                            {leftoverCovers.map((img) => <option key={img.url} value={img.url}>{img.name}</option>)}
+                          </select>
+                          {busyHere && <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       </>)}
