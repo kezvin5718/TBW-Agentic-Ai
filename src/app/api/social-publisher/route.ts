@@ -199,6 +199,12 @@ export async function POST(request: NextRequest) {
   if (contentTypes.includes("reel") && !mediaIsVideo) {
     return NextResponse.json({ error: "Reel needs an actual video — the media given is an image. Upload a video, or drop Reel from the content types." }, { status: 400 });
   }
+  // RecurPost requires a description on posts and reels, and when it gets an
+  // empty one it answers only "Bad Request Please try again later" — which is
+  // how the 10 Oct Shri reel burned six sends. Only a Story is captionless.
+  if (contentTypes.some((t) => t !== "story") && !String(caption || "").trim() && !String(title || "").trim()) {
+    return NextResponse.json({ error: "This post has no caption. Write one or press ✨ to generate it — only Stories go out without a caption. Nothing was sent." }, { status: 400 });
+  }
   if (!isRecurPostConfigured()) {
     return NextResponse.json({ error: "RecurPost is not configured — add RECURPOST_EMAIL and RECURPOST_API_KEY to the server .env and redeploy." }, { status: 400 });
   }

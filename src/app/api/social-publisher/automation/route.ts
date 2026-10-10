@@ -350,6 +350,22 @@ export async function POST(request: NextRequest) {
     return days;
   });
 
+  // RecurPost refuses a caption-less post or reel with an opaque 400, so the
+  // refusal happens here instead, naming the files, before anything is sent.
+  // Stories — born or converted — are the only captionless sends.
+  const missingCaption = occurrences.filter((o) => {
+    const u = byId.get(o.uploadId);
+    if (!u) return false;
+    const ct = o.asStory ? "story" : (u.content_type || "post");
+    return ct !== "story" && !String(o.caption || "").trim();
+  });
+  if (missingCaption.length > 0) {
+    const names = [...new Set(missingCaption.map((o) => byId.get(o.uploadId)?.file_name || "a creative"))];
+    return NextResponse.json({
+      error: `${names.length} creative(s) have no caption: ${names.slice(0, 5).join(", ")}${names.length > 5 ? "…" : ""}. Write or generate captions first — only Stories go out without one. Nothing was sent.`,
+    }, { status: 400 });
+  }
+
   // A video that could not be prepared once will not be prepared on its second
   // day either. Remembered so a repeated story is tried — and reported — once,
   // not once per day.
