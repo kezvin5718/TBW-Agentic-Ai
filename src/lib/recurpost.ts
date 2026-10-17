@@ -34,7 +34,26 @@ export async function rpCall<T = Record<string, unknown>>(endpoint: string, para
 
 export const verifyLogin = () => rpCall("/api/user_login");
 export const listSocialAccounts = () => rpCall("/api/social_account_list");
-export const postContent = (params: Record<string, unknown>) => rpCall("/api/post_content", params);
+
+/**
+ * How long a freshly staged file gets to settle before the one retry.
+ *
+ * A platform can fetch a video within a second or two of the staging copy
+ * finishing and catch it incomplete — Facebook then answers "the URL was
+ * reachable but the file could not be processed", and the identical bytes
+ * sail through moments later (17 Oct: the same Silbells reel failed as a FB
+ * reel at :08 and was accepted as a FB story at :12). That one answer earns
+ * a pause and exactly one more try; every other failure reports as it came.
+ */
+const SETTLE_MS = 8000;
+export async function postContent(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const res = await rpCall("/api/post_content", params);
+  if (JSON.stringify(res).includes("could not be processed")) {
+    await new Promise((r) => setTimeout(r, SETTLE_MS));
+    return rpCall("/api/post_content", params);
+  }
+  return res;
+}
 
 /**
  * What actually happened to an account's posts.
