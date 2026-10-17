@@ -7,6 +7,7 @@ import { fmtIST, fmtISTDate, istToday, istWallClockToUtc, IST_TZ } from "@/lib/t
 import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2, Pencil, X, FolderOpen, Film, Plus, Layers, Wand2, Copy } from "lucide-react";
 import PlatformIcon, { postLabel, PLATFORM_LABEL } from "./PlatformIcon";
 import { uploadDirect } from "@/lib/direct-upload";
+import SocialConnections from "./SocialConnections";
 
 /** One creative's answer from the caption writer. */
 interface CaptionResult { id: string; ok: boolean; caption?: string; error?: string }
@@ -3431,6 +3432,9 @@ export default function SocialPublisherPage() {
           </div>
         </div>
       )}
+
+      {/* Health board for every client × platform mapping */}
+      <SocialConnections />
     </div>
   );
 }
