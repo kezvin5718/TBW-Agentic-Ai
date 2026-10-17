@@ -44,6 +44,9 @@ export type SectionKey = (typeof SECTIONS)[number]["key"];
 export const SECTION_BY_PREFIX: Record<string, string> = {
   ...Object.fromEntries(SECTIONS.map((s) => [s.path, s.key])),
   "/dashboard/whatsapp-inbox": "task-manager",
+  // The connections board follows Social Publisher's grant: whoever may send
+  // posts may see why one failed.
+  "/dashboard/social-connections": "social-publisher",
   // 5b Plan → Posts (and the old kanban route) keep following section 5's grant.
   "/dashboard/production": "production",
 };

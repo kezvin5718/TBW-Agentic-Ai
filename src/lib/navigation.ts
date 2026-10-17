@@ -87,6 +87,7 @@ export const NAVIGATION: NavSection[] = [
       { id: "plan-posts", label: "Content Planner", href: "/dashboard/production/plan-posts", icon: "Wand2", roles: STAFF },
       { id: "festivals", label: "Festival & Moments Calendar", href: "/dashboard/festivals", icon: "Sparkles", roles: STAFF },
       { id: "social-publisher", label: "Social Publisher", href: "/dashboard/social-publisher", icon: "Send", roles: STAFF },
+      { id: "social-connections", label: "Social Connections", href: "/dashboard/social-connections", icon: "Share2", roles: STAFF },
     ],
   },
   {

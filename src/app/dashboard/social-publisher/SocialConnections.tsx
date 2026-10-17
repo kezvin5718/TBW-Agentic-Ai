@@ -45,10 +45,11 @@ interface Board {
 
 const shortDate = (d: string | null) => (d ? fmtISTDate(d).replace(/ \d{4}$/, "") : "—");
 
-export default function SocialConnections() {
+export default function SocialConnections({ standalone = false }: { standalone?: boolean }) {
   // Collapsed until someone opens it; remembered after that, like the task
-  // board's Completed strip — whoever checks this daily shouldn't re-open it daily.
-  const [open, setOpen] = useState(false);
+  // board's Completed strip — whoever checks this daily shouldn't re-open it
+  // daily. As its own page (standalone) it is simply always open.
+  const [open, setOpen] = useState(standalone);
   const [board, setBoard] = useState<Board | null>(null);
   const [loading, setLoading] = useState<"plain" | "probe" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +57,9 @@ export default function SocialConnections() {
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
+    if (standalone) return;
     try { if (localStorage.getItem(OPEN_KEY) === "1") setOpen(true); } catch { /* private mode */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggle = () => {
