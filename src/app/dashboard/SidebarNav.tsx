@@ -255,7 +255,9 @@ export default function SidebarNav({ sections, name, email, designation, avatarU
                   onClick={() => setOpenIds((prev) => ({ ...prev, [section.id]: !prev[section.id] }))}
                   aria-expanded={expanded}
                   aria-controls={listId}
-                  className="w-full flex items-center gap-2 px-3 min-h-[36px] rounded-lg text-[10px] font-bold text-slate-500 uppercase tracking-wider hover:text-slate-300 hover:bg-slate-900/40 cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
+                  // font-black + a touch more size and contrast than the items:
+                  // the founder couldn't tell section titles from their entries.
+                  className="w-full flex items-center gap-2 px-3 min-h-[36px] rounded-lg text-[11px] font-black text-slate-300 uppercase tracking-widest hover:text-white hover:bg-slate-900/40 cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
                 >
                   <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
                   <SectionIcon className="w-3.5 h-3.5 shrink-0" />
