@@ -847,6 +847,14 @@ export default function SocialPublisherPage() {
   // entry means Feed — the row goes out exactly as it was uploaded. The server
   // unrolls the Story pass from this row's slot, like a repeat.
   const [autoAs, setAutoAs] = useState<Record<string, "feed" | "story" | "both">>({});
+  // The client's calendar as it stood when the list loaded: every IST day from
+  // today on that already holds a feed post or reel. The sequence steps over
+  // these; a date set by hand on one is warned about, never moved.
+  const [autoOccupied, setAutoOccupied] = useState<string[]>([]);
+  // Where the start date came from on this load — what the banner explains.
+  // `start` is what was set, so a start picked by hand afterwards (which this
+  // never fights) retires the explanation instead of leaving it stale.
+  const [autoStartNote, setAutoStartNote] = useState<{ last: string | null; start: string } | null>(null);
   // Gap between posts that land on the same day. Null means nobody is spaced
   // automatically and the times on the rows are the only source.
   const [gapMins, setGapMins] = useState<number | null>(5);
@@ -984,7 +992,7 @@ export default function SocialPublisherPage() {
   }, []);
 
   const loadAutomation = useCallback(async (clientId: string, mode: "clear" | "risk" = "clear") => {
-    if (!clientId) { setAutoRows([]); setDriveDown(false); return; }
+    if (!clientId) { setAutoRows([]); setDriveDown(false); setAutoOccupied([]); setAutoStartNote(null); return; }
     setAutoLoading(true);
     try {
       const res = await fetch(`/api/social-publisher/automation?clientId=${clientId}${mode === "risk" ? "&risk=1" : ""}`);
@@ -1003,6 +1011,24 @@ export default function SocialPublisherPage() {
       setAutoRepeat({});
       setAutoAs({});
       setAutoSkip(new Set());
+      // The sequence continues the calendar instead of starting from today by
+      // reflex: the day after this client's last occupied day, never earlier
+      // than tomorrow. Set here, once per load — client change, mode switch,
+      // reload — and nowhere else, so a start the team then picks by hand
+      // stands until the list is loaded again.
+      const occupied = Array.isArray(data.occupiedDays) ? (data.occupiedDays as string[]) : [];
+      const last = typeof data.lastOccupied === "string" ? data.lastOccupied : null;
+      const plusDays = (day: string, n: number) => {
+        const [y, m, d] = day.split("-").map(Number);
+        return new Date(Date.UTC(y, (m || 1) - 1, (d || 1) + n)).toISOString().slice(0, 10);
+      };
+      const tomorrow = plusDays(istToday(), 1);
+      const after = last ? plusDays(last, 1) : tomorrow;
+      // "YYYY-MM-DD" strings compare as dates.
+      const start = after > tomorrow ? after : tomorrow;
+      setAutoOccupied(occupied);
+      setAutoStart(start);
+      setAutoStartNote({ last, start });
       // Deliberately not awaited: the list is already usable, and a slow Drive
       // is not allowed to hold it back.
       setDriveDown(false);
@@ -1059,7 +1085,25 @@ export default function SocialPublisherPage() {
     return { time: `${pad2(Math.floor(total / 60))}:${pad2(total % 60)}`, clamped: false };
   };
 
-  interface Slot { date: string; time: string; nthOfDay: number; outOfOrder: boolean; clamped: boolean; manualTime: boolean; collides: boolean }
+  interface Slot { date: string; time: string; nthOfDay: number; outOfOrder: boolean; clamped: boolean; manualTime: boolean; collides: boolean; occupied: boolean }
+
+  /** A calendar date moved on by whole days — the same sum the server does. */
+  const shiftYmd = (date: string, days: number) => {
+    const [y, m, d] = date.split("-").map(Number);
+    return new Date(Date.UTC(y, (m || 1) - 1, (d || 1) + days)).toISOString().slice(0, 10);
+  };
+  /** "2026-10-07" → "7 Oct". Already an IST calendar date, so read as-is. */
+  const dayLabel = (date: string) =>
+    new Date(`${date}T00:00:00Z`).toLocaleDateString("en-IN", { timeZone: "UTC", day: "numeric", month: "short" });
+  /** Where this row goes. Only a post or a reel can be re-routed; the rest go as uploaded. */
+  const sendAsOf = (r: AutoRow): "feed" | "story" | "both" =>
+    (r.content_type === "post" || r.content_type === "reel") ? (autoAs[r.id] ?? "feed") : "feed";
+  /**
+   * Whether this row takes a day on the calendar — the same test the server's
+   * guard applies. A story, or a post going out as a Story only, holds none.
+   */
+  const occupiesDay = (r: AutoRow) => r.content_type !== "story" && sendAsOf(r) !== "story";
+  const occupiedSet = useMemo(() => new Set(autoOccupied), [autoOccupied]);
 
   /**
    * The whole schedule, worked out in one pass.
@@ -1088,24 +1132,39 @@ export default function SocialPublisherPage() {
     const out: Record<string, Slot> = {};
     const usedPerDay: Record<string, number> = {};
     let prev: Date | null = null;
+    // A day the client's calendar already holds is stepped over, by the same
+    // stride that produced it, so the rhythm survives: daily 16, 17, [18], 19;
+    // alternate 16, [18], 20. Capped at a year of steps so a calendar booked
+    // solid can only ever cost a loop, never a hang.
+    const freeFrom = (day: string, stride: number) => {
+      let d = day;
+      for (let k = 0; k < 366 && occupiedSet.has(d); k++) d = shiftYmd(d, stride);
+      return d;
+    };
 
     for (const r of orderedRows) {
       if (autoSkip.has(r.id)) continue;
 
+      // Stories hold no day, so they take the sequence's date exactly as they
+      // always did and never consult the calendar.
+      const skips = occupiesDay(r);
       let date = "";
+      // A date set by hand is the human's call and is never moved — if it sits
+      // on an occupied day, the row says so instead (see `occupied`).
       if (autoDates[r.id]) date = autoDates[r.id];
       // Manual is the "several videos in one day" mode: everything lands on the
       // chosen date and the gap spreads the times across it. It used to leave
       // every date blank, so nothing was sendable until each row was typed out
       // by hand — which is the work this screen exists to remove.
-      else if (cadence === "manual") date = autoStart;
-      else if (!prev) date = autoStart;
+      else if (cadence === "manual") date = skips ? freeFrom(autoStart, 1) : autoStart;
+      else if (!prev) date = skips ? freeFrom(autoStart, 1) : autoStart;
       else {
         const d = new Date(prev);
         d.setDate(d.getDate() + cadenceStep);
-        date = ymd(d);
+        date = skips ? freeFrom(ymd(d), cadenceStep) : ymd(d);
       }
       if (!date) continue;
+      const occupied = skips && occupiedSet.has(date);
 
       const asDate = new Date(`${date}T00:00:00`);
       // Moving a post before the one above it is allowed — sometimes you do
@@ -1126,12 +1185,20 @@ export default function SocialPublisherPage() {
       // post above it — worth saying, since both would fire together.
       const collides = !ownTime && gapMins === null && nth > 0;
 
-      out[r.id] = { date, time, nthOfDay: nth, outOfOrder, clamped, manualTime: !!ownTime, collides };
+      out[r.id] = { date, time, nthOfDay: nth, outOfOrder, clamped, manualTime: !!ownTime, collides, occupied };
       prev = asDate;
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderedRows, autoSkip, autoDates, autoTimes, autoStart, autoTime, cadence, cadenceStep, gapMins]);
+  }, [orderedRows, autoSkip, autoDates, autoTimes, autoStart, autoTime, cadence, cadenceStep, gapMins, occupiedSet, autoAs]);
+
+  // The calendar span the batch will actually cover, read off the final slots
+  // — skips, hand-set dates and all — so it can be checked before sending.
+  const autoSpan = (() => {
+    const days = Object.values(schedule).map((s) => s.date).sort();
+    return days.length ? { first: days[0], last: days[days.length - 1] } : null;
+  })();
+  const autoOnOccupied = Object.values(schedule).filter((s) => s.occupied).length;
 
   const autoReady = orderedRows.filter((r) => !!schedule[r.id]);
   const autoSameDay = Object.values(schedule).filter((s) => s.nthOfDay > 0).length;
@@ -1144,17 +1211,6 @@ export default function SocialPublisherPage() {
   const clampTimes = (n: number) => (!n ? 7 : Math.min(30, Math.max(2, Math.round(n))));
   /** This row's repeat, if it is a story that has one. Nothing else repeats. */
   const repeatOf = (r: AutoRow) => (r.content_type === "story" ? autoRepeat[r.id] : undefined);
-  /** A calendar date moved on by whole days — the same sum the server does. */
-  const shiftYmd = (date: string, days: number) => {
-    const [y, m, d] = date.split("-").map(Number);
-    return new Date(Date.UTC(y, (m || 1) - 1, (d || 1) + days)).toISOString().slice(0, 10);
-  };
-  /** "2026-10-07" → "7 Oct". Already an IST calendar date, so read as-is. */
-  const dayLabel = (date: string) =>
-    new Date(`${date}T00:00:00Z`).toLocaleDateString("en-IN", { timeZone: "UTC", day: "numeric", month: "short" });
-  /** Where this row goes. Only a post or a reel can be re-routed; the rest go as uploaded. */
-  const sendAsOf = (r: AutoRow): "feed" | "story" | "both" =>
-    (r.content_type === "post" || r.content_type === "reel") ? (autoAs[r.id] ?? "feed") : "feed";
   // What actually goes out: a repeated story counts once per day it runs, and
   // a post sent as feed + Story counts twice.
   const autoOccurrences = autoReady.reduce((n, r) => {
@@ -2353,7 +2409,7 @@ export default function SocialPublisherPage() {
                 ? `Every post goes out on the chosen date, spaced ${gapMins === null ? "only by the times you set" : gapLabel + " apart"} from the start time. Any row can still be given its own date or time.`
                 : `Dates run ${cadence === "alternate" ? "every other day" : "one per day"}. Change any row and everything below it re-flows from there — move post 2 to the 17th and post 3 becomes the 18th.`}
             </p>
-            {(autoSameDay > 0 || autoOutOfOrder > 0 || autoCollisions > 0) && (
+            {(autoSameDay > 0 || autoOutOfOrder > 0 || autoCollisions > 0 || autoOnOccupied > 0) && (
               <div className="flex flex-wrap gap-3 text-[10px] pt-1">
                 {autoSameDay > 0 && (
                   <span className="text-[var(--yellow)] font-bold">
@@ -2370,6 +2426,11 @@ export default function SocialPublisherPage() {
                     {autoOutOfOrder} post(s) publish before the row above them
                   </span>
                 )}
+                {autoOnOccupied > 0 && (
+                  <span className="text-amber-400 font-bold">
+                    {autoOnOccupied} post(s) set by hand on a day that already has a scheduled post
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -2378,6 +2439,17 @@ export default function SocialPublisherPage() {
             <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-2.5 text-[11px] text-amber-300 flex items-start gap-2">
               <span className="min-w-0">⚠ Google Drive is disconnected — video posts will fail until it is reconnected (Integrations → Google Drive).</span>
             </div>
+          )}
+
+          {/* Why the dates start where they do. Said once, muted, and only
+              while the start is still the one this load set — after a start
+              picked by hand it would be explaining something no longer true. */}
+          {!autoLoading && autoClient && autoRows.length > 0 && autoStartNote && autoStart === autoStartNote.start && (
+            <p className="text-[11px] text-slate-500">
+              {autoStartNote.last
+                ? `Continuing after this client's last scheduled post (${dayLabel(autoStartNote.last)}) — this batch starts ${dayLabel(autoStartNote.start)}.`
+                : "No posts scheduled yet — starting tomorrow."}
+            </p>
           )}
 
           {/* The list */}
@@ -2564,7 +2636,7 @@ export default function SocialPublisherPage() {
                       <input type="date" value={date} onClick={openPicker}
                         onChange={(e) => setAutoDates((d) => ({ ...d, [r.id]: e.target.value }))}
                         className={`w-[136px] bg-slate-950 border rounded-lg px-2 py-1.5 text-[11px] text-white cursor-pointer [color-scheme:dark] focus:outline-none ${
-                          slot?.outOfOrder ? "border-amber-600" : autoDates[r.id] ? "border-indigo-600" : "border-slate-800"
+                          slot?.outOfOrder || slot?.occupied ? "border-amber-600" : autoDates[r.id] ? "border-indigo-600" : "border-slate-800"
                         }`} />
                       {slot && (
                         <div className="flex items-center gap-1">
@@ -2661,6 +2733,9 @@ export default function SocialPublisherPage() {
                       {slot?.outOfOrder && (
                         <span className="text-[9px] font-bold text-amber-400" title="This posts before the one above it">⚠ out of order</span>
                       )}
+                      {slot?.occupied && (
+                        <span className="text-[9px] font-bold text-amber-400 text-right max-w-[220px]" title="The send is refused while this date clashes with a post already booked">⚠ this day already has a scheduled post</span>
+                      )}
                       {slot?.clamped && (
                         <span className="text-[9px] font-bold text-rose-400" title="The spacing would have crossed midnight">⚠ time capped</span>
                       )}
@@ -2694,7 +2769,7 @@ export default function SocialPublisherPage() {
               <p className="text-[11px] text-slate-500">
                 {autoReady.length === 0
                   ? "Nothing selected — every row is skipped or has no date."
-                  : <>Will schedule <span className="signal">{autoPosts}</span> post(s) — {autoReady.length} creative(s){autoOccurrences > autoReady.length ? ` (${autoOccurrences} runs with ${[autoReady.some((r) => repeatOf(r)) ? "story repeats" : "", autoReady.some((r) => sendAsOf(r) === "both") ? "Story passes" : ""].filter(Boolean).join(" and ")})` : ""} × {autoPlatforms.length} platform(s){autoSameDay > 0 ? `, with ${autoSameDay} spaced 5 minutes apart on a shared day` : `, all at ${autoTime}`}{autoStoryPasses > 0 && autoStoryPlatforms < autoPlatforms.length ? `; ${autoStoryPasses} Story pass(es) go to Instagram/Facebook only` : ""}.</>}
+                  : <>Will schedule <span className="signal">{autoPosts}</span> post(s) — {autoReady.length} creative(s){autoOccurrences > autoReady.length ? ` (${autoOccurrences} runs with ${[autoReady.some((r) => repeatOf(r)) ? "story repeats" : "", autoReady.some((r) => sendAsOf(r) === "both") ? "Story passes" : ""].filter(Boolean).join(" and ")})` : ""} × {autoPlatforms.length} platform(s){autoSameDay > 0 ? `, with ${autoSameDay} spaced 5 minutes apart on a shared day` : `, all at ${autoTime}`}{autoStoryPasses > 0 && autoStoryPlatforms < autoPlatforms.length ? `; ${autoStoryPasses} Story pass(es) go to Instagram/Facebook only` : ""}{autoSpan ? (autoSpan.first === autoSpan.last ? ` · on ${dayLabel(autoSpan.first)}` : ` · running ${dayLabel(autoSpan.first)} → ${dayLabel(autoSpan.last)}`) : ""}.</>}
               </p>
               <button onClick={sendAutomation} disabled={autoSending || autoReady.length === 0 || autoPlatforms.length === 0}
                 className={`w-full px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 transition-all ${!autoSending && autoReady.length > 0 && autoPlatforms.length > 0 ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>
