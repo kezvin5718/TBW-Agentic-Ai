@@ -4,8 +4,9 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Avatar from "../Avatar";
 import { fmtIST, fmtISTDate, istToday, istWallClockToUtc, IST_TZ } from "@/lib/time";
-import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2, Pencil, X, FolderOpen, Film, Plus, Layers, Wand2, Copy } from "lucide-react";
+import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2, Pencil, X, FolderOpen, Film, Plus, Layers, Wand2, Copy, Table2 } from "lucide-react";
 import PlatformIcon, { postLabel, PLATFORM_LABEL } from "./PlatformIcon";
+import GridAds from "./GridAds";
 import { uploadDirect } from "@/lib/direct-upload";
 
 /** One creative's answer from the caption writer. */
@@ -802,7 +803,7 @@ export default function SocialPublisherPage() {
   });
 
   // --- Library (queue / history) ---------------------------------------------
-  const [view, setView] = useState<"compose" | "library" | "stories" | "automation">("compose");
+  const [view, setView] = useState<"compose" | "library" | "stories" | "automation" | "grids">("compose");
 
   // --- Automation -------------------------------------------------------------
   // Everything approved for a client, dated down the list in one move, captions
@@ -1662,6 +1663,9 @@ export default function SocialPublisherPage() {
           </button>
           <button onClick={() => setView("library")} className={`px-4 py-2 min-h-[40px] lg:min-h-0 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "library" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
             <Eye className="w-3.5 h-3.5" /><span>Library ({posts.length})</span>
+          </button>
+          <button onClick={() => setView("grids")} className={`px-4 py-2 min-h-[40px] lg:min-h-0 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "grids" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
+            <Table2 className="w-3.5 h-3.5" /><span>Grids &amp; Ads</span>
           </button>
         </div>
       </div>
@@ -3506,6 +3510,10 @@ export default function SocialPublisherPage() {
           </div>
         </div>
       )}
+
+      {/* ---------------------------- GRIDS & ADS ----------------------------- */}
+      {/* Mounted only while open, so the tracker is read the moment the tab is chosen. */}
+      {view === "grids" && <GridAds />}
 
     </div>
   );
