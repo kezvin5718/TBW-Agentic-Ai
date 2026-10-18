@@ -45,7 +45,7 @@ export const NAVIGATION: NavSection[] = [
     label: "Home",
     icon: "Home",
     items: [
-      { id: "command-centre", label: "Command Centre", href: "/dashboard", icon: "LayoutDashboard", roles: ALL },
+      { id: "command-centre", label: "Dashboard", href: "/dashboard", icon: "LayoutDashboard", roles: ALL },
     ],
   },
   {
@@ -64,6 +64,7 @@ export const NAVIGATION: NavSection[] = [
     icon: "ClipboardCheck",
     items: [
       { id: "task-manager", label: "Task Manager", href: "/dashboard/task-manager", icon: "ListTodo", roles: STAFF },
+      { id: "festivals", label: "Festival & Moments Calendar", href: "/dashboard/festivals", icon: "Sparkles", roles: STAFF },
       { id: "calls", label: "Call Notes", href: "/dashboard/calls", icon: "Phone", roles: FOUNDER },
       { id: "approvals", label: "Campaign Approvals", href: "/dashboard/approvals", icon: "CheckSquare", roles: STAFF, group: "Approvals" },
       { id: "creatives-review", label: "Creative Approvals", href: "/dashboard/creatives-review", icon: "Shield", roles: STAFF, group: "Approvals" },
@@ -76,18 +77,20 @@ export const NAVIGATION: NavSection[] = [
     items: [
       { id: "style-library", label: "Style Library", href: "/dashboard/style-library", icon: "Palette", roles: STAFF },
       { id: "image-studio", label: "Image Studio", href: "/dashboard/image-studio", icon: "Image", roles: STAFF },
-      { id: "content-hub", label: "Content Hub", href: "/dashboard/content-hub", icon: "FolderUp", roles: STAFF },
     ],
   },
   {
     id: "social-content",
     label: "Social & Content",
     icon: "MessagesSquare",
+    // The founder's order (18 Oct): the hub first, publishing next, the
+    // planner last — the section reads as the pipeline actually flows.
     items: [
-      { id: "plan-posts", label: "Content Planner", href: "/dashboard/production/plan-posts", icon: "Wand2", roles: STAFF },
-      { id: "festivals", label: "Festival & Moments Calendar", href: "/dashboard/festivals", icon: "Sparkles", roles: STAFF },
+      { id: "content-hub", label: "Content Hub", href: "/dashboard/content-hub", icon: "FolderUp", roles: STAFF },
       { id: "social-publisher", label: "Social Publisher", href: "/dashboard/social-publisher", icon: "Send", roles: STAFF },
       { id: "social-connections", label: "Social Connections", href: "/dashboard/social-connections", icon: "Share2", roles: STAFF },
+      { id: "ad-copy", label: "Catalogue Copy Studio", href: "/dashboard/ad-copy", icon: "Sparkles", roles: STAFF },
+      { id: "plan-posts", label: "Content Planner", href: "/dashboard/production/plan-posts", icon: "Wand2", roles: STAFF },
     ],
   },
   {
@@ -97,7 +100,6 @@ export const NAVIGATION: NavSection[] = [
     items: [
       { id: "publishing", label: "Ad Publishing", href: "/dashboard/publishing", icon: "UploadCloud", roles: STAFF },
       { id: "ads", label: "Meta Ads Manager", href: "/dashboard/ads", icon: "Megaphone", roles: STAFF },
-      { id: "ad-copy", label: "Catalogue Copy Studio", href: "/dashboard/ad-copy", icon: "Sparkles", roles: STAFF },
     ],
   },
   {

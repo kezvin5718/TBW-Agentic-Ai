@@ -1517,6 +1517,7 @@ export default function ContentHubPage() {
                   <th className="py-2 pr-3 font-bold">Type</th>
                   <th className="py-2 pr-3 font-bold">Size</th>
                   <th className="py-2 pr-3 font-bold">By</th>
+                  <th className="py-2 pr-3 font-bold">Uploaded</th>
                   <th className="py-2 pr-3 font-bold">Brand QC</th>
                   <th className="py-2 pr-3 font-bold">Status</th>
                   <th className="py-2 pr-3 font-bold"></th>
@@ -1564,6 +1565,10 @@ export default function ContentHubPage() {
                           title={u.profiles?.designation ? `${u.profiles.name} · ${u.profiles.designation}` : u.profiles?.name || ""} />
                         <span className="truncate">{u.profiles?.name || "—"}</span>
                       </span>
+                    </td>
+                    <td className="py-2 pr-3 whitespace-nowrap text-slate-400" title={new Date(u.created_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}>
+                      {new Date(u.created_at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short" })}
+                      <span className="text-slate-600"> · {new Date(u.created_at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true })}</span>
                     </td>
                     <td className="py-2 pr-3">
                       {u.qc_status === "match" && <span className="px-2 py-0.5 rounded-full bg-emerald-950/40 border border-emerald-900 text-emerald-400 text-[10px] font-bold">✓ Match</span>}
