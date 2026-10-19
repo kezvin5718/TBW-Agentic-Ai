@@ -184,6 +184,10 @@ export async function GET(request: NextRequest) {
     .eq("qc_status", "match")
     .is("festival_id", null)
     .neq("content_type", "thumbnail")
+    // A carousel is many images as one post, and the send below knows one
+    // image per post. Until Phase 2 teaches it, carousels are not offered here
+    // at all — they wait in the hub, which still shows them.
+    .neq("content_type", "carousel")
     .order("created_at", { ascending: true });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -211,6 +215,8 @@ export async function GET(request: NextRequest) {
       .eq("client_id", clientId)
       .is("festival_id", null)
       .neq("content_type", "thumbnail")
+      // Not in Risk either: overriding QC cannot make a carousel sendable.
+      .neq("content_type", "carousel")
       .order("created_at", { ascending: true });
     const [{ data: rejectedRows }, { data: unblessedRows }] = await Promise.all([
       risky().eq("status", "rejected"),
@@ -393,6 +399,19 @@ export async function POST(request: NextRequest) {
     .select("id, file_url, file_name, media_type, content_type, status, qc_status, thumbnail_url")
     .in("id", ids);
   const byId = new Map((uploads || []).map((u) => [u.id, u]));
+
+  // The list never offers a carousel, so one arriving here is a stale screen
+  // or a hand-made request. Refused before anything is sent — not skipped
+  // mid-run, where it would read as a send that half worked — and before the
+  // caption check, whose complaint would name the wrong problem.
+  const CAROUSEL_REFUSAL = "Carousel publishing arrives in Phase 2 — this carousel is safe in the hub meanwhile.";
+  const carousels = (uploads || []).filter((u) => u.content_type === "carousel");
+  if (carousels.length > 0) {
+    return NextResponse.json(
+      { error: CAROUSEL_REFUSAL, carousels: carousels.map((u) => ({ id: u.id, file_name: u.file_name })) },
+      { status: 400 }
+    );
+  }
 
   // A Drive-hosted video cannot be published as-is — it has to be copied out of
   // Drive first (see publishable-media), and a rejected Drive token makes that

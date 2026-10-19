@@ -23,7 +23,28 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true, uploads: data || [] });
+
+  // A carousel is one row with its slides beside it. The slides ride along on
+  // the rows the caller can already see — one cheap read, scoped to those ids
+  // — so the hub can badge "N slides" and show them without a second trip.
+  // If the read fails the list still loads; the badge falls back to the name.
+  const rows = (data || []) as Array<Record<string, unknown>>;
+  const carouselIds = rows.filter((r) => r.content_type === "carousel").map((r) => r.id as string);
+  if (carouselIds.length > 0) {
+    const { data: slides } = await createServiceRoleClient()
+      .from("carousel_slides")
+      .select("upload_id, slide_no, file_url, file_name")
+      .in("upload_id", carouselIds)
+      .order("slide_no", { ascending: true });
+    const byUpload = new Map<string, Array<{ slide_no: number; file_url: string; file_name: string | null }>>();
+    for (const s of slides || []) {
+      const list = byUpload.get(s.upload_id as string) || [];
+      list.push({ slide_no: s.slide_no as number, file_url: s.file_url as string, file_name: (s.file_name as string | null) ?? null });
+      byUpload.set(s.upload_id as string, list);
+    }
+    for (const r of rows) if (r.content_type === "carousel") r.slides = byUpload.get(r.id as string) || [];
+  }
+  return NextResponse.json({ success: true, uploads: rows });
 }
 
 // POST (multipart) — upload a creative file for a client, store it, record it.

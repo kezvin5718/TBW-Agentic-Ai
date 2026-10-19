@@ -13,7 +13,7 @@ interface UploadRow {
   file_name: string | null;
   file_size: number | null;
   media_type: "image" | "video";
-  content_type: "post" | "reel" | "story" | "thumbnail";
+  content_type: "post" | "reel" | "story" | "thumbnail" | "carousel";
   status: string;
   client_id?: string | null;
   festival_id?: string | null;
@@ -27,6 +27,8 @@ interface UploadRow {
   created_at: string;
   clients?: { name: string } | null;
   profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
+  /** A carousel's slides, in order — the list read attaches them to carousel rows only. */
+  slides?: Array<{ slide_no: number; file_url: string; file_name: string | null }>;
 }
 
 /**
@@ -90,6 +92,46 @@ interface CoverCard {
   how: "sight" | "hand" | "existing" | null;
   note?: string;
 }
+/**
+ * Carousels. A drop of two or more images and nothing else may hold carousels
+ * — five slides that are one post — so it is looked at before anything is
+ * recorded: filenames first, then by sight for what the names cannot place,
+ * and a person sees every group before it is saved. One image, or any drop
+ * with a video in it, never comes this way.
+ */
+const isCarouselDrop = (key: string, files: File[]) =>
+  key === "mix" && files.length >= 2 && files.every((f) => !isVideoFile(f));
+/** What a slide may be. A HEIC or a GIF is still a post, just never a slide. */
+const SLIDE_FILE = /\.(jpe?g|png|webp)$/i;
+const CAROUSEL_MAX = 20;
+/** The most carousel-detect takes in one look. */
+const CAROUSEL_DROP_MAX = 30;
+interface CarouselGroup {
+  id: string;
+  /** In slide order. */
+  slides: PoolImage[];
+  coverUrl: string;
+  /** How it was grouped — the card says so, because "by sight" is a claim to check. */
+  source: "filename" | "markers" | "sight" | "hand";
+  /** Grouped by sight alone: saved as one carousel only on a person's explicit yes. */
+  needsYes: boolean;
+  yes: boolean;
+  /** Someone moved a slide — the order on screen is theirs now. */
+  arranged: boolean;
+  note?: string;
+}
+interface DetectedGroup {
+  post_type: "carousel" | "single";
+  requires_review: boolean;
+  source: "filename" | "markers" | "sight" | null;
+  slides: Array<{ slide_number: number | null; filename: string; url: string }>;
+  missing_slides: number[];
+  duplicate_slides: number[];
+  note?: string;
+}
+/** "N slides" — read from the slides when the list carried them, else from the name the row was saved with. */
+const slideCountOf = (u: UploadRow) =>
+  u.slides?.length || Number((u.file_name || "").match(/^(\d+) slides/)?.[1] || 0);
 const isDriveUrl = (u: string) => u.includes("googleusercontent.com");
 const driveOpen = (u: string) => {
   const m = u.match(/googleusercontent\.com\/d\/([^=/?]+)/);
@@ -480,6 +522,279 @@ export default function ContentHubPage() {
     }
   };
 
+  // --- Carousels ----------------------------------------------------------------
+  // The groups found in the last all-image drop, the images that will be posts
+  // on their own, and the problems worth a person's eye (a slide numbered twice,
+  // a gap in the numbering). Nothing here is on the record until the confirm.
+  // The client is the one the drop went up for — switching the picker while
+  // the panel is open must not file these under someone else.
+  const [carGroups, setCarGroups] = useState<CarouselGroup[]>([]);
+  const [carSingles, setCarSingles] = useState<PoolImage[]>([]);
+  const [carIssues, setCarIssues] = useState<string[]>([]);
+  const [carPool, setCarPool] = useState<PoolImage[]>([]);
+  const [carPicked, setCarPicked] = useState<string[]>([]);
+  const [carState, setCarState] = useState<"detecting" | "done" | null>(null);
+  const [carSightDown, setCarSightDown] = useState(false);
+  const [carClient, setCarClient] = useState("");
+  const [carSaving, setCarSaving] = useState(false);
+  const carPanelOpen = carState !== null;
+  const closeCarPanel = () => {
+    setCarGroups([]); setCarSingles([]); setCarIssues([]); setCarPool([]); setCarPicked([]);
+    setCarState(null); setCarSightDown(false); setCarClient("");
+  };
+  const undecided = carGroups.filter((g) => g.needsYes && !g.yes).length;
+  // Back in the posts list, an image takes its place in drop order again.
+  const poolOrder = (img: PoolImage) => carPool.findIndex((p) => p.url === img.url);
+  const toSingles = (imgs: PoolImage[]) =>
+    setCarSingles((prev) => [...prev.filter((p) => !imgs.some((i) => i.url === p.url)), ...imgs].sort((a, b) => poolOrder(a) - poolOrder(b)));
+  const editGroup = (id: string, fn: (g: CarouselGroup) => CarouselGroup) =>
+    setCarGroups((gs) => gs.map((g) => (g.id === id ? fn(g) : g)));
+
+  /** The whole group goes back to being posts — "No, keep separate", or a split. */
+  const dissolveGroup = (id: string) => {
+    const g = carGroups.find((x) => x.id === id);
+    if (!g) return;
+    setCarGroups((gs) => gs.filter((x) => x.id !== id));
+    toSingles(g.slides);
+  };
+  /** ◀ ▶ — one place left or right. The order is the person's from then on. */
+  const moveSlide = (id: string, k: number, dir: -1 | 1) =>
+    editGroup(id, (g) => {
+      const j = k + dir;
+      if (j < 0 || j >= g.slides.length) return g;
+      const slides = [...g.slides];
+      [slides[k], slides[j]] = [slides[j], slides[k]];
+      return { ...g, slides, arranged: true };
+    });
+  /** ✕ — the slide becomes a post. A carousel of one is not a carousel, so the last two part together. */
+  const removeSlide = (id: string, url: string) => {
+    const g = carGroups.find((x) => x.id === id);
+    if (!g) return;
+    const rest = g.slides.filter((s) => s.url !== url);
+    if (rest.length < 2) { dissolveGroup(id); return; }
+    editGroup(id, (x) => ({ ...x, slides: rest, coverUrl: x.coverUrl === url ? rest[0].url : x.coverUrl, arranged: true }));
+    toSingles(g.slides.filter((s) => s.url === url));
+  };
+  /** Ticked posts made into one carousel, in the order they sit in the list. */
+  const groupPicked = () => {
+    const picked = carSingles.filter((s) => carPicked.includes(s.url));
+    if (picked.length < 2) return;
+    const odd = picked.filter((p) => !SLIDE_FILE.test(p.name));
+    if (odd.length) { setError(`${odd.map((p) => p.name).join(", ")} can't be a carousel slide — only JPG, PNG or WEBP can.`); return; }
+    if (picked.length > CAROUSEL_MAX) { setError(`A carousel takes at most ${CAROUSEL_MAX} slides.`); return; }
+    setError(null);
+    setCarGroups((gs) => [...gs, {
+      id: crypto.randomUUID(), slides: picked, coverUrl: picked[0].url,
+      source: "hand", needsYes: false, yes: true, arranged: true,
+    }]);
+    setCarSingles((prev) => prev.filter((s) => !carPicked.includes(s.url)));
+    setCarPicked([]);
+  };
+
+  /**
+   * An all-image drop of two or more. The images go to the same pool a mixed
+   * drop's covers go to — stored as exported, recorded as nothing — and then
+   * carousel-detect says what they are. If detection is down, nothing is lost:
+   * every image is offered as a post, and any can be grouped by hand.
+   */
+  const doCarouselUpload = async (files: File[]) => {
+    const images = [...files].sort(naturalSort);
+    const clientId = selectedClient;
+    // Kept staged, not dropped, if there is no client to file them under.
+    if (!clientId) { setError("Please select a client / brand first."); return images.map((f) => f.name); }
+    // The detector looks at thirty at most — said before anything is stored.
+    if (images.length > CAROUSEL_DROP_MAX) {
+      setError(`Up to ${CAROUSEL_DROP_MAX} images at a time when looking for carousels — upload these in two drops.`);
+      return images.map((f) => f.name);
+    }
+    setError(null);
+    setSuccess(null);
+    setUploadingType("post");
+    const pool: PoolImage[] = [];
+    const poolFailed: string[] = [];
+    const failedNames: string[] = [];
+    // One request per image so the count keeps moving, as on a mixed drop.
+    for (let j = 0; j < images.length; j++) {
+      setUploadCount({ done: j, total: images.length });
+      try {
+        const fd = new FormData();
+        fd.append("pool", "true");
+        fd.append("clientId", clientId);
+        fd.append("files[]", images[j]);
+        const res = await fetch("/api/content-hub/match-thumbnails", { method: "POST", body: fd });
+        const data = await res.json();
+        if (!res.ok || !data.images?.length) throw new Error(data.error || "Upload failed");
+        pool.push(...(data.images as PoolImage[]).map((img) => ({ ...img, size: images[j].size })));
+      } catch (err: unknown) {
+        poolFailed.push(`${images[j].name} (${err instanceof Error ? err.message : "failed"})`);
+        failedNames.push(images[j].name);
+      }
+    }
+    setUploadCount(null);
+    setUploadingType(null);
+    if (poolFailed.length) {
+      setError(`${poolFailed.length} image${poolFailed.length > 1 ? "s" : ""} could not be stored: ${poolFailed.slice(0, 3).join("; ")}${poolFailed.length > 3 ? "…" : ""}`);
+    }
+    if (pool.length === 0) return failedNames;
+
+    setCarPool(pool);
+    setCarClient(clientId);
+    setCarGroups([]);
+    setCarIssues([]);
+    setCarPicked([]);
+    setCarSightDown(false);
+    // One survived the upload: nothing to group it with, so it is simply a post.
+    if (pool.length < 2) { setCarSingles(pool); setCarState("done"); return failedNames; }
+
+    setCarSingles([]);
+    setCarState("detecting");
+    setSuccess(`Stored ${pool.length} images. Looking for carousels — filenames first, then by sight…`);
+    try {
+      const res = await fetch("/api/content-hub/carousel-detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, images: pool.map(({ url, name }) => ({ url, name })) }),
+      });
+      const data = await res.json();
+      if (!res.ok || !Array.isArray(data.groups)) throw new Error(data.error || "Detection failed");
+      const byUrl = new Map(pool.map((p) => [p.url, p]));
+      const groups: CarouselGroup[] = [];
+      const singles: PoolImage[] = [];
+      const issues: string[] = [];
+      const seen = new Set<string>();
+      for (const g of data.groups as DetectedGroup[]) {
+        const imgs = g.slides.map((s) => byUrl.get(s.url)).filter((x): x is PoolImage => !!x && !seen.has(x.url));
+        imgs.forEach((i) => seen.add(i.url));
+        if (g.post_type === "carousel" && imgs.length >= 2) {
+          groups.push({
+            id: crypto.randomUUID(), slides: imgs, coverUrl: imgs[0].url,
+            source: g.source || "sight", needsYes: !!g.requires_review, yes: false, arranged: false, note: g.note,
+          });
+          continue;
+        }
+        singles.push(...imgs);
+        // A set kept apart says why, by name, so a person can decide to group it.
+        if (imgs.length > 1) {
+          issues.push(`${imgs.map((i) => i.name).join(", ")}: ${g.note || "the numbering is unclear"} — kept as separate posts. Tick them below and group them by hand if they are one carousel.`);
+        } else if (g.note && imgs[0]) {
+          issues.push(`${imgs[0].name}: ${g.note}.`);
+        }
+      }
+      // Anything the answer left out is a post, never dropped.
+      singles.push(...pool.filter((p) => !seen.has(p.url)));
+      setCarGroups(groups);
+      setCarSingles(singles.sort((a, b) => pool.indexOf(a) - pool.indexOf(b)));
+      setCarIssues(issues);
+      setCarSightDown(data.vision === "down");
+      setCarState("done");
+      const suggested = groups.filter((g) => g.needsYes).length;
+      setSuccess(`Found ${groups.length} carousel${groups.length === 1 ? "" : "s"}${suggested ? ` (${suggested} grouped by sight — confirm ${suggested === 1 ? "it" : "each"})` : ""} and ${singles.length} individual post${singles.length === 1 ? "" : "s"}. Check them below — nothing is saved until you confirm.`);
+    } catch {
+      // Degrade, don't lose: the images are stored; every one is offered as a
+      // post, and any of them can be made a carousel by hand.
+      setCarSingles(pool);
+      setCarSightDown(true);
+      setCarState("done");
+      setSuccess(`Stored ${pool.length} images. Carousel detection is unavailable right now — they are listed below as posts; tick any that are one carousel and group them by hand.`);
+    }
+    return failedNames;
+  };
+
+  /**
+   * "Save N carousels and M posts." Carousels first — one hub row each, its
+   * slides behind it — then the posts, through the same adopt step a mixed
+   * drop's leftovers use. Whatever fails stays in the panel to try again;
+   * whatever succeeded leaves it, so a retry never makes anything twice.
+   */
+  const saveCarousels = async () => {
+    if (undecided > 0 || carState !== "done") return;
+    const groups = carGroups;
+    const singles = carSingles;
+    setCarSaving(true);
+    setError(null);
+    const problems: string[] = [];
+    const notes: string[] = [];
+    let carousels = 0;
+    let posts = 0;
+    let keepGroups = groups;
+    try {
+      if (groups.length > 0) {
+        try {
+          const res = await fetch("/api/content-hub/carousel-detect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              create: {
+                clientId: carClient,
+                groups: groups.map((g) => ({
+                  slides: g.slides.map(({ url, name }) => ({ url, name })),
+                  coverIndex: Math.max(0, g.slides.findIndex((s) => s.url === g.coverUrl)),
+                })),
+              },
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not save the carousels");
+          carousels = (data.uploads || []).length;
+          const failed = (data.failed || []) as Array<{ index: number; error: string }>;
+          for (const f of failed) problems.push(`${groups[f.index]?.slides[0]?.name || "a carousel"}: ${f.error}`);
+          // Skipped means already in the hub (an earlier click) — nothing left to do.
+          for (const s of (data.skipped || []) as Array<{ index: number; reason: string }>) notes.push(s.reason);
+          const failedIdx = new Set(failed.map((f) => f.index));
+          keepGroups = groups.filter((_, i) => failedIdx.has(i));
+        } catch (err: unknown) {
+          problems.push(err instanceof Error ? err.message : "Could not save the carousels");
+        }
+        setCarGroups(keepGroups);
+      }
+
+      const settled = new Set<string>();
+      try {
+        for (let i = 0; i < singles.length; i += 20) {
+          const chunk = singles.slice(i, i + 20);
+          const res = await fetch("/api/content-hub/match-thumbnails", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            // Standing alone, as a mixed drop's leftovers do: no batch, so one
+            // post failing QC never takes another down with it.
+            body: JSON.stringify({ adopt: { clientId: carClient, images: chunk } }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not make the posts");
+          posts += (data.uploads || []).length;
+          for (const img of chunk) settled.add(img.url);
+        }
+      } catch (err: unknown) {
+        problems.push(err instanceof Error ? err.message : "Could not make the posts");
+      }
+      const keepSingles = singles.filter((s) => !settled.has(s.url));
+      setCarSingles(keepSingles);
+      setCarPicked((p) => p.filter((u) => keepSingles.some((s) => s.url === u)));
+
+      const made = `${carousels} carousel${carousels === 1 ? "" : "s"} and ${posts} post${posts === 1 ? "" : "s"}`;
+      if (problems.length === 0) {
+        closeCarPanel();
+        setSuccess(`Done — ${made} saved${notes.length ? ` (${notes.join("; ")})` : ""}. Brand QC is checking them now…`);
+      } else {
+        if (carousels || posts) setSuccess(`Saved ${made}.`);
+        setError(`${problems.join(" · ")} — what is still waiting is below; save again to retry.`);
+      }
+    } finally {
+      setCarSaving(false);
+      await fetchUploads();
+      if (carousels + posts > 0) runQc();
+    }
+  };
+
+  // --- Carousel slides viewer (the hub list) -----------------------------------
+  const [viewing, setViewing] = useState<UploadRow | null>(null);
+  useEffect(() => {
+    if (!viewing) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setViewing(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [viewing]);
+
   // Upload one or many files. Files are naturally sorted by their filename
   // numbering (1, 2, … 9, 10 — not 1, 10, 2) and uploaded sequentially so the
   // sequence is preserved for the social team.
@@ -546,7 +861,11 @@ export default function ContentHubPage() {
   const uploadStaged = async (key: string) => {
     const files = staged[key] || [];
     if (files.length === 0) return;
-    const failedNames = await doUpload(key === "mix" ? mixContentType(files) : key, files);
+    // Two or more images and nothing else: looked at for carousels first. One
+    // image, or any drop with a video in it, goes exactly as it always has.
+    const failedNames = isCarouselDrop(key, files)
+      ? await doCarouselUpload(files)
+      : await doUpload(key === "mix" ? mixContentType(files) : key, files);
     setStaged((prev) => ({ ...prev, [key]: (prev[key] || []).filter((f) => (failedNames || []).includes(f.name)) }));
   };
 
@@ -829,6 +1148,9 @@ export default function ContentHubPage() {
             // A second mixed drop would replace the panel below before its
             // leftovers were settled — finish that one first.
             const waitForPanel = isMix && mixed && coverPanelOpen;
+            // Same for an all-image drop and the carousels panel.
+            const carouselDrop = isCarouselDrop(key, staged[key] || []);
+            const waitForCarousels = carouselDrop && carPanelOpen;
             const videoWord = videosAs === "reel" ? "reel" : "feed post";
             // Match on extension as well as MIME. Listing MIME types alone
             // greys the file out in the picker whenever the OS reports
@@ -941,6 +1263,8 @@ export default function ContentHubPage() {
                         ? `${stagedVideos} video${stagedVideos > 1 ? "s" : ""} → ${videoWord}s. The ${stagedCovers} image${stagedCovers > 1 ? "s" : ""} will be matched to them by sight as covers; any that match no video are offered as posts for you to confirm.`
                         : stagedVideos > 0
                         ? `${stagedVideos} video${stagedVideos > 1 ? "s" : ""} → ${videoWord}${stagedVideos > 1 ? "s" : ""}.`
+                        : carouselDrop
+                        ? `${stagedCovers} images → checked for carousels (filenames first, then by sight). You review the groups before anything is saved; the rest become posts.`
                         : `${stagedCovers} image${stagedCovers > 1 ? "s" : ""} → post${stagedCovers > 1 ? "s" : ""}.`}
                     </p>
                   )}
@@ -949,12 +1273,17 @@ export default function ContentHubPage() {
                       Confirm the covers panel below first — this drop would replace it.
                     </p>
                   )}
+                  {waitForCarousels && (
+                    <p className="text-[10px] text-amber-300 leading-snug">
+                      Save the carousels panel below first — this drop would replace it.
+                    </p>
+                  )}
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      disabled={busy || waitForPanel || !selectedClient || (staged[key]?.length || 0) === 0}
+                      disabled={busy || waitForPanel || waitForCarousels || !selectedClient || (staged[key]?.length || 0) === 0}
                       onClick={() => uploadStaged(key)}
-                      title={!selectedClient ? "Select a client first" : (staged[key]?.length || 0) === 0 ? "Add files first" : waitForPanel ? "Confirm the covers panel below first" : ""}
+                      title={!selectedClient ? "Select a client first" : (staged[key]?.length || 0) === 0 ? "Add files first" : waitForPanel ? "Confirm the covers panel below first" : waitForCarousels ? "Save the carousels panel below first" : ""}
                       className={`flex-1 py-2 min-h-[40px] lg:min-h-0 rounded-lg text-white text-xs font-bold ${a.btn} disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer`}
                     >
                       {/* Name the actual blocker — saying "add files first"
@@ -968,6 +1297,8 @@ export default function ContentHubPage() {
                         ? "⬆ Upload (add files first)"
                         : mixed
                         ? `⬆ Upload ${stagedVideos} video${stagedVideos > 1 ? "s" : ""} + ${stagedCovers} image${stagedCovers > 1 ? "s" : ""} & match`
+                        : carouselDrop
+                        ? `⬆ Upload ${stagedCovers} images & find carousels`
                         : `⬆ Upload ${staged[key].length} file${staged[key].length > 1 ? "s" : ""} & run QC`}
                     </button>
                     {(staged[key]?.length || 0) > 0 && (
@@ -1145,6 +1476,231 @@ export default function ContentHubPage() {
                   })()}
                 </span>
               </button>
+            </div>
+          </div>
+        )}
+        {/* Carousels — the covers panel's sibling, for an all-image drop. One
+            card per group found, its slides in a strip in the order they will
+            post; then the images that will be posts on their own. A group the
+            filenames (or the slides' own printed numbers) prove arrives ready;
+            one only seen by sight waits for an explicit yes. The sticky save
+            at the bottom is the only way out, for the same reason as above:
+            a "Done" would let the stored images vanish unrecorded. The panel
+            scrolls inside itself so a fifteen-image drop never pushes the save
+            off the page. */}
+        {carPanelOpen && (
+          <div className="mt-5 pt-4 border-t border-slate-900 space-y-3">
+            <div className="flex items-center space-x-2 min-w-0">
+              <Layers className="w-5 h-5 text-indigo-400 shrink-0" />
+              <div className="min-w-0">
+                <h4 className="text-sm font-bold text-white">Carousels — grouped before saving</h4>
+                <p className="text-[11px] text-slate-500">
+                  {carState === "detecting"
+                    ? "Reading the filenames, then looking at the rest…"
+                    : `${carGroups.length} carousel${carGroups.length === 1 ? "" : "s"} · ${carSingles.length} individual post${carSingles.length === 1 ? "" : "s"}${undecided ? ` · ${undecided} to confirm` : ""}`}
+                </p>
+              </div>
+            </div>
+
+            <div className="max-h-[70vh] overflow-y-auto space-y-3 pr-1">
+              {carState === "detecting" && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-slate-500">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Looking for carousels…
+                </span>
+              )}
+
+              {carState === "done" && carSightDown && (
+                <p className="text-[11px] text-amber-300 leading-snug">
+                  Looking by sight was unavailable, so only filenames grouped anything. Every image is stored — tick any posts below that are one carousel and group them by hand.
+                </p>
+              )}
+
+              {carIssues.map((text) => (
+                <p key={text} className="flex items-start gap-1.5 text-[11px] text-amber-300 leading-snug bg-amber-950/10 border border-amber-800/60 rounded-lg px-2.5 py-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> <span className="break-words min-w-0">{text}</span>
+                </p>
+              ))}
+
+              {carGroups.map((g) => {
+                const waiting = g.needsYes && !g.yes;
+                const locked = carSaving || carState !== "done";
+                const cover = g.slides.find((s) => s.url === g.coverUrl) || g.slides[0];
+                return (
+                  <div
+                    key={g.id}
+                    className={`rounded-xl border p-3 space-y-2 min-w-0 ${waiting ? "border-amber-700/70 bg-amber-950/10" : "border-slate-800 bg-slate-950/60"}`}
+                  >
+                    <div className="flex items-start gap-3 min-w-0 flex-wrap sm:flex-nowrap">
+                      <div className="w-14 h-16 shrink-0 rounded-lg overflow-hidden bg-slate-900 border border-indigo-500/60">
+                        <a href={driveOpen(cover.url)} target="_blank" rel="noreferrer" title={`Cover: ${cover.name}`}>
+                          <img src={cover.url} alt={cover.name} className="w-full h-full object-cover" />
+                        </a>
+                      </div>
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <p className="text-[12px] text-white font-bold">▣ {g.slides.length} slides</p>
+                        <p className="text-[10px] text-slate-500 break-all">{g.slides[0].name}</p>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {waiting ? (
+                            <span title={g.note || ""} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-950/40 border border-amber-800 text-amber-300 text-[10px] font-bold">
+                              <AlertTriangle className="w-3 h-3" /> Grouped by sight — confirm
+                            </span>
+                          ) : (
+                            <span title={g.note || ""} className="inline-block px-2 py-0.5 rounded-full bg-indigo-950/40 border border-indigo-900 text-indigo-300 text-[10px] font-bold">
+                              {g.source === "filename" ? "✓ Grouped by filenames"
+                                : g.source === "markers" ? "✓ Grouped by the slide numbers on them"
+                                : g.source === "hand" ? "✓ Grouped by hand"
+                                : "✓ Grouped by sight — confirmed"}
+                            </span>
+                          )}
+                          {g.arranged && g.source !== "hand" && <span className="text-[10px] text-slate-500">order set by hand</span>}
+                        </div>
+                        {g.note && <p className="text-[10px] text-slate-500 leading-snug">{g.note}</p>}
+                      </div>
+                      <div className="flex gap-2 flex-wrap w-full sm:w-auto sm:shrink-0">
+                        {waiting ? (
+                          <>
+                            <button
+                              type="button"
+                              disabled={locked}
+                              onClick={() => editGroup(g.id, (x) => ({ ...x, yes: true }))}
+                              className="flex-1 sm:flex-none px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              Yes, one carousel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={locked}
+                              onClick={() => dissolveGroup(g.id)}
+                              className="flex-1 sm:flex-none px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white text-[11px] font-bold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              No, keep separate
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={locked}
+                            onClick={() => dissolveGroup(g.id)}
+                            title="Every slide becomes a post of its own"
+                            className="flex-1 sm:flex-none px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-[11px] font-bold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            Split into posts
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* The slides as they will post. The number is the place
+                        in the carousel, not the filename's — after a move they
+                        are the same thing. */}
+                    <div className="flex gap-2 overflow-x-auto pb-1">
+                      {g.slides.map((s, k) => {
+                        const isCover = s.url === cover.url;
+                        return (
+                          <div key={s.url} className="shrink-0 w-28 space-y-1">
+                            <div className={`relative w-28 h-32 rounded-lg overflow-hidden bg-slate-900 border ${isCover ? "border-indigo-500" : "border-slate-800"}`}>
+                              <a href={driveOpen(s.url)} target="_blank" rel="noreferrer" title={s.name}>
+                                <img src={s.url} alt={s.name} className="w-full h-full object-cover" />
+                              </a>
+                              <span className="absolute top-1 left-1 px-1.5 rounded bg-black/75 text-[10px] font-black text-white">{k + 1}</span>
+                              {isCover && <span className="absolute bottom-1 left-1 px-1.5 rounded bg-indigo-600 text-[9px] font-bold text-white">Cover</span>}
+                            </div>
+                            <p className="text-[9px] text-slate-500 truncate" title={s.name}>{s.name}</p>
+                            <div className="grid grid-cols-4 gap-0.5">
+                              <button type="button" disabled={locked || k === 0} onClick={() => moveSlide(g.id, k, -1)} title="Move left"
+                                className="min-h-[40px] lg:min-h-0 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-[10px] cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">◀</button>
+                              <button type="button" disabled={locked || k === g.slides.length - 1} onClick={() => moveSlide(g.id, k, 1)} title="Move right"
+                                className="min-h-[40px] lg:min-h-0 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-[10px] cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">▶</button>
+                              <button type="button" disabled={locked || isCover} onClick={() => editGroup(g.id, (x) => ({ ...x, coverUrl: s.url }))} title={isCover ? "This is the cover" : "Make this the cover"}
+                                className={`min-h-[40px] lg:min-h-0 py-0.5 rounded border text-[10px] cursor-pointer disabled:cursor-not-allowed ${isCover ? "bg-indigo-950/40 border-indigo-900 text-indigo-300" : "bg-slate-900 border-slate-800 text-slate-400 hover:text-white disabled:opacity-30"}`}>★</button>
+                              <button type="button" disabled={locked} onClick={() => removeSlide(g.id, s.url)} title="Take it out — it becomes a post of its own"
+                                className="min-h-[40px] lg:min-h-0 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 text-[10px] font-bold cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">✕</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* The posts. Ticking two or more and grouping them is the manual
+                  way in — for a carousel nothing could see, or a set kept
+                  apart over its numbering. */}
+              {carState === "done" && carSingles.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <p className="text-[11px] font-bold text-slate-300">
+                      {carSingles.length} will be individual post{carSingles.length === 1 ? "" : "s"}
+                    </p>
+                    <button
+                      type="button"
+                      disabled={carSaving || carPicked.length < 2}
+                      onClick={groupPicked}
+                      title={carPicked.length < 2 ? "Tick two or more first" : ""}
+                      className="px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-indigo-900 text-indigo-300 hover:text-white text-[11px] font-bold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Make a carousel from selected{carPicked.length ? ` (${carPicked.length})` : ""}
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {carSingles.map((img) => {
+                      const slideable = SLIDE_FILE.test(img.name);
+                      const on = carPicked.includes(img.url);
+                      return (
+                        <label
+                          key={img.url}
+                          title={slideable ? "" : "Only JPG, PNG or WEBP can be a carousel slide"}
+                          className={`rounded-xl border p-2 flex items-center gap-2 min-w-0 min-h-[40px] ${slideable ? "cursor-pointer" : "cursor-not-allowed"} ${on ? "border-indigo-500/60 bg-indigo-950/20" : "border-slate-800 bg-slate-950/60"}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            disabled={!slideable || carSaving}
+                            onChange={() => setCarPicked((p) => (p.includes(img.url) ? p.filter((u) => u !== img.url) : [...p, img.url]))}
+                            className="accent-indigo-500 cursor-pointer shrink-0"
+                          />
+                          <div className="w-10 h-12 shrink-0 rounded-md overflow-hidden bg-slate-900 border border-slate-800">
+                            <img src={img.url} alt={img.name} className="w-full h-full object-cover" />
+                          </div>
+                          <span className="text-[10px] text-slate-300 break-all min-w-0">{img.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* The one way out — sticky, as on the festival batch, so a long
+                  panel never scrolls it away. */}
+              <div className="sticky bottom-0 z-10 flex items-center justify-end gap-3 flex-wrap rounded-xl border border-slate-800 bg-slate-950/95 backdrop-blur p-2 shadow-lg shadow-black/50">
+                {carState === "detecting" && (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-slate-500">
+                    <Loader2 className="w-3 h-3 animate-spin" /> Looking for carousels…
+                  </span>
+                )}
+                <button
+                  type="button"
+                  disabled={carState !== "done" || carSaving || undecided > 0 || (carGroups.length === 0 && carSingles.length === 0)}
+                  onClick={saveCarousels}
+                  title={undecided > 0 ? "Answer every “grouped by sight” card first — yes, one carousel, or no, keep separate" : ""}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[40px] lg:min-h-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {carSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                  <span>
+                    {(() => {
+                      const n = carGroups.length;
+                      const m = carSingles.length;
+                      // Name the blocker, as every other save on this page does.
+                      if (carState !== "done") return "Looking for carousels…";
+                      if (undecided > 0) return `Confirm ${undecided} grouped-by-sight carousel${undecided === 1 ? "" : "s"} first`;
+                      return carSaving
+                        ? "Saving…"
+                        : `Save ${n} carousel${n === 1 ? "" : "s"} and ${m} post${m === 1 ? "" : "s"}`;
+                    })()}
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1537,8 +2093,14 @@ export default function ContentHubPage() {
                       )}
                     </td>
                     <td className="py-2 pr-3">
-                      <div className="w-10 h-10 rounded-lg overflow-hidden bg-slate-900 border border-slate-800">
-                        {u.media_type === "video" ? (
+                      <div className="relative w-10 h-10 rounded-lg overflow-hidden bg-slate-900 border border-slate-800">
+                        {u.content_type === "carousel" ? (
+                          // A carousel's preview opens its slides, not just the cover.
+                          <button type="button" onClick={() => setViewing(u)} title="See the slides" className="block w-full h-full cursor-pointer">
+                            <img src={u.file_url} alt={u.file_name || ""} className="w-full h-full object-cover" />
+                            <span className="absolute bottom-0 right-0 px-1 rounded-tl bg-black/75 text-[8px] font-black text-white">▣ {slideCountOf(u)}</span>
+                          </button>
+                        ) : u.media_type === "video" ? (
                           <a href={driveOpen(u.file_url)} target="_blank" rel="noreferrer" title="Open video" className="w-full h-full flex items-center justify-center text-slate-500 hover:text-indigo-400">
                             <Film className="w-4 h-4" />
                           </a>
@@ -1551,7 +2113,18 @@ export default function ContentHubPage() {
                         )}
                       </div>
                     </td>
-                    <td className="py-2 pr-3 max-w-[180px] truncate">{u.file_name}</td>
+                    <td className="py-2 pr-3 max-w-[180px]">
+                      <span className="block truncate">{u.file_name}</span>
+                      {u.content_type === "carousel" && (
+                        <button
+                          type="button"
+                          onClick={() => setViewing(u)}
+                          className="mt-0.5 px-2 py-0.5 rounded-full bg-indigo-950/40 border border-indigo-900 text-indigo-300 text-[10px] font-bold cursor-pointer hover:text-white"
+                        >
+                          ▣ {slideCountOf(u)} slides
+                        </button>
+                      )}
+                    </td>
                     {/* A festival-batch creative has no client until someone
                         confirms one on its card. */}
                     <td className="py-2 pr-3">{u.clients?.name || (u.client_id ? "—" : <span className="text-amber-400/80">— pick a client</span>)}</td>
@@ -1603,6 +2176,59 @@ export default function ContentHubPage() {
           </div>
         )}
       </div>
+
+      {/* A carousel's slides, read-only: the order they will post in, each
+          opening the stored file. Nothing here edits anything. */}
+      {viewing && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+          onClick={() => setViewing(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Carousel slides"
+        >
+          <div
+            className="w-full max-w-4xl max-h-[85vh] flex flex-col bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-3 min-w-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 min-w-0">
+              <div className="min-w-0">
+                <h4 className="text-sm font-bold text-white">▣ {slideCountOf(viewing)} slides</h4>
+                <p className="text-[11px] text-slate-500 break-all">{viewing.clients?.name ? `${viewing.clients.name} · ` : ""}{viewing.file_name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewing(null)}
+                className="shrink-0 px-3 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-xs font-bold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+            {(viewing.slides?.length || 0) === 0 ? (
+              <p className="text-[11px] text-amber-300">The slides could not be loaded just now — this is the cover.</p>
+            ) : null}
+            <div className="flex gap-3 overflow-x-auto pb-2 min-h-0">
+              {(viewing.slides?.length ? viewing.slides : [{ slide_no: 1, file_url: viewing.file_url, file_name: viewing.file_name }]).map((s) => (
+                <a
+                  key={`${s.slide_no}-${s.file_url}`}
+                  href={driveOpen(s.file_url)}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={s.file_name || ""}
+                  className="shrink-0 w-44 space-y-1"
+                >
+                  <div className={`relative w-44 h-56 rounded-lg overflow-hidden bg-slate-900 border ${s.file_url === viewing.file_url ? "border-indigo-500" : "border-slate-800"}`}>
+                    <img src={s.file_url} alt={s.file_name || ""} className="w-full h-full object-contain" />
+                    <span className="absolute top-1 left-1 px-1.5 rounded bg-black/75 text-[10px] font-black text-white">{s.slide_no}</span>
+                    {s.file_url === viewing.file_url && <span className="absolute bottom-1 left-1 px-1.5 rounded bg-indigo-600 text-[9px] font-bold text-white">Cover</span>}
+                  </div>
+                  <p className="text-[10px] text-slate-500 truncate">{s.file_name}</p>
+                </a>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
