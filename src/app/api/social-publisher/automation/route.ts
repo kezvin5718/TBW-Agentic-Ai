@@ -61,9 +61,9 @@ function shiftWallClockDays(wallClock: string, days: number): string | null {
 type Admin = ReturnType<typeof createServiceRoleClient>;
 
 /**
- * Posts that hold a day on the client's calendar: queued or out, feed posts
- * and reels only. A Story occupies nothing — a brand can run several a day
- * alongside its feed — and a failed send held nothing either.
+ * Posts that hold a day on the client's calendar: queued or out, feed posts,
+ * reels and carousels. A Story occupies nothing — a brand can run several a
+ * day alongside its feed — and a failed send held nothing either.
  */
 const OCCUPYING_STATUSES = ["sent", "published"];
 
@@ -184,10 +184,8 @@ export async function GET(request: NextRequest) {
     .eq("qc_status", "match")
     .is("festival_id", null)
     .neq("content_type", "thumbnail")
-    // A carousel is many images as one post, and the send below knows one
-    // image per post. Until Phase 2 teaches it, carousels are not offered here
-    // at all — they wait in the hub, which still shows them.
-    .neq("content_type", "carousel")
+    // Carousels are listed like any post: their slides are joined on below,
+    // and the send knows how to carry many images as one post.
     .order("created_at", { ascending: true });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -215,8 +213,6 @@ export async function GET(request: NextRequest) {
       .eq("client_id", clientId)
       .is("festival_id", null)
       .neq("content_type", "thumbnail")
-      // Not in Risk either: overriding QC cannot make a carousel sendable.
-      .neq("content_type", "carousel")
       .order("created_at", { ascending: true });
     const [{ data: rejectedRows }, { data: unblessedRows }] = await Promise.all([
       risky().eq("status", "rejected"),
@@ -274,7 +270,30 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Could not read the calendar" }, { status: 500 });
   }
 
-  const rows = [...(data || []).map((r) => ({ ...r, rejected: false })), ...refused];
+  const rows: Record<string, unknown>[] = [...(data || []).map((r) => ({ ...r, rejected: false })), ...refused];
+
+  // A carousel is one row with its slides beside it — the same read the hub
+  // list makes, scoped to the carousels on this screen, in slide order. If it
+  // fails the list still loads and the badge falls back to the saved name;
+  // the send reads the slides again for itself, so nothing goes out on this.
+  const carouselIds = rows.filter((r) => r.content_type === "carousel").map((r) => r.id as string);
+  if (carouselIds.length > 0) {
+    const { data: slides, error: slideErr } = await admin
+      .from("carousel_slides")
+      .select("upload_id, slide_no, file_url, file_name")
+      .in("upload_id", carouselIds)
+      .order("slide_no", { ascending: true });
+    if (!slideErr) {
+      const byUpload = new Map<string, Array<{ slide_no: number; file_url: string; file_name: string | null }>>();
+      for (const s of slides || []) {
+        const list = byUpload.get(s.upload_id as string) || [];
+        list.push({ slide_no: s.slide_no as number, file_url: s.file_url as string, file_name: (s.file_name as string | null) ?? null });
+        byUpload.set(s.upload_id as string, list);
+      }
+      for (const r of rows) if (r.content_type === "carousel") r.slides = byUpload.get(r.id as string) || [];
+    }
+  }
+
   return NextResponse.json({
     lastOccupied,
     occupiedDays,
@@ -303,6 +322,11 @@ export async function GET(request: NextRequest) {
  * the same way, before the loop: "both" is two occurrences at one slot. A
  * Story occurrence never carries a caption, and goes to Instagram and
  * Facebook only.
+ *
+ * A carousel row is sent as one feed post per platform, every slide in
+ * image_url in slide order, to Instagram and Facebook only. It is never
+ * repeated or re-routed: neither control is offered on it, and the unroll
+ * below only ever applies them to stories, posts and reels.
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -400,17 +424,29 @@ export async function POST(request: NextRequest) {
     .in("id", ids);
   const byId = new Map((uploads || []).map((u) => [u.id, u]));
 
-  // The list never offers a carousel, so one arriving here is a stale screen
-  // or a hand-made request. Refused before anything is sent — not skipped
-  // mid-run, where it would read as a send that half worked — and before the
-  // caption check, whose complaint would name the wrong problem.
-  const CAROUSEL_REFUSAL = "Carousel publishing arrives in Phase 2 — this carousel is safe in the hub meanwhile.";
-  const carousels = (uploads || []).filter((u) => u.content_type === "carousel");
-  if (carousels.length > 0) {
-    return NextResponse.json(
-      { error: CAROUSEL_REFUSAL, carousels: carousels.map((u) => ({ id: u.id, file_name: u.file_name })) },
-      { status: 400 }
-    );
+  // A carousel goes out as one post whose image_url is every slide, in
+  // carousel_slides.slide_no order and exactly as stored — the hub's order is
+  // the post's order, never resorted here. Read once for the whole run, before
+  // anything is sent: a read that fails is said once and costs nothing, rather
+  // than half a run going out and the carousels failing one by one.
+  const carouselIds = (uploads || []).filter((u) => u.content_type === "carousel").map((u) => u.id as string);
+  const slidesOf = new Map<string, Array<{ no: number; url: string }>>();
+  if (carouselIds.length > 0) {
+    const { data: slideRows, error: slideErr } = await admin
+      .from("carousel_slides")
+      .select("upload_id, slide_no, file_url")
+      .in("upload_id", carouselIds)
+      .order("slide_no", { ascending: true });
+    if (slideErr) {
+      return NextResponse.json({
+        error: `Could not read the carousel slides (${slideErr.message}). Nothing was sent.`,
+      }, { status: 500 });
+    }
+    for (const s of slideRows || []) {
+      const list = slidesOf.get(s.upload_id as string) || [];
+      list.push({ no: s.slide_no as number, url: String(s.file_url || "") });
+      slidesOf.set(s.upload_id as string, list);
+    }
   }
 
   // A Drive-hosted video cannot be published as-is — it has to be copied out of
@@ -557,7 +593,29 @@ export async function POST(request: NextRequest) {
     }
     if (isOverride) overridden.push(upload.id as string);
 
-    const isVideo = upload.media_type === "video";
+    // A carousel's slides, as the hub saved them. None on record means the
+    // carousel cannot be what it says it is — the row fails with that reason
+    // rather than going out as the cover alone, which would be a single post
+    // nobody asked for. A slide with no file fails it the same way: a carousel
+    // with a hole in it is not the carousel the client approved.
+    const isCarousel = upload.content_type === "carousel";
+    let slideUrls: string[] = [];
+    if (isCarousel) {
+      const slides = slidesOf.get(upload.id as string) || [];
+      if (slides.length === 0) {
+        results.push({ uploadId: upload.id, platform: "-", ok: false, detail: `${upload.file_name || "This carousel"} has no slides on record — nothing was sent rather than the cover alone. Rebuild it in the hub.` });
+        continue;
+      }
+      const holes = slides.filter((s) => !s.url).map((s) => s.no);
+      if (holes.length > 0) {
+        results.push({ uploadId: upload.id, platform: "-", ok: false, detail: `${upload.file_name || "This carousel"}: slide ${holes.join(", ")} has no file on record — nothing was sent. Rebuild it in the hub.` });
+        continue;
+      }
+      slideUrls = slides.map((s) => s.url);
+    }
+
+    // Slides are images, so a carousel is never staged as a video.
+    const isVideo = !isCarousel && upload.media_type === "video";
     let publishUrl = upload.file_url as string;
     if (isVideo) {
       if (stagedCache.has(publishUrl)) publishUrl = stagedCache.get(publishUrl)!;
@@ -592,6 +650,14 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
+      // A carousel is an Instagram or Facebook feed post. Pinterest and
+      // YouTube sit it out, said so, rather than being sent the cover as a
+      // single image under the carousel's name.
+      if (isCarousel && platform !== "instagram" && platform !== "facebook") {
+        results.push({ uploadId: upload.id, platform, ok: false, skipped: true, detail: "Carousels are Instagram/Facebook only — skipped" });
+        continue;
+      }
+
       // YouTube takes video and nothing else. Sending it an image is a
       // guaranteed RecurPost 3003 ("You Must upload Video"), and that one
       // certain failure is what used to hold the whole creative back — so the
@@ -616,10 +682,14 @@ export async function POST(request: NextRequest) {
           message: contentType === "story" ? (client?.name || "Story") : (item.caption || client?.name || ""),
           schedule_date_time: utcToIstWallClock(scheduledUtc),
         };
+        // image_url is an array already; a carousel simply fills it, every
+        // slide in order. That is the whole of the difference to RecurPost.
         if (isVideo) params.video_url = publishUrl;
-        else params.image_url = [publishUrl];
-        if (platform === "facebook" && contentType !== "post") params.fb_post_type = contentType;
-        if (platform === "instagram" && contentType !== "post") params.in_post_type = contentType;
+        else params.image_url = isCarousel ? slideUrls : [publishUrl];
+        // A carousel IS a feed post to RecurPost, so it carries no post type
+        // of its own — "carousel" is our word, not one of theirs.
+        if (!isCarousel && platform === "facebook" && contentType !== "post") params.fb_post_type = contentType;
+        if (!isCarousel && platform === "instagram" && contentType !== "post") params.in_post_type = contentType;
         if (platform === "instagram" && contentType === "reel") params.in_reel_share_in_feed = "yes";
         if (isVideo && upload.thumbnail_url) {
           // The manual publisher checks a cover against the platform's upload
@@ -655,11 +725,13 @@ export async function POST(request: NextRequest) {
         caption: contentType === "story" ? null : (item.caption || null),
         media_url: publishUrl,
         media_is_video: isVideo,
-        thumbnail_url: upload.thumbnail_url || null,
+        thumbnail_url: isCarousel ? null : (upload.thumbnail_url || null),
         scheduled_for: scheduledIso,
         status: ok ? "sent" : "failed",
         recurpost_post_id: rpId,
-        webhook_response: `${isOverride ? "[risk-override] " : ""}[automation] ${detail}`,
+        // The cover stands for the carousel in the Library; the note says how
+        // many slides went with it, so history reads what was actually sent.
+        webhook_response: `${isOverride ? "[risk-override] " : ""}[automation] ${detail}${isCarousel ? ` [carousel ${slideUrls.length} slides]` : ""}`,
       });
 
       results.push({ uploadId: upload.id, platform, ok, detail });
@@ -690,14 +762,16 @@ export async function POST(request: NextRequest) {
   const failed = results.filter((r) => !r.ok && !r.skipped);
   const namesOf = (rows: typeof results) => [...new Set(rows.map((r) => r.platform))].join(", ");
   const posted = results.filter((r) => r.ok);
-  // Two reasons a platform sits one out, and each says its own.
+  // Three reasons a platform sits one out, and each says its own.
   const storySkips = results.filter((r) => r.skipped && r.detail.startsWith("Stories"));
-  const videoSkips = results.filter((r) => r.skipped && !r.detail.startsWith("Stories"));
+  const carouselSkips = results.filter((r) => r.skipped && r.detail.startsWith("Carousels"));
+  const videoSkips = results.filter((r) => r.skipped && !r.detail.startsWith("Stories") && !r.detail.startsWith("Carousels"));
   const message = [
     posted.length ? `posted to ${namesOf(posted)}` : "nothing posted",
     failed.length ? `failed on ${namesOf(failed)}` : "",
     videoSkips.length ? `${namesOf(videoSkips)} skipped (video only)` : "",
     storySkips.length ? `${namesOf(storySkips)} skipped for Stories (Instagram/Facebook only)` : "",
+    carouselSkips.length ? `${namesOf(carouselSkips)} skipped for carousels (Instagram/Facebook only)` : "",
   ].filter(Boolean).join(" · ");
 
   return NextResponse.json({

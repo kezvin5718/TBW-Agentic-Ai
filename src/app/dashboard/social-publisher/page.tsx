@@ -92,6 +92,8 @@ const TYPES = ["post", "reel", "story"] as const;
 
 /** Instagram and Facebook Stories carry no caption — the text is dropped. */
 const storyHasNoCaption = (contentType: string) => contentType === "story";
+/** A Library post's type as the list says it — a carousel wears the hub's ▣, so it is never read as a lone image. */
+const libTypeLabel = (contentType: string) => (contentType === "carousel" ? "▣ carousel" : contentType);
 
 /** The Automation Clear/Risk switch. A component of its own because it must
     render in the empty state too — an empty Clear list is exactly the moment
@@ -816,8 +818,13 @@ export default function SocialPublisherPage() {
     /** Risk mode only: QC refused this one, and why. */
     rejected?: boolean; rejected_reason?: string | null; qc_note?: string | null;
     risk_accepted_at?: string | null;
+    /** A carousel's slides, in order — the list read attaches them to carousel rows only. */
+    slides?: Array<{ slide_no: number; file_url: string; file_name: string | null }>;
   }
   type Cadence = "daily" | "alternate" | "manual";
+  /** "N slides" — read from the slides when the list carried them, else from the name the hub saved. */
+  const autoSlideCount = (r: AutoRow) =>
+    r.slides?.length || Number((r.file_name || "").match(/^(\d+) slides/)?.[1] || 0);
 
   // Clear vs Risk. Deliberately a plain useState: this resets on reload and on
   // a client change, because publishing against QC advice should be a decision
@@ -2542,17 +2549,30 @@ export default function SocialPublisherPage() {
                       <span className="w-6 h-6 rounded-full bg-[var(--yellow)] text-black text-[10px] font-black flex items-center justify-center cursor-grab active:cursor-grabbing select-none">{i + 1}</span>
                       <span className="text-slate-600 cursor-grab active:cursor-grabbing select-none leading-none" title="Drag to reorder — the dates follow the order">⠿</span>
                     </div>
-                    <div className={`w-12 shrink-0 rounded-lg overflow-hidden border border-slate-800 bg-slate-900 ${["reel", "story"].includes(r.content_type) ? "aspect-[9/16]" : "aspect-square"}`}>
-                      {r.media_type === "video"
+                    <div className={`relative w-12 shrink-0 rounded-lg overflow-hidden border border-slate-800 bg-slate-900 ${["reel", "story"].includes(r.content_type) ? "aspect-[9/16]" : "aspect-square"}`}>
+                      {r.media_type === "video" && r.content_type !== "carousel"
                         ? <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs">▶</div>
                         // eslint-disable-next-line @next/next/no-img-element
                         : <img src={r.file_url} alt="" className="w-full h-full object-cover" />}
+                      {/* The cover stands for the carousel; the corner says it is not alone. */}
+                      {r.content_type === "carousel" && (
+                        <span className="absolute bottom-0 right-0 px-1 rounded-tl bg-black/75 text-[8px] font-black text-white">▣ {autoSlideCount(r)}</span>
+                      )}
                     </div>
 
                     <div className="min-w-[140px] sm:min-w-0 flex-1 space-y-2">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[11px] font-bold text-white truncate max-w-[220px]">{r.file_name || "creative"}</span>
                         <span className="text-[9px] uppercase font-bold text-slate-500">{r.content_type}</span>
+                        {/* Same badge the hub shows. One caption serves the
+                            whole carousel; Send-as and Repeat are not offered
+                            on it — it goes out once, as one feed post. */}
+                        {r.content_type === "carousel" && (
+                          <span className="px-2 py-0.5 rounded-full bg-indigo-950/40 border border-indigo-900 text-indigo-300 text-[10px] font-bold"
+                            title="Sent as one post with every slide, in order — Instagram and Facebook only">
+                            ▣ {autoSlideCount(r)} slides
+                          </span>
+                        )}
                         {r.caption_status === "failed" && <span className="text-[9px] font-bold text-amber-400">caption failed — write one</span>}
                         {r.caption_status === "no_contact" && (
                           <span className="text-[9px] font-bold text-rose-400" title="Every caption must carry the address and phone">
@@ -3199,7 +3219,7 @@ export default function SocialPublisherPage() {
                                       {postDate(p).toLocaleTimeString("en-IN", { timeZone: IST_TZ, hour: "numeric", minute: "2-digit" })}
                                     </span>
                                     <span className="text-[10px] font-bold text-slate-300">{p.clients?.name || "—"}</span>
-                                    <span className="text-[9px] uppercase font-bold text-slate-500">{p.platform} · {p.content_type}</span>
+                                    <span className="text-[9px] uppercase font-bold text-slate-500">{p.platform} · {libTypeLabel(p.content_type)}</span>
                                     <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border ${
                                       p.status === "failed" ? "bg-rose-950/40 border-rose-900 text-rose-400"
                                       : isFuture(p) ? "bg-amber-950/40 border-amber-900 text-amber-400"
@@ -3264,7 +3284,7 @@ export default function SocialPublisherPage() {
                                 <span className="min-w-0 leading-tight">
                                   <span className="block text-[8.5px] font-bold text-slate-200 truncate">{p.clients?.name || "—"}</span>
                                   <span className="block text-[7.5px] text-slate-500 truncate">
-                                    {PLATFORM_LABEL[p.platform] || p.platform} {p.content_type}
+                                    {PLATFORM_LABEL[p.platform] || p.platform} {libTypeLabel(p.content_type)}
                                   </span>
                                 </span>
                               </button>
@@ -3299,7 +3319,7 @@ export default function SocialPublisherPage() {
                         ) : <span className="text-slate-500 text-lg">▶</span>}
                       </div>
                       <div className="min-w-[140px] sm:min-w-0 flex-1">
-                        <p className="text-[11px] font-bold text-white truncate">{p.clients?.name || "—"} <span className="text-slate-500 font-normal capitalize">· {p.platform} · {p.content_type}</span></p>
+                        <p className="text-[11px] font-bold text-white truncate">{p.clients?.name || "—"} <span className="text-slate-500 font-normal capitalize">· {p.platform} · {libTypeLabel(p.content_type)}</span></p>
                         <p className="text-[10px] text-slate-500 truncate">{p.title || p.caption?.slice(0, 70) || "(no caption)"}</p>
                         <p className="text-[9px] text-slate-600">{p.scheduled_for ? `⏰ ${fmtIST(p.scheduled_for)} IST` : `${fmtIST(p.created_at)} IST`} · {p.profiles?.name || ""}</p>
                       </div>

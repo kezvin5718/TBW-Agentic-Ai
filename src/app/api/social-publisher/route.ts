@@ -119,6 +119,30 @@ export async function POST(request: NextRequest) {
     if (post.content_type === "reel" && !isVideo) {
       return NextResponse.json({ error: "This was sent as an image tagged Reel — Meta rejects that. Fix it in Content Hub or Social Publisher and send it as a new post rather than retrying." }, { status: 400 });
     }
+
+    // A carousel retry must carry ALL its slides, not the cover this row
+    // happens to hold — and never the in/fb post-type override, which only
+    // confuses RecurPost about what is already a plain multi-image post. The
+    // slides are found through the hub row whose cover this is.
+    let carouselSlides: string[] | null = null;
+    if (post.content_type === "carousel") {
+      if (!["instagram", "facebook"].includes(post.platform as string)) {
+        return NextResponse.json({ error: "Carousels are Instagram/Facebook only — this row cannot be retried." }, { status: 400 });
+      }
+      const { data: hubRow } = await admin
+        .from("creative_uploads")
+        .select("id")
+        .eq("content_type", "carousel")
+        .eq("file_url", post.media_url)
+        .maybeSingle();
+      const { data: slides } = hubRow
+        ? await admin.from("carousel_slides").select("file_url").eq("upload_id", hubRow.id).order("slide_no")
+        : { data: null };
+      if (!slides || slides.length === 0) {
+        return NextResponse.json({ error: "This carousel's slides are no longer in the hub, so a retry would post only the cover. Rebuild the carousel in Content Hub and send it fresh from Automation." }, { status: 400 });
+      }
+      carouselSlides = slides.map((s) => s.file_url as string);
+    }
     const params: Record<string, unknown> = { id: accountId, message: post.caption || post.title || "" };
     if (post.scheduled_for && new Date(post.scheduled_for as string).getTime() > Date.now()) {
       // RecurPost schedules in the account's own (IST) clock, so send IST —
@@ -132,7 +156,7 @@ export async function POST(request: NextRequest) {
       retryUrl = staged.url;
     }
     if (isVideo) params.video_url = retryUrl;
-    else params.image_url = [retryUrl];
+    else params.image_url = carouselSlides ?? [retryUrl];
     // A print-resolution cover is re-encoded by the platform and arrives soft;
     // hand over one already cut to the shape and size the format shows.
     let retryThumb = post.thumbnail_url as string | null;
@@ -140,11 +164,11 @@ export async function POST(request: NextRequest) {
       retryThumb = (await toPublishableThumbUrl(retryThumb)).url;
     }
     if (post.platform === "facebook") {
-      if (post.content_type !== "post") params.fb_post_type = post.content_type;
+      if (post.content_type !== "post" && post.content_type !== "carousel") params.fb_post_type = post.content_type;
       if (isVideo && retryThumb) params.fb_thumb = retryThumb;
     }
     if (post.platform === "instagram") {
-      if (post.content_type !== "post") params.in_post_type = post.content_type;
+      if (post.content_type !== "post" && post.content_type !== "carousel") params.in_post_type = post.content_type;
       if (post.content_type === "reel") params.in_reel_share_in_feed = "yes";
       if (isVideo && retryThumb) params.in_thumb = retryThumb;
     }
