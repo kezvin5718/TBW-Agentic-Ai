@@ -264,6 +264,17 @@ export async function POST(request: NextRequest) {
     .not("recurpost_post_id", "is", null)
     .gte("created_at", sinceIso);
   const scheduledIso = scheduledFor ? istWallClockToUtc(scheduledFor).toISOString() : null;
+  // A time already gone gets refused HERE, in words, before RecurPost's
+  // "Oops! You need to schedule your update for a time in the future!" burns
+  // the whole send — it ate posts on 4, 6, 19 and 20 Oct. Two minutes of slack
+  // so a send pressed right on the minute still goes.
+  if (scheduledIso && new Date(scheduledIso).getTime() < Date.now() + 2 * 60_000) {
+    const when = utcToIstWallClock(scheduledIso);
+    return NextResponse.json(
+      { error: `The scheduled time (${when} IST) has already passed — pick a time in the future, or clear it to post now. Nothing was sent.` },
+      { status: 400 }
+    );
+  }
   alreadyQ = scheduledIso ? alreadyQ.eq("scheduled_for", scheduledIso) : alreadyQ.is("scheduled_for", null);
   const { data: alreadySent } = await alreadyQ;
   const alreadyKey = new Set((alreadySent || []).map((p) => `${p.platform}|${p.content_type}`));

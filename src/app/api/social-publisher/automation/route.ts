@@ -566,6 +566,20 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // A slot already in the past is refused in words before RecurPost's cryptic
+  // "schedule your update for a time in the future" burns the send. Two
+  // minutes of slack so a send pressed on the minute still goes.
+  const pastSlots = [...new Set(
+    occurrences
+      .filter((o) => istWallClockToUtc(o.scheduledFor).getTime() < Date.now() + 2 * 60_000)
+      .map((o) => o.scheduledFor.replace("T", " "))
+  )];
+  if (pastSlots.length > 0) {
+    return NextResponse.json({
+      error: `${pastSlots.length === 1 ? "This time has" : "These times have"} already passed: ${pastSlots.slice(0, 4).join(", ")}${pastSlots.length > 4 ? "…" : ""} (IST). Move ${pastSlots.length === 1 ? "it" : "them"} to the future and send again — nothing was sent.`,
+    }, { status: 400 });
+  }
+
   // A video that could not be prepared once will not be prepared on its second
   // day either. Remembered so a repeated story is tried — and reported — once,
   // not once per day.

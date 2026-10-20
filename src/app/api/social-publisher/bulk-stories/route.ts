@@ -52,6 +52,16 @@ export async function POST(request: NextRequest) {
   if (items.length > MAX_ITEMS) {
     return NextResponse.json({ error: `That is ${items.length} slots — the maximum is ${MAX_ITEMS} per batch.` }, { status: 400 });
   }
+  // Past slots are refused in words, not left for RecurPost's "schedule your
+  // update for a time in the future" to burn the batch. Two minutes of slack.
+  const pastSlots = items
+    .map((i, idx) => ({ idx: idx + 1, at: i.scheduledFor }))
+    .filter((s) => s.at && istWallClockToUtc(s.at).getTime() < Date.now() + 2 * 60_000);
+  if (pastSlots.length > 0) {
+    return NextResponse.json({
+      error: `Slot${pastSlots.length === 1 ? "" : "s"} ${pastSlots.map((s) => s.idx).slice(0, 5).join(", ")} ${pastSlots.length === 1 ? "has" : "have"} a time that already passed (IST). Move ${pastSlots.length === 1 ? "it" : "them"} to the future — nothing was sent.`,
+    }, { status: 400 });
+  }
   if (items.some((i) => !i.mediaUrl || !i.scheduledFor)) {
     return NextResponse.json({ error: "Every slot needs a creative and a date + time." }, { status: 400 });
   }
