@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { isRecurPostConfigured, postContent } from "@/lib/recurpost";
-import { istToday, istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
+import { istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
 import { toPublishableVideoUrl, toPublishableThumbUrl, isDriveUrl } from "@/lib/publishable-media";
 import { isDriveConnected } from "@/lib/google-drive";
 
@@ -58,98 +58,9 @@ function shiftWallClockDays(wallClock: string, days: number): string | null {
   return `${date}${m[4]}`;
 }
 
-type Admin = ReturnType<typeof createServiceRoleClient>;
-
-/**
- * Posts that hold a day on the client's calendar: queued or out, feed posts,
- * reels and carousels. A Story occupies nothing — a brand can run several a
- * day alongside its feed — and a failed send held nothing either.
- */
-const OCCUPYING_STATUSES = ["sent", "published"];
-
-/** The IST calendar day an instant falls on, as "YYYY-MM-DD". */
-function istDayOf(instant: string): string {
-  return utcToIstWallClock(instant).slice(0, 10);
-}
-
-/** Midnight IST at the start of a "YYYY-MM-DD", as a UTC ISO instant. */
-function istDayStartIso(day: string): string {
-  return istWallClockToUtc(`${day}T00:00`).toISOString();
-}
-
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-/** "2026-10-16" → "16 Oct". Already a calendar date, so no zone is involved. */
-function dayLabel(day: string): string {
-  const [, m, d] = day.split("-").map(Number);
-  return `${d} ${MONTHS[(m || 1) - 1]}`;
-}
-
-/** "16 Oct", "16 Oct and 18 Oct", "16 Oct, 17 Oct and 18 Oct". */
-function joinDays(days: string[]): string {
-  const labels = days.map(dayLabel);
-  return labels.length <= 1 ? labels.join("") : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
-}
-
-/** The client's occupying posts, nothing else — the one definition GET and POST share. */
-function occupyingPosts(admin: Admin, clientId: string) {
-  return admin
-    .from("social_posts")
-    .select("scheduled_for, created_at")
-    .eq("client_id", clientId)
-    .in("status", OCCUPYING_STATUSES)
-    // A row with no content type predates the column being set everywhere and
-    // was a feed post; .neq alone would quietly drop it.
-    .or("content_type.is.null,content_type.neq.story");
-}
-
-/**
- * Every IST day in [fromIso, toIso) holding one of the client's occupying
- * posts, sorted. A post's day is its scheduled slot, or — for one sent
- * straight out with no slot — the moment it was created: coalesce(
- * scheduled_for, created_at), asked as two plain queries rather than one
- * expression PostgREST cannot filter on.
- */
-async function occupiedDaysBetween(admin: Admin, clientId: string, fromIso: string, toIso: string | null): Promise<string[]> {
-  let scheduled = occupyingPosts(admin, clientId).not("scheduled_for", "is", null).gte("scheduled_for", fromIso);
-  let immediate = occupyingPosts(admin, clientId).is("scheduled_for", null).gte("created_at", fromIso);
-  if (toIso) {
-    scheduled = scheduled.lt("scheduled_for", toIso);
-    immediate = immediate.lt("created_at", toIso);
-  }
-  // A month of daily posts across four platforms is ~120 rows; a thousand is
-  // far past any real calendar and still one cheap read.
-  const [a, b] = await Promise.all([
-    scheduled.order("scheduled_for", { ascending: true }).limit(1000),
-    immediate.order("created_at", { ascending: true }).limit(1000),
-  ]);
-  if (a.error) throw new Error(a.error.message);
-  if (b.error) throw new Error(b.error.message);
-  const days = new Set<string>();
-  for (const r of a.data || []) if (r.scheduled_for) days.add(istDayOf(r.scheduled_for as string));
-  for (const r of b.data || []) if (r.created_at) days.add(istDayOf(r.created_at as string));
-  return Array.from(days).sort();
-}
-
-/**
- * The latest IST day the client has anything occupying, ever — or null.
- *
- * Only asked when nothing is booked from today on: then the answer is in the
- * past, and is said on screen ("last scheduled post 2 Oct") without moving
- * the start, which is clamped to tomorrow anyway.
- */
-async function lastOccupiedBefore(admin: Admin, clientId: string): Promise<string | null> {
-  const [a, b] = await Promise.all([
-    occupyingPosts(admin, clientId).not("scheduled_for", "is", null).order("scheduled_for", { ascending: false }).limit(1),
-    occupyingPosts(admin, clientId).is("scheduled_for", null).order("created_at", { ascending: false }).limit(1),
-  ]);
-  if (a.error) throw new Error(a.error.message);
-  if (b.error) throw new Error(b.error.message);
-  const candidates = [
-    ...(a.data || []).map((r) => r.scheduled_for as string | null),
-    ...(b.data || []).map((r) => r.created_at as string | null),
-  ].filter((x): x is string => !!x).map(istDayOf).sort();
-  return candidates.length ? candidates[candidates.length - 1] : null;
-}
+// The auto-date-from-the-library feature (auto start, occupied-day skipping,
+// the double-booking refusal) lived here from 18–20 Oct and was removed on
+// the founder's order: the team schedules dates by hand again.
 
 /**
  * GET /api/social-publisher/automation?clientId=…
@@ -258,18 +169,6 @@ export async function GET(request: NextRequest) {
     rejectedQuery().order("created_at", { ascending: false }).limit(10),
   ]);
 
-  // Where this client's calendar already stands, so the screen can continue it
-  // rather than start from today by reflex. Same in Clear and Risk: what is
-  // booked does not depend on which list is being looked at.
-  let occupiedDays: string[] = [];
-  let lastOccupied: string | null = null;
-  try {
-    occupiedDays = await occupiedDaysBetween(admin, clientId, istDayStartIso(istToday()), null);
-    lastOccupied = occupiedDays.length ? occupiedDays[occupiedDays.length - 1] : await lastOccupiedBefore(admin, clientId);
-  } catch (err: unknown) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Could not read the calendar" }, { status: 500 });
-  }
-
   const rows: Record<string, unknown>[] = [...(data || []).map((r) => ({ ...r, rejected: false })), ...refused];
 
   // A carousel is one row with its slides beside it — the same read the hub
@@ -295,8 +194,6 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json({
-    lastOccupied,
-    occupiedDays,
     success: true,
     uploads: rows,
     riskMode: risk,
@@ -526,44 +423,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       error: `${names.length} creative(s) have no caption: ${names.slice(0, 5).join(", ")}${names.length > 5 ? "…" : ""}. Write or generate captions first — only Stories go out without one. Nothing was sent.`,
     }, { status: 400 });
-  }
-
-  // A day this client already has a post on is not to be booked twice. The
-  // screen skips those days on its own, but it read the calendar when it
-  // loaded — a second session sending the same days since, or a date typed
-  // by hand onto one, only shows up by asking again now.
-  //
-  // Feed occurrences only. A Story occupies no day, so story uploads, their
-  // repeats, and feed creatives converted to a Story pass are never checked.
-  // Two rows of THIS batch sharing a day are not this guard's business either
-  // — the screen's own spacing and collision warnings own that — which is why
-  // the question is asked before anything below inserts a row of its own.
-  const feedDays = Array.from(new Set(
-    occurrences
-      .filter((o) => {
-        const u = byId.get(o.uploadId);
-        return !!u && !o.asStory && u.content_type !== "story";
-      })
-      .map((o) => istDayOf(istWallClockToUtc(o.scheduledFor).toISOString()))
-  )).sort();
-  if (feedDays.length > 0) {
-    let taken: string[];
-    try {
-      const from = istDayStartIso(feedDays[0]);
-      const until = istDayStartIso(shiftWallClockDays(`${feedDays[feedDays.length - 1]}T00:00`, 1)?.slice(0, 10) || feedDays[feedDays.length - 1]);
-      const wanted = new Set(feedDays);
-      taken = (await occupiedDaysBetween(admin, clientId, from, until)).filter((d) => wanted.has(d));
-    } catch (err: unknown) {
-      return NextResponse.json({
-        error: `Could not check this client's calendar (${err instanceof Error ? err.message : "unknown error"}). Nothing was sent.`,
-      }, { status: 500 });
-    }
-    if (taken.length > 0) {
-      return NextResponse.json({
-        error: `${joinDays(taken)} already ${taken.length === 1 ? "holds a scheduled post" : "hold scheduled posts"} for this client — adjust the dates (or delete the old posts in the Library) and send again. Nothing was sent.`,
-        occupiedDays: taken,
-      }, { status: 400 });
-    }
   }
 
   // A slot already in the past is refused in words before RecurPost's cryptic

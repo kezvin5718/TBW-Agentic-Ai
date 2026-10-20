@@ -1,3 +1,5 @@
+> REMOVED 20 Oct 2026 on the founder's order — dates are set by hand again. Kept for history.
+
 # Smart auto-dates — Automation continues the calendar by itself
 
 Founder (18 Oct, confirmed): when a client is selected in Automation, the
