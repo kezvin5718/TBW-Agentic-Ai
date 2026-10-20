@@ -46,9 +46,18 @@ export const listSocialAccounts = () => rpCall("/api/social_account_list");
  * a pause and exactly one more try; every other failure reports as it came.
  */
 const SETTLE_MS = 8000;
+/**
+ * The two answers that mean "fetch me again", not "this is broken":
+ * a staging copy read mid-write, and Google's lh3 image host answering a
+ * rapid second fetch with an HTML page (20 Oct: Facebook got the JPEG,
+ * Instagram's fetch seconds later got text/html — the same URL served the
+ * image perfectly on every later try).
+ */
+const TRANSIENT = [/could not be processed/i, /detected content type: text\/html/i];
 export async function postContent(params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const res = await rpCall("/api/post_content", params);
-  if (JSON.stringify(res).includes("could not be processed")) {
+  const text = JSON.stringify(res);
+  if (TRANSIENT.some((re) => re.test(text))) {
     await new Promise((r) => setTimeout(r, SETTLE_MS));
     return rpCall("/api/post_content", params);
   }
