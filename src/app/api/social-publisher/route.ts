@@ -86,7 +86,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "RecurPost is not configured." }, { status: 400 });
     }
     const admin = createServiceRoleClient();
-    const { data: post } = await admin.from("social_posts").select("*").eq("id", body.id).single();
+    const { data: post } = await admin.from("social_posts").select("*, clients(name)").eq("id", body.id).single();
     if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
 
     // A RecurPost id means they accepted this post and it is sitting in their
@@ -143,7 +143,14 @@ export async function POST(request: NextRequest) {
       }
       carouselSlides = slides.map((s) => s.file_url as string);
     }
-    const params: Record<string, unknown> = { id: accountId, message: post.caption || post.title || "" };
+    // RecurPost refuses an empty message ("Bad Request Please try again
+    // later") even on a Story, whose text the platforms drop anyway — so a
+    // story retry carries the client's name, exactly as the first send did.
+    const clientName = (post.clients as { name?: string } | null)?.name || "";
+    const params: Record<string, unknown> = {
+      id: accountId,
+      message: post.caption || post.title || (post.content_type === "story" ? clientName || "Story" : ""),
+    };
     if (post.scheduled_for && new Date(post.scheduled_for as string).getTime() > Date.now()) {
       // RecurPost schedules in the account's own (IST) clock, so send IST —
       // not the UTC instant, which would retry the post 5:30 early.
