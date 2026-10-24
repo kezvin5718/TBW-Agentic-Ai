@@ -82,7 +82,27 @@ export async function POST(request: NextRequest) {
 
   const mapping = body.mapping;
   if (!mapping || typeof mapping !== "object") return NextResponse.json({ error: "mapping object required" }, { status: 400 });
+
+  // The save is the whole map as the BROWSER loaded it — so a page opened
+  // before a cleanup and saved after it quietly resurrected every deleted
+  // dead id (Swarna Kanchi's YouTube collected four this way). The live
+  // account list is the truth: an id RecurPost no longer knows cannot be
+  // saved, whatever the page believed.
+  let cleaned = mapping as Record<string, unknown>;
+  try {
+    const res = await listSocialAccounts();
+    // Same tolerant extraction the GET uses for RecurPost's shape
+    // ({ social_accounts: [{ smpa_id, … }] }, with fallbacks).
+    const raw = (Array.isArray(res) ? res : (res as Record<string, unknown>).social_accounts || (res as Record<string, unknown>).accounts || (res as Record<string, unknown>).data || []) as Array<Record<string, unknown>>;
+    const live = new Set(
+      (Array.isArray(raw) ? raw : []).map((a) => String(a.smpa_id ?? a.id ?? a.account_id ?? "")).filter(Boolean)
+    );
+    if (live.size > 0) {
+      cleaned = Object.fromEntries(Object.entries(cleaned).filter(([id]) => live.has(id)));
+    }
+  } catch { /* RecurPost unreachable: save as sent rather than lose the edit */ }
+
   const admin = createServiceRoleClient();
-  await admin.from("agency_settings").upsert({ key: MAP_KEY, value: mapping }, { onConflict: "key" });
+  await admin.from("agency_settings").upsert({ key: MAP_KEY, value: cleaned }, { onConflict: "key" });
   return NextResponse.json({ success: true });
 }
