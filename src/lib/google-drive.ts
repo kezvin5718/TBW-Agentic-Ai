@@ -1,5 +1,7 @@
 import { google } from "googleapis";
-import { Readable } from "stream";
+import { Readable, Transform } from "stream";
+import { pipeline } from "stream/promises";
+import { createWriteStream } from "fs";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { encrypt, decrypt } from "@/lib/encryption";
 import { downloadAndStoreGeneratedMedia, uploadToSupabaseStorageDirect } from "@/lib/higgsfield-mcp";
@@ -437,9 +439,9 @@ export async function downloadDriveFileToPath(
       return { ok: false, error: `file is ${(size / 1024 / 1024).toFixed(0)}MB — over the ${(maxBytes / 1024 / 1024).toFixed(0)}MB limit` };
     }
     const res = await drive.files.get({ fileId: m[1], alt: "media" }, { responseType: "stream" });
-    const { createWriteStream } = await import("fs");
-    const { Transform } = await import("stream");
-    const { pipeline } = await import("stream/promises");
+    // Static imports at the top, not await import(): the production bundle
+    // handed back a namespace without Transform on it ("j is not a
+    // constructor"), failing every thumbnail on 27 Oct.
     let bytes = 0;
     const counter = new Transform({
       transform(chunk: Buffer, _enc, cb) {
