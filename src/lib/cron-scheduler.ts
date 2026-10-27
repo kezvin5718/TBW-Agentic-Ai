@@ -200,6 +200,25 @@ export function startCronScheduler() {
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;
 
+  // 6c. Video thumbnails (every 5 minutes) — four videos per sweep, one at a
+  // time: retries plus the backfill, about 48 an hour, without the portal
+  // feeling it. A sweep still running when the next tick comes is left alone.
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      const { processPendingThumbnails } = await import("@/lib/video-thumbnail");
+      const res = await processPendingThumbnails(4);
+      cronSchedulerStatus.lastRun["video_thumbnails"] = new Date().toISOString();
+      if (res.busy) return;
+      await recordRun("video_thumbnails", "ok", `${res.completed} made, ${res.failed} failed, ${res.recovered} recovered`);
+      if (res.picked > 0) console.log(`✅ In-App Cron: video thumbnails — ${res.completed} made, ${res.failed} failed of ${res.picked}.`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: video thumbnails failed:", msg);
+      await recordRun("video_thumbnails", "failed", msg);
+    }
+  }, { timezone: "Asia/Kolkata" });
+  cronSchedulerStatus.jobsScheduledCount++;
+
   // 7. Storage sweep (3:30 AM IST) — move spent files to Drive, free Supabase.
   cron.schedule("30 3 * * *", async () => {
     console.log("⏰ In-App Cron: Starting Storage Sweep...");

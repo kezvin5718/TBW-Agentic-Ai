@@ -24,6 +24,10 @@ interface UploadRow {
   uploaded_by?: string | null;
   thumbnail_url?: string | null;
   thumbnail_name?: string | null;
+  /** The automatic frame's progress — see thumbState. */
+  thumbnail_status?: "pending" | "processing" | "completed" | "failed" | null;
+  thumbnail_source?: "designer" | "matched" | "auto" | null;
+  thumbnail_attempts?: number | null;
   created_at: string;
   clients?: { name: string } | null;
   profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
@@ -133,6 +137,30 @@ interface DetectedGroup {
 const slideCountOf = (u: UploadRow) =>
   u.slides?.length || Number((u.file_name || "").match(/^(\d+) slides/)?.[1] || 0);
 const isDriveUrl = (u: string) => u.includes("googleusercontent.com");
+/**
+ * Where a video's automatic frame stands. "working" covers pending, processing
+ * and a failure with retries left — the engine is coming back for it. "none"
+ * is a video the engine gave up on after three tries.
+ */
+const thumbState = (u: UploadRow): "working" | "none" | null => {
+  if (u.media_type !== "video" || u.thumbnail_url) return null;
+  if (u.thumbnail_status === "pending" || u.thumbnail_status === "processing") return "working";
+  if (u.thumbnail_status === "failed") return (u.thumbnail_attempts ?? 0) < 3 ? "working" : "none";
+  return null;
+};
+/** The line under a video's preview box while it has no picture of its own. */
+function ThumbNote({ u }: { u: UploadRow }) {
+  const st = thumbState(u);
+  if (st === "working") {
+    return (
+      <span className="mt-0.5 flex items-center gap-1 text-[9px] text-slate-500 whitespace-nowrap">
+        <Loader2 className="w-2.5 h-2.5 animate-spin" />making thumbnail…
+      </span>
+    );
+  }
+  if (st === "none") return <span className="mt-0.5 block text-[9px] text-slate-600 whitespace-nowrap">no thumbnail</span>;
+  return null;
+}
 const driveOpen = (u: string) => {
   const m = u.match(/googleusercontent\.com\/d\/([^=/?]+)/);
   return m ? `https://drive.google.com/file/d/${m[1]}/view` : u;
@@ -313,6 +341,50 @@ export default function ContentHubPage() {
   }, [fetchUploads]);
 
   useEffect(() => { runQc(); }, [runQc]); // catch anything pending from earlier
+
+  // --- Automatic thumbnails -------------------------------------------------------
+  // A video's frame is made on the server after the upload has answered, so it
+  // lands after the list was drawn. While the list holds a video still waiting,
+  // the list is read again every 15s — and that stops once none are waiting, or
+  // five minutes after the last new one appeared, so a stuck file can't keep a
+  // tab polling all day.
+  const thumbWaitKey = uploads.filter((u) => thumbState(u) === "working").map((u) => u.id).join(",");
+  const thumbWatch = useRef<{ since: number; seen: Set<string> }>({ since: 0, seen: new Set() });
+  useEffect(() => {
+    if (!thumbWaitKey) return;
+    const ids = thumbWaitKey.split(",");
+    const w = thumbWatch.current;
+    if (ids.some((id) => !w.seen.has(id))) {
+      w.since = Date.now();
+      ids.forEach((id) => w.seen.add(id));
+    }
+    if (Date.now() - w.since > 5 * 60_000) return;
+    const timer = setInterval(() => {
+      if (Date.now() - thumbWatch.current.since > 5 * 60_000) { clearInterval(timer); return; }
+      fetchUploads();
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [thumbWaitKey, fetchUploads]);
+
+  // And the queue is nudged from here, at most once a minute, so it drains even
+  // on a server running without the cron. Fire-and-forget: the answer only
+  // matters if it finished something worth showing.
+  const hasThumbWaiting = thumbWaitKey !== "";
+  const lastThumbKick = useRef(0);
+  useEffect(() => {
+    if (!hasThumbWaiting) return;
+    const kick = () => {
+      if (Date.now() - lastThumbKick.current < 60_000) return;
+      lastThumbKick.current = Date.now();
+      fetch("/api/thumbnails/process", { method: "POST" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (d?.completed > 0) fetchUploads(); })
+        .catch(() => { /* the cron, or the next kick, picks it up */ });
+    };
+    kick();
+    const timer = setInterval(kick, 60_000);
+    return () => clearInterval(timer);
+  }, [hasThumbWaiting, fetchUploads]);
 
   const [uploadCount, setUploadCount] = useState<{ done: number; total: number } | null>(null);
 
@@ -1912,16 +1984,22 @@ export default function ContentHubPage() {
                           : "border-slate-800 bg-slate-950/60"
                         }`}
                       >
-                        <div className="w-16 h-28 shrink-0 rounded-lg overflow-hidden bg-slate-900 border border-slate-800">
+                        <div className="w-16 shrink-0">
+                        <div className="w-16 h-28 rounded-lg overflow-hidden bg-slate-900 border border-slate-800">
                           {c.media_type === "video" ? (
                             <a href={driveOpen(c.file_url)} target="_blank" rel="noreferrer" title="Open video" className="w-full h-full flex items-center justify-center text-slate-500 hover:text-indigo-400">
-                              <Film className="w-5 h-5" />
+                              {c.thumbnail_url
+                                // eslint-disable-next-line @next/next/no-img-element
+                                ? <img src={c.thumbnail_url} alt={c.file_name || ""} className="w-full h-full object-cover" />
+                                : <Film className="w-5 h-5" />}
                             </a>
                           ) : (
                             <a href={driveOpen(c.file_url)} target="_blank" rel="noreferrer" title="Open">
                               <img src={c.file_url} alt={c.file_name || ""} className="w-full h-full object-cover" />
                             </a>
                           )}
+                        </div>
+                        <ThumbNote u={c} />
                         </div>
                         <div className="flex-1 min-w-0 space-y-2">
                           <div className="flex items-start justify-between gap-2">
@@ -2101,8 +2179,14 @@ export default function ContentHubPage() {
                             <span className="absolute bottom-0 right-0 px-1 rounded-tl bg-black/75 text-[8px] font-black text-white">▣ {slideCountOf(u)}</span>
                           </button>
                         ) : u.media_type === "video" ? (
+                          // The video's thumbnail — designer, matched or the
+                          // automatic frame — in the same box; the link still
+                          // opens the video itself.
                           <a href={driveOpen(u.file_url)} target="_blank" rel="noreferrer" title="Open video" className="w-full h-full flex items-center justify-center text-slate-500 hover:text-indigo-400">
-                            <Film className="w-4 h-4" />
+                            {u.thumbnail_url
+                              // eslint-disable-next-line @next/next/no-img-element
+                              ? <img src={u.thumbnail_url} alt={u.file_name || ""} className="w-full h-full object-cover" />
+                              : <Film className="w-4 h-4" />}
                           </a>
                         ) : isDriveUrl(u.file_url) ? (
                           <a href={driveOpen(u.file_url)} target="_blank" rel="noreferrer" title="Open in Drive">
@@ -2112,6 +2196,7 @@ export default function ContentHubPage() {
                           <img src={u.file_url} alt={u.file_name || ""} className="w-full h-full object-cover" />
                         )}
                       </div>
+                      <ThumbNote u={u} />
                     </td>
                     <td className="py-2 pr-3 max-w-[180px]">
                       <span className="block truncate">{u.file_name}</span>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
+import { generateThumbnailFor } from "@/lib/video-thumbnail";
 import { storeContentHubUpload } from "@/lib/google-drive";
 import { scheduleFestivalStory } from "@/lib/festival-story";
 
@@ -96,11 +97,18 @@ export async function POST(request: NextRequest) {
           batch_id: batchId,
           status: "uploaded",
           qc_status: "pending",
+          // A video waits for its automatic frame, made right after this.
+          thumbnail_status: isVideo ? "pending" : null,
         })
         .select("*, clients(name), profiles:uploaded_by(name, avatar_url, designation)")
         .single();
       if (error) throw new Error(error.message);
       uploads.push(row);
+      // Fired, not awaited — and it catches its own failures, so an error in
+      // the background never reaches the server as an unhandled rejection.
+      if (isVideo && row?.id) {
+        void generateThumbnailFor(row.id as string).catch((err: unknown) => console.error(`video thumbnail ${row.id}: could not start —`, err));
+      }
     } catch (err: unknown) {
       failed.push({ file_name: file.name, error: err instanceof Error ? err.message : String(err) });
     }

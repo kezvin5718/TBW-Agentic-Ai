@@ -4,6 +4,7 @@ import { completeVision } from "@/lib/llm-vision";
 import { safeJsonParse } from "@/lib/llm";
 import { MODEL_FAST } from "@/lib/llm-config";
 import { storeContentHubUpload, downloadDriveFileByUrl } from "@/lib/google-drive";
+import { isOurStorageUrl, generateThumbnailFor } from "@/lib/video-thumbnail";
 import sharp from "sharp";
 import { spawn } from "child_process";
 import { writeFile, readFile, rm } from "fs/promises";
@@ -44,17 +45,10 @@ const CONCURRENCY = 3;
 const isImageFile = (f: File) =>
   (f.type || "").startsWith("image") || /\.(jpe?g|png|webp|heic|heif|gif)$/i.test(f.name || "");
 
-/**
- * Only URLs our own storage handed out are fetched or written as covers. The
- * pool step returns them, but they come back through the browser, and this
- * route must not become a way to make the server fetch anything it is told.
- */
-function isOurStorageUrl(url: string): boolean {
-  if (typeof url !== "string" || !/^https:\/\//.test(url)) return false;
-  if (url.includes("googleusercontent.com") || url.includes("drive.google.com")) return true;
-  const sb = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  return !!sb && url.startsWith(sb);
-}
+// Only URLs our own storage handed out are fetched or written as covers
+// (isOurStorageUrl, shared with the thumbnail engine's from-url). The pool step
+// returns them, but they come back through the browser, and this route must
+// not become a way to make the server fetch anything it is told.
 
 function cleanImage(v: unknown): PoolImage | null {
   if (!v || typeof v !== "object") return null;
@@ -249,11 +243,21 @@ export async function POST(request: NextRequest) {
     if (!row) return NextResponse.json({ error: "Upload not found" }, { status: 404 });
     if (row.media_type !== "video") return NextResponse.json({ error: "Only a video takes a cover" }, { status: 400 });
 
+    // A person's pick is the designer's cover and is final. Clearing one hands
+    // the video back to the automatic frame — every video has a thumbnail now,
+    // so "no cover" means "the frame-picker's", not "none".
     const { error } = await admin
       .from("creative_uploads")
-      .update({ thumbnail_url: image?.url ?? null, thumbnail_name: image?.name ?? null })
+      .update(
+        image
+          ? { thumbnail_url: image.url, thumbnail_name: image.name, thumbnail_source: "designer", thumbnail_status: "completed" }
+          : { thumbnail_url: null, thumbnail_name: null, thumbnail_source: null, thumbnail_status: "pending", thumbnail_attempts: 0 }
+      )
       .eq("id", videoId);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!image) {
+      void generateThumbnailFor(videoId).catch((err: unknown) => console.error(`video thumbnail ${videoId}: could not start —`, err));
+    }
     const pair: Pair = { videoId, image, confidence: null };
     return NextResponse.json({ success: true, pair });
   }
@@ -346,13 +350,15 @@ export async function POST(request: NextRequest) {
 
   const { data: rows, error: rowsErr } = await admin
     .from("creative_uploads")
-    .select("id, client_id, media_type, file_url, thumbnail_url, thumbnail_name")
+    .select("id, client_id, media_type, file_url, thumbnail_url, thumbnail_name, thumbnail_source")
     .in("id", videoIds);
   if (rowsErr) return NextResponse.json({ error: rowsErr.message }, { status: 500 });
   const byId = new Map((rows || []).map((r) => [r.id as string, r]));
 
   // Settled before any looking: rows that are not this client's videos, and
   // videos that already carry a cover (unless the caller asked to redo them).
+  // An automatic frame is not a cover for this purpose — it only ever fills an
+  // empty slot, so a designed cover the matcher finds replaces it.
   const settled = new Map<string, Pair>();
   const toMatch: Array<{ id: string; file_url: string }> = [];
   const alreadyCovering = new Set<string>();
@@ -360,7 +366,7 @@ export async function POST(request: NextRequest) {
     const r = byId.get(id);
     if (!r || r.client_id !== clientId) { settled.set(id, { videoId: id, image: null, confidence: null, note: "not found for this client" }); continue; }
     if (r.media_type !== "video") { settled.set(id, { videoId: id, image: null, confidence: null, note: "not a video" }); continue; }
-    if (r.thumbnail_url && !reassign) {
+    if (r.thumbnail_url && r.thumbnail_source !== "auto" && !reassign) {
       alreadyCovering.add(r.thumbnail_url as string);
       settled.set(id, {
         videoId: id,
@@ -434,11 +440,17 @@ export async function POST(request: NextRequest) {
       note = `unsure (thought #${c.idx + 1}) — pick by hand`;
     }
     if (image) {
-      const { error } = await admin
+      // Written only over an empty slot or an automatic frame — a designer's
+      // cover that arrived while the matcher was looking is never replaced
+      // (unless the caller asked to redo them all).
+      let write = admin
         .from("creative_uploads")
-        .update({ thumbnail_url: image.url, thumbnail_name: image.name })
+        .update({ thumbnail_url: image.url, thumbnail_name: image.name, thumbnail_source: "matched", thumbnail_status: "completed" })
         .eq("id", c.videoId);
+      if (!reassign) write = write.or("thumbnail_url.is.null,thumbnail_source.eq.auto");
+      const { data: wrote, error } = await write.select("id");
       if (error) { image = null; note = `could not save: ${error.message}`; }
+      else if (!wrote || wrote.length === 0) { image = null; note = "a cover was set by hand while matching — kept that one"; }
       else used.add(image.url);
     }
     settled.set(c.videoId, { videoId: c.videoId, image, confidence: image ? "high" : c.confidence, note });

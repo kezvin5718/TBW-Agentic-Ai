@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
+import { generateThumbnailFor } from "@/lib/video-thumbnail";
 import { storeContentHubUpload, deleteDriveFileByUrl } from "@/lib/google-drive";
 
 export const dynamic = "force-dynamic";
@@ -132,6 +133,10 @@ export async function POST(request: NextRequest) {
       caption: festivalId ? "" : caption,
       thumbnail_url: thumbnailUrl,
       thumbnail_name: thumbnailName,
+      // A cover that came with the video is the designer's and is final. A
+      // video without one waits for its automatic frame.
+      thumbnail_source: thumbnailUrl ? "designer" : null,
+      thumbnail_status: mediaType === "video" ? (thumbnailUrl ? "completed" : "pending") : null,
       festival_id: festivalId,
       batch_id: batchId,
       status: "uploaded",
@@ -140,6 +145,13 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Not awaited: the response goes now and the Node server carries on making
+  // the frame. generateThumbnailFor never rejects; the catch is belt and braces,
+  // because an unhandled rejection here would take the whole server down.
+  if (mediaType === "video" && !thumbnailUrl && row?.id) {
+    void generateThumbnailFor(row.id as string).catch((err: unknown) => console.error(`video thumbnail ${row.id}: could not start —`, err));
+  }
   return NextResponse.json({ success: true, upload: row });
 }
 

@@ -66,6 +66,7 @@ interface HubUpload {
   id: string; client_id: string; file_url: string; file_name: string | null;
   media_type: string; content_type: "post" | "reel" | "story" | "thumbnail"; status: string;
   thumbnail_url?: string | null;
+  thumbnail_status?: string | null; thumbnail_source?: string | null; thumbnail_attempts?: number | null;
   qc_status?: string; qc_detected_brand?: string | null; qc_note?: string | null;
   created_at: string; clients?: { name: string } | null;
   profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
@@ -92,6 +93,52 @@ const TYPES = ["post", "reel", "story"] as const;
 
 /** Instagram and Facebook Stories carry no caption — the text is dropped. */
 const storyHasNoCaption = (contentType: string) => contentType === "story";
+/**
+ * Where a video's automatic frame stands. "working" covers pending, processing
+ * and a failure with retries left — the engine is coming back for it. "none"
+ * is a video the engine gave up on after three tries.
+ */
+type ThumbFacts = { media_type: string; thumbnail_url?: string | null; thumbnail_status?: string | null; thumbnail_attempts?: number | null };
+const thumbState = (u: ThumbFacts): "working" | "none" | null => {
+  if (u.media_type !== "video" || u.thumbnail_url) return null;
+  if (u.thumbnail_status === "pending" || u.thumbnail_status === "processing") return "working";
+  if (u.thumbnail_status === "failed") return (u.thumbnail_attempts ?? 0) < 3 ? "working" : "none";
+  return null;
+};
+/** The words beside a video's preview box while it has no picture of its own. */
+function ThumbNote({ u, className = "", wrap = false }: { u: ThumbFacts; className?: string; wrap?: boolean }) {
+  const st = thumbState(u);
+  const ws = wrap ? "leading-tight" : "whitespace-nowrap";
+  if (st === "working") {
+    return (
+      <span className={`flex items-center gap-1 text-[9px] text-slate-500 ${ws} ${className}`}>
+        <Loader2 className="w-2.5 h-2.5 animate-spin shrink-0" />making thumbnail…
+      </span>
+    );
+  }
+  if (st === "none") return <span className={`block text-[9px] text-slate-600 ${ws} ${className}`}>no thumbnail</span>;
+  return null;
+}
+/** Read the hub list again every 15s while it holds a video still waiting for its frame — and stop when none are, or five minutes after the last new one appeared. */
+function useThumbRefresh(waitKey: string, refresh: () => void) {
+  const watch = useRef<{ since: number; seen: Set<string> }>({ since: 0, seen: new Set() });
+  useEffect(() => {
+    if (!waitKey) return;
+    const ids = waitKey.split(",");
+    const w = watch.current;
+    if (ids.some((id) => !w.seen.has(id))) {
+      w.since = Date.now();
+      ids.forEach((id) => w.seen.add(id));
+    }
+    if (Date.now() - w.since > 5 * 60_000) return;
+    const timer = setInterval(() => {
+      if (Date.now() - watch.current.since > 5 * 60_000) { clearInterval(timer); return; }
+      refresh();
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [waitKey, refresh]);
+}
+
 /** A Library post's type as the list says it — a carousel wears the hub's ▣, so it is never read as a lone image. */
 const libTypeLabel = (contentType: string) => (contentType === "carousel" ? "▣ carousel" : contentType);
 
@@ -145,6 +192,11 @@ export default function SocialPublisherPage() {
   const [mediaName, setMediaName] = useState("");
   const [mediaIsVideo, setMediaIsVideo] = useState(false);
   const [thumbUrl, setThumbUrl] = useState("");
+  // The automatic frame, and which video it was made for. Shown as "auto
+  // thumbnail — change it": any frame, upload or hub cover picked after it
+  // simply replaces it.
+  const [autoThumb, setAutoThumb] = useState<{ url: string; forMedia: string } | null>(null);
+  const [autoThumbBusy, setAutoThumbBusy] = useState(false);
   const [scheduledDate, setScheduledDate] = useState(""); // YYYY-MM-DD
   const [scheduledTime, setScheduledTime] = useState(""); // HH:mm
 
@@ -294,6 +346,48 @@ export default function SocialPublisherPage() {
     else { setFrames([]); setSelFrame(null); setVideoDims(null); }
   }, [mediaIsVideo, mediaUrl, extractFrames]);
 
+  // --- Automatic thumbnail ------------------------------------------------------
+  // A video attached with no thumbnail chosen gets the server's best frame —
+  // the same arithmetic the hub uses, no AI. It never replaces a thumbnail
+  // somebody chose; only an automatic frame left over from a previous video.
+  // Read through refs so a pick made while the frame is being made wins.
+  const thumbUrlRef = useRef(thumbUrl);
+  const autoThumbRef = useRef(autoThumb);
+  const clientIdRef = useRef(clientId);
+  useEffect(() => { thumbUrlRef.current = thumbUrl; autoThumbRef.current = autoThumb; clientIdRef.current = clientId; });
+  useEffect(() => {
+    if (!mediaIsVideo || !mediaUrl) return;
+    const chosen = () => {
+      const t = thumbUrlRef.current;
+      const a = autoThumbRef.current;
+      return !!t && !(a && a.url === t && a.forMedia !== mediaUrl);
+    };
+    if (chosen()) return;
+    let cancelled = false;
+    setAutoThumbBusy(true);
+    (async () => {
+      try {
+        const res = await fetch("/api/thumbnails/from-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: mediaUrl, clientId: clientIdRef.current || undefined }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.url) throw new Error(data.error || "no frame");
+        if (cancelled || chosen()) return;
+        setThumbUrl(data.url);
+        setSelectedThumb(null);
+        setAutoThumb({ url: data.url, forMedia: mediaUrl });
+      } catch {
+        /* the frame strip and the upload box are still right there */
+      } finally {
+        if (!cancelled) setAutoThumbBusy(false);
+      }
+    })();
+    return () => { cancelled = true; setAutoThumbBusy(false); };
+  }, [mediaIsVideo, mediaUrl]);
+  const isAutoThumb = !!thumbUrl && autoThumb?.url === thumbUrl;
+
   // Fallback scrubbing: when the browser can't decode the video, ask ffmpeg for
   // the frame at this instant. Debounced, so dragging the slider costs one
   // request per pause rather than one per pixel.
@@ -381,6 +475,11 @@ export default function SocialPublisherPage() {
   // Thumbnails uploaded in the Content Hub's own Thumbnail section.
   const hubThumbs = hubUploads.filter((u) => u.content_type === "thumbnail");
   const hubMedia = hubUploads.filter((u) => u.content_type !== "thumbnail");
+  // The tray and the Multi-Story dropdowns read this list; a frame still being
+  // made shows up on its own, without a refresh.
+  useThumbRefresh(hubMedia.filter((u) => thumbState(u) === "working").map((u) => u.id).join(","), loadHubUploads);
+  /** The hub row a slot's creative came from, for its thumbnail. */
+  const hubById = (id?: string) => (id ? hubUploads.find((u) => u.id === id) : undefined);
 
   // Fill the composer from a Content Hub item: client, media and content type auto-select.
   const applyHubUpload = (u: HubUpload) => {
@@ -402,7 +501,10 @@ export default function SocialPublisherPage() {
     } else if (u.thumbnail_url) {
       setThumbUrl(u.thumbnail_url);
       setSelectedThumb(null);
-      thumbNote = ", thumbnail included";
+      // The hub's automatic frame is labelled as one, so it reads as a
+      // suggestion to change rather than the designer's cover.
+      if (u.thumbnail_source === "auto") setAutoThumb({ url: u.thumbnail_url, forMedia: u.file_url });
+      thumbNote = u.thumbnail_source === "auto" ? ", auto thumbnail included" : ", thumbnail included";
     } else {
       setThumbUrl("");
       setSelectedThumb(null);
@@ -630,6 +732,7 @@ export default function SocialPublisherPage() {
     setMediaName("");
     setMediaIsVideo(false);
     setThumbUrl("");
+    setAutoThumb(null);
     setMediaAspect(null);
     setFrames([]);
     setSelFrame(null);
@@ -753,7 +856,7 @@ export default function SocialPublisherPage() {
             ? `Sent via RecurPost for ${okCount} post(s) ✅`
             : `${okCount} sent, ${failCount} failed. Do NOT press Send again — the ones that worked are already scheduled. Retry just the failed ones from the Library below.`) + skipNote,
       });
-      if (failCount === 0) { setTitle(""); setCaption(""); setCaptionBrief(""); setMediaUrl(""); setMediaName(""); setThumbUrl(""); setScheduledDate(""); setScheduledTime(""); setSelectedUpload(null); setSelectedThumb(null); }
+      if (failCount === 0) { setTitle(""); setCaption(""); setCaptionBrief(""); setMediaUrl(""); setMediaName(""); setThumbUrl(""); setAutoThumb(null); setScheduledDate(""); setScheduledTime(""); setSelectedUpload(null); setSelectedThumb(null); }
       await loadHistory();
       await loadHubUploads();
     } catch (err: unknown) {
@@ -1030,6 +1133,57 @@ export default function SocialPublisherPage() {
   useEffect(() => { if (view === "automation" && autoClient) loadAutomation(autoClient, autoMode); }, [view, autoClient, autoMode, loadAutomation]);
   // Switching client drops you back to the safe list.
   useEffect(() => { setAutoMode("clear"); }, [autoClient]);
+
+  // Where each waiting video's automatic frame stands. The Automation list does
+  // not carry it, and re-reading the list would throw away every date, caption
+  // and order the team has set — so only these few facts are read, straight
+  // from the hub's table, every 15s while one is still being made (five
+  // minutes at most), and a frame that lands is dropped into its row.
+  const [autoThumbFacts, setAutoThumbFacts] = useState<Record<string, { status: string | null; attempts: number }>>({});
+  const autoThumbWaitKey = autoRows
+    .filter((r) => r.media_type === "video" && r.content_type !== "carousel" && !r.thumbnail_url)
+    .map((r) => r.id)
+    .join(",");
+  const autoThumbWatch = useRef<{ since: number; seen: Set<string> }>({ since: 0, seen: new Set() });
+  useEffect(() => {
+    if (!autoThumbWaitKey) return;
+    const ids = autoThumbWaitKey.split(",");
+    const w = autoThumbWatch.current;
+    if (ids.some((id) => !w.seen.has(id))) {
+      w.since = Date.now();
+      ids.forEach((id) => w.seen.add(id));
+    }
+    let stopped = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const stop = () => { stopped = true; if (timer) clearInterval(timer); };
+    const look = async () => {
+      if (Date.now() - autoThumbWatch.current.since > 5 * 60_000) { stop(); return; }
+      const { data } = await createClient()
+        .from("creative_uploads")
+        .select("id, thumbnail_url, thumbnail_status, thumbnail_attempts")
+        .in("id", ids);
+      if (stopped || !data) return;
+      setAutoThumbFacts((m) => ({
+        ...m,
+        ...Object.fromEntries(data.map((d) => [d.id as string, { status: (d.thumbnail_status as string | null) ?? null, attempts: Number(d.thumbnail_attempts || 0) }])),
+      }));
+      const landed = new Map(data.filter((d) => d.thumbnail_url).map((d) => [d.id as string, d.thumbnail_url as string]));
+      if (landed.size > 0) {
+        setAutoRows((rows) => rows.map((r) => (!r.thumbnail_url && landed.has(r.id) ? { ...r, thumbnail_url: landed.get(r.id)! } : r)));
+      }
+      // Nothing left being made: no reason to keep asking.
+      if (!data.some((d) => !d.thumbnail_url && thumbState({ media_type: "video", thumbnail_status: d.thumbnail_status as string | null, thumbnail_attempts: d.thumbnail_attempts as number | null }) === "working")) stop();
+    };
+    void look().catch(() => {});
+    timer = setInterval(() => { void look().catch(() => {}); }, 15_000);
+    return stop;
+  }, [autoThumbWaitKey]);
+  const autoThumbOf = (r: AutoRow): ThumbFacts => ({
+    media_type: r.content_type === "carousel" ? "image" : r.media_type,
+    thumbnail_url: r.thumbnail_url,
+    thumbnail_status: autoThumbFacts[r.id]?.status ?? null,
+    thumbnail_attempts: autoThumbFacts[r.id]?.attempts ?? 0,
+  });
 
   /**
    * Throw an unblessed creative out of the hub, from the screen where it is
@@ -1827,7 +1981,9 @@ export default function SocialPublisherPage() {
                     {hubSeq[u.id]}
                   </span>
                   <div className="w-11 h-11 rounded-lg overflow-hidden bg-slate-900 border border-slate-800 shrink-0 flex items-center justify-center">
-                    {u.media_type === "video" ? <span className="text-slate-500">▶</span> : <img src={u.file_url} alt="" className="w-full h-full object-cover" />}
+                    {u.media_type === "video"
+                      ? (u.thumbnail_url ? <img src={u.thumbnail_url} alt="" className="w-full h-full object-cover" /> : <span className="text-slate-500">▶</span>)
+                      : <img src={u.file_url} alt="" className="w-full h-full object-cover" />}
                   </div>
                   <div className="min-w-0">
                     <p className="text-[11px] font-bold text-white truncate">{u.file_name || "file"}</p>
@@ -1837,6 +1993,7 @@ export default function SocialPublisherPage() {
                         title={u.profiles?.designation ? `${u.profiles.name} · ${u.profiles.designation}` : u.profiles?.name || ""} />
                       <span className="truncate">by {u.profiles?.name || "—"} · {fmtISTDate(u.created_at)}</span>
                     </p>
+                    <ThumbNote u={u} />
                     {u.qc_status === "mismatch" && (
                       <p title={`${u.qc_detected_brand ? `Looks like: ${u.qc_detected_brand}. ` : ""}${u.qc_note || ""}`} className="text-[9px] font-bold text-rose-400 cursor-help">
                         ⚠ Brand mismatch{u.qc_detected_brand ? ` — looks like ${u.qc_detected_brand}` : ""}
@@ -1957,8 +2114,12 @@ export default function SocialPublisherPage() {
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">Thumbnail (video posts only)</label>
             <div onClick={() => thumbRef.current?.click()} className="border border-dashed border-slate-800 hover:border-indigo-500 rounded-xl p-4 text-center cursor-pointer transition-colors">
               {uploading === "thumb" ? <Loader2 className="w-5 h-5 animate-spin mx-auto text-[var(--yellow)]" /> :
-                thumbUrl ? (
+                isAutoThumb ? (
+                  <div className="flex items-center justify-center space-x-2 text-indigo-300 text-xs font-bold"><Sparkles className="w-4 h-4" /><span>Auto thumbnail — change it</span></div>
+                ) : thumbUrl ? (
                   <div className="flex items-center justify-center space-x-2 text-emerald-400 text-xs font-bold"><CheckCircle2 className="w-4 h-4" /><span>Thumbnail set</span></div>
+                ) : autoThumbBusy && mediaIsVideo ? (
+                  <div className="flex items-center justify-center space-x-2 text-slate-500 text-xs"><Loader2 className="w-4 h-4 animate-spin" /><span>making thumbnail…</span></div>
                 ) : (
                   <div className="text-slate-500 text-xs"><ImageIcon className="w-5 h-5 mx-auto mb-1" />Click to upload</div>
                 )}
@@ -2036,8 +2197,15 @@ export default function SocialPublisherPage() {
               <div className="flex items-center gap-2">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={thumbUrl} alt="chosen thumbnail" className="h-16 rounded-lg border border-[var(--yellow)] object-cover" />
-                <span className="text-[10px] text-emerald-400 font-bold">Current thumbnail ✓</span>
+                {isAutoThumb ? (
+                  <span className="text-[10px] text-indigo-300 font-bold">Auto thumbnail — change it: scrub to a frame, pick one below, or upload your own</span>
+                ) : (
+                  <span className="text-[10px] text-emerald-400 font-bold">Current thumbnail ✓</span>
+                )}
               </div>
+            )}
+            {!thumbUrl && autoThumbBusy && (
+              <span className="text-[10px] text-slate-500 flex items-center gap-1.5"><Loader2 className="w-3 h-3 animate-spin" /><span>making thumbnail…</span></span>
             )}
 
             {/* Manual scrub. The strip only ever offers 10 fixed moments, and on
@@ -2492,15 +2660,23 @@ export default function SocialPublisherPage() {
                       <span className="w-6 h-6 rounded-full bg-[var(--yellow)] text-black text-[10px] font-black flex items-center justify-center cursor-grab active:cursor-grabbing select-none">{i + 1}</span>
                       <span className="text-slate-600 cursor-grab active:cursor-grabbing select-none leading-none" title="Drag to reorder — the dates follow the order">⠿</span>
                     </div>
-                    <div className={`relative w-12 shrink-0 rounded-lg overflow-hidden border border-slate-800 bg-slate-900 ${["reel", "story"].includes(r.content_type) ? "aspect-[9/16]" : "aspect-square"}`}>
+                    <div className="w-12 shrink-0">
+                    <div className={`relative w-12 rounded-lg overflow-hidden border border-slate-800 bg-slate-900 ${["reel", "story"].includes(r.content_type) ? "aspect-[9/16]" : "aspect-square"}`}>
                       {r.media_type === "video" && r.content_type !== "carousel"
-                        ? <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs">▶</div>
+                        // The cover this video will go out with — designer,
+                        // matched or the automatic frame.
+                        ? (r.thumbnail_url
+                          // eslint-disable-next-line @next/next/no-img-element
+                          ? <img src={r.thumbnail_url} alt="" className="w-full h-full object-cover" />
+                          : <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs">▶</div>)
                         // eslint-disable-next-line @next/next/no-img-element
                         : <img src={r.file_url} alt="" className="w-full h-full object-cover" />}
                       {/* The cover stands for the carousel; the corner says it is not alone. */}
                       {r.content_type === "carousel" && (
                         <span className="absolute bottom-0 right-0 px-1 rounded-tl bg-black/75 text-[8px] font-black text-white">▣ {autoSlideCount(r)}</span>
                       )}
+                    </div>
+                    <ThumbNote u={autoThumbOf(r)} className="mt-0.5" wrap />
                     </div>
 
                     <div className="min-w-[140px] sm:min-w-0 flex-1 space-y-2">
@@ -2818,14 +2994,23 @@ export default function SocialPublisherPage() {
             <div className="border border-emerald-900/50 rounded-xl p-4 bg-emerald-950/10 space-y-2">
               <label className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">The creative</label>
               <div className="flex items-center gap-3 flex-wrap">
-                {storyOne.url && (
-                  <div className="w-12 rounded-lg overflow-hidden border border-slate-800 bg-slate-900 shrink-0" style={{ aspectRatio: "9 / 16" }}>
-                    {storyOne.isVideo
-                      ? <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs">▶</div>
-                      // eslint-disable-next-line @next/next/no-img-element
-                      : <img src={storyOne.url} alt="" className="w-full h-full object-cover" />}
-                  </div>
-                )}
+                {storyOne.url && (() => {
+                  const hub = hubById(storyOne.uploadId);
+                  return (
+                    <>
+                      <div className="w-12 rounded-lg overflow-hidden border border-slate-800 bg-slate-900 shrink-0" style={{ aspectRatio: "9 / 16" }}>
+                        {storyOne.isVideo
+                          ? (hub?.thumbnail_url
+                            // eslint-disable-next-line @next/next/no-img-element
+                            ? <img src={hub.thumbnail_url} alt="" className="w-full h-full object-cover" />
+                            : <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs">▶</div>)
+                          // eslint-disable-next-line @next/next/no-img-element
+                          : <img src={storyOne.url} alt="" className="w-full h-full object-cover" />}
+                      </div>
+                      {hub && <ThumbNote u={hub} />}
+                    </>
+                  );
+                })()}
                 <select
                   value={storyOne.url}
                   onChange={(e) => {
@@ -2966,14 +3151,25 @@ export default function SocialPublisherPage() {
 
                 {storyMode === "many" && (
                   <>
-                    {r.mediaUrl && (
-                      <div className="w-8 rounded overflow-hidden border border-slate-800 bg-slate-900 shrink-0" style={{ aspectRatio: "9 / 16" }}>
-                        {r.mediaIsVideo
-                          ? <div className="w-full h-full flex items-center justify-center text-slate-500 text-[10px]">▶</div>
-                          // eslint-disable-next-line @next/next/no-img-element
-                          : <img src={r.mediaUrl} alt="" className="w-full h-full object-cover" />}
-                      </div>
-                    )}
+                    {r.mediaUrl && (() => {
+                      // A hub video shows its thumbnail beside the dropdown;
+                      // a file uploaded straight into the slot has none to show.
+                      const hub = hubById(r.uploadId);
+                      return (
+                        <>
+                          <div className="w-8 rounded overflow-hidden border border-slate-800 bg-slate-900 shrink-0" style={{ aspectRatio: "9 / 16" }}>
+                            {r.mediaIsVideo
+                              ? (hub?.thumbnail_url
+                                // eslint-disable-next-line @next/next/no-img-element
+                                ? <img src={hub.thumbnail_url} alt="" className="w-full h-full object-cover" />
+                                : <div className="w-full h-full flex items-center justify-center text-slate-500 text-[10px]">▶</div>)
+                              // eslint-disable-next-line @next/next/no-img-element
+                              : <img src={r.mediaUrl} alt="" className="w-full h-full object-cover" />}
+                          </div>
+                          {hub && <ThumbNote u={hub} />}
+                        </>
+                      );
+                    })()}
                     <select
                       value={r.mediaUrl}
                       onChange={(e) => {
@@ -3149,9 +3345,13 @@ export default function SocialPublisherPage() {
                           <div className="p-2 space-y-2">
                             {items.map((p) => (
                               <div key={p.id} className="flex flex-wrap sm:flex-nowrap items-start gap-2.5 bg-slate-950/80 border border-slate-900 rounded-lg p-2.5">
-                                <div className={`w-12 shrink-0 rounded-md overflow-hidden ${["reel", "story"].includes(p.content_type) ? "aspect-[9/16]" : "aspect-square"} bg-slate-900`}>
-                                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                                  <img src={p.thumbnail_url || p.media_url} alt="" className="w-full h-full object-cover" />
+                                <div className={`w-12 shrink-0 rounded-md overflow-hidden ${["reel", "story"].includes(p.content_type) ? "aspect-[9/16]" : "aspect-square"} bg-slate-900 flex items-center justify-center`}>
+                                  {/* A video's thumbnail when it went out with one; a video
+                                      without one is never handed to <img> as if it were a picture. */}
+                                  {p.thumbnail_url || !/\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(p.media_url) ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img src={p.thumbnail_url || p.media_url} alt="" className="w-full h-full object-cover" />
+                                  ) : <span className="text-slate-500 text-sm" title="no thumbnail">▶</span>}
                                 </div>
                                 <div className="min-w-[140px] sm:min-w-0 flex-1">
                                   <div className="flex items-center gap-1.5 flex-wrap">
@@ -3256,7 +3456,7 @@ export default function SocialPublisherPage() {
                         {p.thumbnail_url || !/\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(p.media_url) ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={p.thumbnail_url || p.media_url} alt="" className="w-full h-full object-cover" />
-                        ) : <span className="text-slate-500 text-lg">▶</span>}
+                        ) : <span className="text-slate-500 text-lg" title="no thumbnail">▶</span>}
                       </div>
                       <div className="min-w-[140px] sm:min-w-0 flex-1">
                         <p className="text-[11px] font-bold text-white truncate">{p.clients?.name || "—"} <span className="text-slate-500 font-normal capitalize">· {p.platform} · {libTypeLabel(p.content_type)}</span></p>

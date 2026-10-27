@@ -410,6 +410,52 @@ export async function downloadDriveFileByUrl(url: string): Promise<Buffer | null
   }
 }
 
+/**
+ * The same Drive download as downloadDriveFileByUrl, but written straight to a
+ * file on disk instead of held in memory.
+ *
+ * A 400MB reel read into a Buffer is a 400MB spike on a container that is also
+ * serving the portal — and several of them at once is how it dies. Streamed,
+ * the server never holds more than a chunk of it. Anything past maxBytes is
+ * refused part-way rather than finished; the partial file is the caller's to
+ * remove, as is every file it hands us a path to.
+ */
+export async function downloadDriveFileToPath(
+  url: string,
+  destPath: string,
+  maxBytes: number
+): Promise<{ ok: true; bytes: number } | { ok: false; error: string }> {
+  const m = url.match(/googleusercontent\.com\/d\/([^=/?&]+)/) || url.match(/drive\.google\.com\/file\/d\/([^/?&]+)/);
+  if (!m) return { ok: false, error: "not a Google Drive link" };
+  const drive = await getDriveService();
+  if (!drive) return { ok: false, error: "Google Drive is not connected" };
+  try {
+    // Asked first so an oversized file is refused before a byte of it moves.
+    const meta = await drive.files.get({ fileId: m[1], fields: "size" });
+    const size = Number(meta.data.size || 0);
+    if (size > maxBytes) {
+      return { ok: false, error: `file is ${(size / 1024 / 1024).toFixed(0)}MB — over the ${(maxBytes / 1024 / 1024).toFixed(0)}MB limit` };
+    }
+    const res = await drive.files.get({ fileId: m[1], alt: "media" }, { responseType: "stream" });
+    const { createWriteStream } = await import("fs");
+    const { Transform } = await import("stream");
+    const { pipeline } = await import("stream/promises");
+    let bytes = 0;
+    const counter = new Transform({
+      transform(chunk: Buffer, _enc, cb) {
+        bytes += chunk.length;
+        if (bytes > maxBytes) cb(new Error(`file is over the ${(maxBytes / 1024 / 1024).toFixed(0)}MB limit`));
+        else cb(null, chunk);
+      },
+    });
+    await pipeline(res.data as unknown as NodeJS.ReadableStream, counter, createWriteStream(destPath));
+    return { ok: true, bytes };
+  } catch (err) {
+    if (isDeadGrant(err)) await markDriveBroken("Google rejected the saved refresh token (invalid_grant).");
+    return { ok: false, error: `Drive download failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
 /** Best-effort delete of a Drive file we created, given its view URL. */
 export async function deleteDriveFileByUrl(url: string): Promise<boolean> {
   const m = url.match(/googleusercontent\.com\/d\/([^=/?&]+)/) || url.match(/drive\.google\.com\/file\/d\/([^/?&]+)/);
