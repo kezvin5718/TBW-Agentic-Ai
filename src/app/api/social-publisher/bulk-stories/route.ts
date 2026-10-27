@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
-import { isRecurPostConfigured, postContent } from "@/lib/recurpost";
+import { isRecurPostConfigured } from "@/lib/recurpost";
 import { istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
 import { toPublishableVideoUrl } from "@/lib/publishable-media";
+import { reserve, settle, sendToRecurPost } from "@/lib/post-dedupe";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -13,12 +14,6 @@ export const maxDuration = 300;
 const MAX_ITEMS = 30;
 /** Stories exist only on Meta. Anything else silently became a feed post. */
 const STORY_PLATFORMS = ["facebook", "instagram"];
-
-function recurPostIdOf(res: unknown): number | null {
-  const id = (res as { post_data?: { id?: unknown } })?.post_data?.id;
-  const n = typeof id === "string" ? Number(id) : typeof id === "number" ? id : NaN;
-  return Number.isFinite(n) ? n : null;
-}
 
 /**
  * POST /api/social-publisher/bulk-stories
@@ -139,6 +134,7 @@ export async function POST(request: NextRequest) {
     let slotAllOk = true;
 
     for (const platform of platforms) {
+      // A fast pre-filter only — the reservation below is the authority.
       if (alreadyKey.has(`${platform}|${publishUrl}|${scheduledIso}`)) {
         skipped.push(`Slot ${idx + 1} ${platform} — already queued for that time.`);
         continue;
@@ -147,10 +143,24 @@ export async function POST(request: NextRequest) {
       const accountId = accountFor(platform);
       let ok = false;
       let detail = "";
-      let rpId: number | null = null;
+
+      const row = {
+        client_id: clientId,
+        created_by: user.id,
+        platform,
+        content_type: "story",
+        title: null,
+        caption: null,
+        media_url: publishUrl,
+        media_is_video: isVideo,
+        thumbnail_url: null,
+        scheduled_for: scheduledIso,
+      };
 
       if (!accountId) {
+        // No call, so no slot to claim — the failure is recorded as before.
         detail = `No RecurPost account mapped for ${client?.name || "this client"} on ${platform}.`;
+        await admin.from("social_posts").insert({ ...row, status: "failed", recurpost_post_id: null, webhook_response: `[recurpost bulk-story] ${detail}` });
       } else {
         const params: Record<string, unknown> = {
           id: accountId,
@@ -167,37 +177,33 @@ export async function POST(request: NextRequest) {
         if (platform === "facebook") params.fb_post_type = "story";
         if (platform === "instagram") params.in_post_type = "story";
 
-        try {
-          const res = await postContent(params);
-          detail = JSON.stringify(res).slice(0, 300);
-          const lower = detail.toLowerCase();
+        // Claim the slot first; only the claim's owner calls RecurPost. The
+        // same story on the same account at the same time — a second press,
+        // or a batch that lists one slot twice — is a skip, said in words.
+        const claim = await reserve(admin, row, {
+          clientId, accountId, platform, contentType: "story", mediaUrl: publishUrl, scheduledIso,
+        });
+        if (claim.kind === "duplicate") {
+          skipped.push(`Slot ${idx + 1} ${platform} — ${claim.message}.`);
+          // Already out counts as done for this slot; still in flight does
+          // not, so the hub item stays until that other send lands.
+          if (!claim.alreadyOut) slotAllOk = false;
+          continue;
+        }
+        if (claim.kind === "error") {
+          detail = claim.message;
+        } else {
           // An id back means RecurPost queued it, whatever else the body says.
           // Recording an accepted post as failed is what invites the duplicate.
-          rpId = recurPostIdOf(res);
-          ok = rpId !== null || !(lower.includes('"error"') || lower.includes('"status":"failed"') || lower.includes("invalid"));
-        } catch (err: unknown) {
-          detail = err instanceof Error ? err.message : String(err);
+          const outcome = await sendToRecurPost(params);
+          detail = outcome.detail;
+          ok = outcome.status === "sent";
+          await settle(admin, claim.id, outcome, `[recurpost bulk-story] ${detail}`);
         }
       }
 
       if (ok) alreadyKey.add(`${platform}|${publishUrl}|${scheduledIso}`);
       else slotAllOk = false;
-
-      await admin.from("social_posts").insert({
-        client_id: clientId,
-        created_by: user.id,
-        platform,
-        content_type: "story",
-        title: null,
-        caption: null,
-        media_url: publishUrl,
-        media_is_video: isVideo,
-        thumbnail_url: null,
-        scheduled_for: scheduledIso,
-        status: ok ? "sent" : "failed",
-        recurpost_post_id: rpId,
-        webhook_response: `[recurpost bulk-story] ${detail}`,
-      });
 
       results.push({ slot: idx + 1, platform, scheduledFor: item.scheduledFor, ok, detail });
     }

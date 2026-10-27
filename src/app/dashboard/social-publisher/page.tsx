@@ -78,6 +78,10 @@ interface PostRow {
   media_is_video?: boolean | null;
   recurpost_post_id?: number | null;
   needs_recurpost_cleanup?: boolean | null;
+  // Set by the duplicate safety net: this row is a second copy of duplicate_of,
+  // still in RecurPost until someone deletes it there.
+  duplicate_of?: string | null;
+  duplicate_resolution_status?: "manual_removal_required" | "resolved" | "ignored" | null;
   created_at: string; clients?: { name: string } | null;
   profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
 }
@@ -1485,11 +1489,23 @@ export default function SocialPublisherPage() {
     setLibBusy(p.id);
     setNotice(null);
     try {
-      const res = await fetch("/api/social-publisher", {
+      const send = (confirmedUncertain: boolean) => fetch("/api/social-publisher", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "retry", id: p.id, confirmedRemoved }),
+        body: JSON.stringify({ action: "retry", id: p.id, confirmedRemoved, confirmedUncertain }),
       });
-      const data = await res.json();
+      let res = await send(false);
+      let data = await res.json();
+      // RecurPost never answered this one clearly, so it may already be in
+      // their queue. The server will not resend it until a person has looked
+      // and says it is not there — then it goes again on this same row.
+      if (res.status === 409 && data.needsConfirmation && data.uncertain) {
+        const go = window.confirm(
+          `${data.error}\n\nOpen social.recurpost.com → Queue and look for this ${postLabel(p.platform, p.content_type)}.\n\nPress OK ONLY if it is not there — otherwise it publishes twice.`
+        );
+        if (!go) { setNotice({ ok: false, text: "Not resent. Check RecurPost's Queue first — resend only if the post is not there." }); return; }
+        res = await send(true);
+        data = await res.json();
+      }
       if (!res.ok) throw new Error(data.detail || data.error || "Retry failed");
       setNotice({ ok: true, text: "Re-sent to RecurPost ✅" });
       setEditing(null);
@@ -1498,6 +1514,51 @@ export default function SocialPublisherPage() {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Retry failed" });
     } finally { setLibBusy(null); }
   };
+
+  /**
+   * Close out a flagged duplicate: "resolved" once the copy is deleted in
+   * RecurPost, "ignored" when it was never a duplicate. Only the flag moves.
+   */
+  const resolveDuplicate = async (p: PostRow, resolution: "resolved" | "ignored") => {
+    if (resolution === "resolved" && !window.confirm(`Have you deleted post ${p.recurpost_post_id ?? "(id not recorded)"} in RecurPost → Queue?\n\nThis only clears the flag here — it does not remove anything from RecurPost.`)) return;
+    setLibBusy(p.id);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/social-publisher", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "duplicate_resolution", id: p.id, resolution }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not update");
+      setNotice({ ok: true, text: data.message });
+      if (libSel?.id === p.id) setLibSel({ ...p, duplicate_resolution_status: resolution });
+      await loadHistory();
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not update" });
+    } finally { setLibBusy(null); }
+  };
+
+  /** A send still in flight, or one RecurPost never answered clearly. */
+  const isSending = (p: PostRow) => p.status === "sending";
+  const isUncertain = (p: PostRow) => p.status === "uncertain";
+  const isFlaggedDup = (p: PostRow) => p.duplicate_resolution_status === "manual_removal_required";
+
+  /** The amber duplicate chip, with the RecurPost id the Queue needs. */
+  const dupChip = (p: PostRow) => isFlaggedDup(p) ? (
+    <span title="A second copy of an earlier post — delete it in RecurPost → Queue" className="text-[9px] font-black px-1.5 py-0.5 rounded border bg-amber-950/40 border-amber-900 text-amber-400">
+      Duplicate — remove in RecurPost{p.recurpost_post_id ? <> · <span className="font-mono">#{p.recurpost_post_id}</span></> : null}
+    </span>
+  ) : null;
+
+  /** "Mark removed" and "Not a duplicate", for a flagged row. */
+  const dupButtons = (p: PostRow) => isFlaggedDup(p) ? (
+    <>
+      <button disabled={libBusy === p.id} onClick={() => resolveDuplicate(p, "resolved")} title="I deleted this copy in RecurPost"
+        className="px-2 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-[9px] font-bold text-slate-300 cursor-pointer disabled:opacity-50">Mark removed</button>
+      <button disabled={libBusy === p.id} onClick={() => resolveDuplicate(p, "ignored")} title="This is not a duplicate — clear the flag"
+        className="px-2 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-[9px] font-bold text-slate-400 cursor-pointer disabled:opacity-50">Not a duplicate</button>
+    </>
+  ) : null;
 
   /** Open the editor on a Library post, seeded with what it currently holds. */
   const startEdit = (p: PostRow) => {
@@ -3424,10 +3485,12 @@ export default function SocialPublisherPage() {
                                     <span className="text-[9px] uppercase font-bold text-slate-500">{p.platform} · {libTypeLabel(p.content_type)}</span>
                                     <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border ${
                                       p.status === "failed" ? "bg-rose-950/40 border-rose-900 text-rose-400"
-                                      : isFuture(p) ? "bg-amber-950/40 border-amber-900 text-amber-400"
+                                      : isSending(p) ? "bg-indigo-950/40 border-indigo-900 text-indigo-300"
+                                      : isUncertain(p) || isFuture(p) ? "bg-amber-950/40 border-amber-900 text-amber-400"
                                       : "bg-emerald-950/40 border-emerald-900 text-emerald-400"}`}>
-                                      {p.status === "failed" ? "failed" : isFuture(p) ? "scheduled" : "posted"}
+                                      {p.status === "failed" ? "failed" : isSending(p) ? "Sending…" : isUncertain(p) ? "Check RecurPost queue before resending" : isFuture(p) ? "scheduled" : "posted"}
                                     </span>
+                                    {dupChip(p)}
                                   </div>
                                   <p className="text-[10px] text-slate-500 line-clamp-2 mt-0.5">{p.caption || p.title || "(no caption)"}</p>
                                 </div>
@@ -3436,8 +3499,9 @@ export default function SocialPublisherPage() {
                                   {(p.status === "failed" || isFuture(p)) && (
                                     <button onClick={() => { setLibSel(p); startEdit(p); }} title="Edit caption, thumbnail or time" className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer"><Pencil className="w-3.5 h-3.5" /></button>
                                   )}
-                                  {p.status === "failed" && (
-                                    <button disabled={libBusy === p.id} onClick={() => retryPost(p)} title="Retry" className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer disabled:opacity-50"><RotateCcw className="w-3.5 h-3.5" /></button>
+                                  {dupButtons(p)}
+                                  {(p.status === "failed" || isUncertain(p)) && (
+                                    <button disabled={libBusy === p.id} onClick={() => retryPost(p)} title={isUncertain(p) ? "Resend — asks you to check RecurPost's Queue first" : "Retry"} className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer disabled:opacity-50"><RotateCcw className="w-3.5 h-3.5" /></button>
                                   )}
                                   <button disabled={libBusy === p.id} onClick={() => deletePost(p)} title="Remove" className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-700 text-slate-400 hover:text-rose-400 cursor-pointer disabled:opacity-50"><Trash2 className="w-3.5 h-3.5" /></button>
                                 </div>
@@ -3481,7 +3545,7 @@ export default function SocialPublisherPage() {
                             return (
                               <button key={p.id} onClick={() => setLibSel(p)} title={`${p.clients?.name || ""} · ${postLabel(p.platform, p.content_type)} — click to read the caption`}
                                 className={`w-full text-left rounded-md border p-1 flex items-center gap-1 cursor-pointer transition-all ${libSel?.id === p.id ? "border-indigo-500 bg-indigo-950/30" : "border-slate-800 bg-slate-950 hover:border-slate-600"}`}>
-                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${p.status === "failed" ? "bg-rose-500" : sch ? "bg-amber-400" : "bg-emerald-400"}`} />
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${p.status === "failed" ? "bg-rose-500" : isSending(p) ? "bg-indigo-400" : sch || isUncertain(p) || isFlaggedDup(p) ? "bg-amber-400" : "bg-emerald-400"}`} />
                                 <PlatformIcon platform={p.platform} size={11} />
                                 <span className="min-w-0 leading-tight">
                                   <span className="block text-[8.5px] font-bold text-slate-200 truncate">{p.clients?.name || "—"}</span>
@@ -3525,17 +3589,19 @@ export default function SocialPublisherPage() {
                         <p className="text-[10px] text-slate-500 truncate">{p.title || p.caption?.slice(0, 70) || "(no caption)"}</p>
                         <p className="text-[9px] text-slate-600">{p.scheduled_for ? `⏰ ${fmtIST(p.scheduled_for)} IST` : `${fmtIST(p.created_at)} IST`} · {p.profiles?.name || ""}</p>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-                        <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${p.status === "failed" ? "bg-rose-950/40 border-rose-900 text-rose-400" : scheduled ? "bg-amber-950/40 border-amber-900 text-amber-400" : "bg-emerald-950/40 border-emerald-900 text-emerald-400"}`}>
-                          {p.status === "failed" ? "FAILED" : scheduled ? "SCHEDULED" : "POSTED"}
+                      <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end" onClick={(e) => e.stopPropagation()}>
+                        <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${p.status === "failed" ? "bg-rose-950/40 border-rose-900 text-rose-400" : isSending(p) ? "bg-indigo-950/40 border-indigo-900 text-indigo-300" : scheduled || isUncertain(p) ? "bg-amber-950/40 border-amber-900 text-amber-400" : "bg-emerald-950/40 border-emerald-900 text-emerald-400"}`}>
+                          {p.status === "failed" ? "FAILED" : isSending(p) ? "Sending…" : isUncertain(p) ? "Check RecurPost queue before resending" : scheduled ? "SCHEDULED" : "POSTED"}
                         </span>
+                        {dupChip(p)}
+                        {dupButtons(p)}
                         {(p.status === "failed" || scheduled) && (
                           <button onClick={() => { setLibSel(p); startEdit(p); }} title="Edit caption, thumbnail or time" className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer">
                             <Pencil className="w-3.5 h-3.5" />
                           </button>
                         )}
-                        {p.status === "failed" && (
-                          <button disabled={libBusy === p.id} onClick={() => retryPost(p)} title="Retry" className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer disabled:opacity-50">
+                        {(p.status === "failed" || isUncertain(p)) && (
+                          <button disabled={libBusy === p.id} onClick={() => retryPost(p)} title={isUncertain(p) ? "Resend — asks you to check RecurPost's Queue first" : "Retry"} className="p-1.5 min-w-[40px] min-h-[40px] lg:min-w-0 lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-slate-300 cursor-pointer disabled:opacity-50">
                             {libBusy === p.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
                           </button>
                         )}
@@ -3588,9 +3654,9 @@ export default function SocialPublisherPage() {
                   <span className="text-[10px] text-slate-500">
                     {libSel.scheduled_for ? `⏰ ${fmtIST(libSel.scheduled_for)} IST` : `${fmtIST(libSel.created_at)} IST`}
                   </span>
-                  {libSel.status === "failed" && (
+                  {(libSel.status === "failed" || isUncertain(libSel)) && (
                     <button disabled={libBusy === libSel.id} onClick={() => retryPost(libSel)} className="px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1">
-                      {libBusy === libSel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}<span>Retry</span>
+                      {libBusy === libSel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}<span>{isUncertain(libSel) ? "Resend…" : "Retry"}</span>
                     </button>
                   )}
                   {/* Editing can only achieve something while nothing has gone
@@ -3609,6 +3675,34 @@ export default function SocialPublisherPage() {
                   <p className="text-[10px] text-slate-600">
                     Already published — it can only be changed on the platform itself now.
                   </p>
+                )}
+
+                {isSending(libSel) && (
+                  <p className="text-[10px] font-bold text-indigo-300 flex items-center gap-1.5">
+                    <Loader2 className="w-3 h-3 animate-spin" /> Sending…
+                  </p>
+                )}
+
+                {/* RecurPost never answered this send clearly — it may be queued. */}
+                {isUncertain(libSel) && (
+                  <div className="bg-amber-950/25 border border-amber-900/60 rounded-xl p-3 space-y-1.5">
+                    <p className="text-[11px] text-amber-200 font-bold flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5" /> Check RecurPost queue before resending
+                    </p>
+                    <p className="text-[10px] text-amber-200/80 leading-relaxed break-words">{libSel.webhook_response || "RecurPost did not answer clearly."}</p>
+                  </div>
+                )}
+
+                {/* A second copy of an earlier post, still in RecurPost's queue. */}
+                {isFlaggedDup(libSel) && (
+                  <div className="bg-amber-950/25 border border-amber-900/60 rounded-xl p-3 space-y-2">
+                    <div className="flex items-center gap-1.5 flex-wrap">{dupChip(libSel)}</div>
+                    <p className="text-[10px] text-amber-200/80 leading-relaxed">
+                      Open RecurPost → Queue and delete post{" "}
+                      <b className="font-mono">{libSel.recurpost_post_id ?? "(id not recorded)"}</b>. The original is untouched — only this copy goes.
+                    </p>
+                    <div className="flex items-center gap-1.5 flex-wrap">{dupButtons(libSel)}</div>
+                  </div>
                 )}
 
                 {/* Standing warning: our copy is corrected, RecurPost's isn't. */}

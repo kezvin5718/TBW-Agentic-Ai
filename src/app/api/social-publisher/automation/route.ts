@@ -1,20 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
-import { isRecurPostConfigured, postContent } from "@/lib/recurpost";
+import { isRecurPostConfigured } from "@/lib/recurpost";
 import { istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
 import { toPublishableVideoUrl, toPublishableThumbUrl, isDriveUrl } from "@/lib/publishable-media";
 import { isDriveConnected } from "@/lib/google-drive";
+import { reserve, settle, sendToRecurPost } from "@/lib/post-dedupe";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 // A month of creatives across two platforms is a long run of sequential calls.
 export const maxDuration = 300;
-
-function recurPostIdOf(res: unknown): number | null {
-  const id = (res as { post_data?: { id?: unknown } })?.post_data?.id;
-  const n = typeof id === "string" ? Number(id) : typeof id === "number" ? id : NaN;
-  return Number.isFinite(n) ? n : null;
-}
 
 /**
  * A story repeat, as the screen asked for it — or null for "just the once".
@@ -419,7 +414,9 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const results: Array<{ uploadId: string; platform: string; ok: boolean; detail: string; skipped?: boolean }> = [];
+  // duplicate: the slot was already claimed by another send, so RecurPost was
+  // never called for this one — a skip, not a failure.
+  const results: Array<{ uploadId: string; platform: string; ok: boolean; detail: string; skipped?: boolean; duplicate?: boolean }> = [];
   const skipped: string[] = [];
   const doneUploads = new Set<string>();
   const stagedCache = new Map<string, string>();
@@ -635,10 +632,28 @@ export async function POST(request: NextRequest) {
       const accountId = accountFor(platform);
       let ok = false;
       let detail = "";
-      let rpId: number | null = null;
+
+      const row = {
+        client_id: clientId,
+        created_by: user.id,
+        platform,
+        content_type: contentType,
+        title: null,
+        caption: contentType === "story" ? null : (item.caption || null),
+        media_url: publishUrl,
+        media_is_video: isVideo,
+        thumbnail_url: isCarousel ? null : (upload.thumbnail_url || null),
+        scheduled_for: scheduledIso,
+      };
+      // The cover stands for the carousel in the Library; the note says how
+      // many slides went with it, so history reads what was actually sent.
+      const note = (d: string) => `${isOverride ? "[risk-override] " : ""}[automation] ${d}${isCarousel ? ` [carousel ${slideUrls.length} slides]` : ""}`;
 
       if (!accountId) {
+        // No call is made, so there is no slot to claim — the failure is
+        // recorded as it always was.
         detail = `No RecurPost account mapped for ${client?.name || "this client"} on ${platform}.`;
+        await admin.from("social_posts").insert({ ...row, status: "failed", recurpost_post_id: null, webhook_response: note(detail) });
       } else {
         const params: Record<string, unknown> = {
           id: accountId,
@@ -669,35 +684,32 @@ export async function POST(request: NextRequest) {
           if (platform === "instagram") params.in_thumb = cover;
         }
 
-        try {
-          const res = await postContent(params);
-          detail = JSON.stringify(res).slice(0, 300);
-          const lower = detail.toLowerCase();
-          rpId = recurPostIdOf(res);
-          ok = rpId !== null || !(lower.includes('"error"') || lower.includes('"status":"failed"') || lower.includes("invalid"));
-        } catch (err: unknown) {
-          detail = err instanceof Error ? err.message : String(err);
+        // Claim the slot before RecurPost hears of it. A double-click, a
+        // second tab or a resend of the same run finds it taken: no call, and
+        // the run says so. The same creative on another day, another account
+        // or as the Story beside the post is a different key and goes out.
+        const claim = await reserve(admin, row, {
+          clientId, accountId, platform, contentType, mediaUrl: publishUrl, scheduledIso,
+        });
+        if (claim.kind === "duplicate") {
+          results.push({ uploadId: upload.id, platform, ok: false, skipped: true, duplicate: true, detail: claim.message });
+          skipped.push(`${upload.file_name || upload.id} ${platform}: ${claim.message}.`);
+          // Already out means the creative genuinely is published, so it
+          // counts for retiring the upload. Still in flight does not: that
+          // other send retires it itself if it lands.
+          if (claim.alreadyOut) anyOk = true;
+          continue;
+        }
+        if (claim.kind === "error") {
+          detail = claim.message;
+        } else {
+          const outcome = await sendToRecurPost(params);
+          detail = outcome.detail;
+          ok = outcome.status === "sent";
+          await settle(admin, claim.id, outcome, note(detail));
         }
         if (!ok) console.error(`automation ${upload.id} ${platform} rejected: ${detail} · sent ${JSON.stringify({ ...params, id: "<account>" }).slice(0, 260)}`);
       }
-
-      await admin.from("social_posts").insert({
-        client_id: clientId,
-        created_by: user.id,
-        platform,
-        content_type: contentType,
-        title: null,
-        caption: contentType === "story" ? null : (item.caption || null),
-        media_url: publishUrl,
-        media_is_video: isVideo,
-        thumbnail_url: isCarousel ? null : (upload.thumbnail_url || null),
-        scheduled_for: scheduledIso,
-        status: ok ? "sent" : "failed",
-        recurpost_post_id: rpId,
-        // The cover stands for the carousel in the Library; the note says how
-        // many slides went with it, so history reads what was actually sent.
-        webhook_response: `${isOverride ? "[risk-override] " : ""}[automation] ${detail}${isCarousel ? ` [carousel ${slideUrls.length} slides]` : ""}`,
-      });
 
       results.push({ uploadId: upload.id, platform, ok, detail });
       if (ok) anyOk = true;
@@ -727,16 +739,18 @@ export async function POST(request: NextRequest) {
   const failed = results.filter((r) => !r.ok && !r.skipped);
   const namesOf = (rows: typeof results) => [...new Set(rows.map((r) => r.platform))].join(", ");
   const posted = results.filter((r) => r.ok);
-  // Three reasons a platform sits one out, and each says its own.
-  const storySkips = results.filter((r) => r.skipped && r.detail.startsWith("Stories"));
-  const carouselSkips = results.filter((r) => r.skipped && r.detail.startsWith("Carousels"));
-  const videoSkips = results.filter((r) => r.skipped && !r.detail.startsWith("Stories") && !r.detail.startsWith("Carousels"));
+  // Four reasons a platform sits one out, and each says its own.
+  const dupSkips = results.filter((r) => r.duplicate);
+  const storySkips = results.filter((r) => r.skipped && !r.duplicate && r.detail.startsWith("Stories"));
+  const carouselSkips = results.filter((r) => r.skipped && !r.duplicate && r.detail.startsWith("Carousels"));
+  const videoSkips = results.filter((r) => r.skipped && !r.duplicate && !r.detail.startsWith("Stories") && !r.detail.startsWith("Carousels"));
   const message = [
     posted.length ? `posted to ${namesOf(posted)}` : "nothing posted",
     failed.length ? `failed on ${namesOf(failed)}` : "",
     videoSkips.length ? `${namesOf(videoSkips)} skipped (video only)` : "",
     storySkips.length ? `${namesOf(storySkips)} skipped for Stories (Instagram/Facebook only)` : "",
     carouselSkips.length ? `${namesOf(carouselSkips)} skipped for carousels (Instagram/Facebook only)` : "",
+    dupSkips.length ? `${dupSkips.length} duplicate${dupSkips.length === 1 ? "" : "s"} prevented — not sent again` : "",
   ].filter(Boolean).join(" · ");
 
   return NextResponse.json({

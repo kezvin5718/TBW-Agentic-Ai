@@ -1,16 +1,11 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { isRecurPostConfigured, postContent } from "@/lib/recurpost";
+import { isRecurPostConfigured } from "@/lib/recurpost";
 import { utcToIstWallClock } from "@/lib/time";
 import { toPublishableVideoUrl } from "@/lib/publishable-media";
+import { reserve, settle, sendToRecurPost } from "@/lib/post-dedupe";
 
 /** Stories exist only on Meta. Nothing else can carry one. */
 const STORY_PLATFORMS = ["facebook", "instagram"];
-
-function recurPostIdOf(res: unknown): number | null {
-  const id = (res as { post_data?: { id?: unknown } })?.post_data?.id;
-  const n = typeof id === "string" ? Number(id) : typeof id === "number" ? id : NaN;
-  return Number.isFinite(n) ? n : null;
-}
 
 export interface FestivalScheduleResult {
   scheduled: number;
@@ -111,8 +106,12 @@ export async function scheduleFestivalStory(uploadId: string): Promise<FestivalS
 
   let scheduled = 0;
   let failed = 0;
+  // A platform skipped because its copy is already out still means the story
+  // is out there — enough to retire the upload, without counting as a send.
+  let alreadyOut = 0;
 
   for (const platform of platforms) {
+    // A fast pre-filter only — the reservation below is the authority.
     if (done.has(platform)) {
       notes.push(`${platform} — already queued for ${festival.name}.`);
       continue;
@@ -131,18 +130,44 @@ export async function scheduleFestivalStory(uploadId: string): Promise<FestivalS
     if (platform === "facebook") params.fb_post_type = "story";
     if (platform === "instagram") params.in_post_type = "story";
 
-    let ok = false;
-    let detail = "";
-    let rpId: number | null = null;
-    try {
-      const res = await postContent(params);
-      detail = JSON.stringify(res).slice(0, 300);
-      const lower = detail.toLowerCase();
-      rpId = recurPostIdOf(res);
-      ok = rpId !== null || !(lower.includes('"error"') || lower.includes('"status":"failed"') || lower.includes("invalid"));
-    } catch (err: unknown) {
-      detail = err instanceof Error ? err.message : String(err);
+    // Claim the slot before RecurPost is called. QC re-running, the batch
+    // route and the single route can all reach this for one upload at once;
+    // whichever writes the row first is the only one that sends.
+    const claim = await reserve(
+      admin,
+      {
+        client_id: upload.client_id,
+        platform,
+        content_type: "story",
+        title: festival.name || null,
+        caption: null,
+        media_url: publishUrl,
+        media_is_video: isVideo,
+        scheduled_for: scheduledIso,
+      },
+      {
+        clientId: upload.client_id as string,
+        accountId: accountFor(platform)!,
+        platform,
+        contentType: "story",
+        mediaUrl: publishUrl,
+        scheduledIso,
+      }
+    );
+    if (claim.kind === "duplicate") {
+      notes.push(`${platform} — ${claim.message}.`);
+      if (claim.alreadyOut) alreadyOut++;
+      continue;
     }
+    if (claim.kind === "error") {
+      failed++;
+      notes.push(`${platform} — could not be scheduled: ${claim.message}`);
+      continue;
+    }
+
+    const outcome = await sendToRecurPost(params);
+    const ok = outcome.status === "sent";
+    const detail = outcome.detail;
 
     if (!ok) {
       // RecurPost answers HTTP 200 with a 400 in the body and no indication of
@@ -152,19 +177,7 @@ export async function scheduleFestivalStory(uploadId: string): Promise<FestivalS
       console.error(`festival story ${uploadId} ${platform} rejected: ${detail} · sent ${JSON.stringify(sent).slice(0, 300)}`);
     }
 
-    await admin.from("social_posts").insert({
-      client_id: upload.client_id,
-      platform,
-      content_type: "story",
-      title: festival.name || null,
-      caption: null,
-      media_url: publishUrl,
-      media_is_video: isVideo,
-      scheduled_for: scheduledIso,
-      status: ok ? "sent" : "failed",
-      recurpost_post_id: rpId,
-      webhook_response: `[festival-story: ${festival.name}] ${detail}`,
-    });
+    await settle(admin, claim.id, outcome, `[festival-story: ${festival.name}] ${detail}`);
 
     if (ok) scheduled++;
     else {
@@ -173,7 +186,7 @@ export async function scheduleFestivalStory(uploadId: string): Promise<FestivalS
     }
   }
 
-  if (scheduled > 0) {
+  if (scheduled > 0 || alreadyOut > 0) {
     // Out of the Content Hub tray: this one is handled, not waiting for anyone.
     await admin.from("creative_uploads").update({ status: "scheduled" }).eq("id", uploadId);
   }

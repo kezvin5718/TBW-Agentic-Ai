@@ -1,22 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
-import { isRecurPostConfigured, postContent } from "@/lib/recurpost";
+import { isRecurPostConfigured } from "@/lib/recurpost";
 import { istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
 import { toPublishableVideoUrl, toPublishableThumbUrl } from "@/lib/publishable-media";
+import { reserve, reclaim, settle, sendToRecurPost, IN_FLIGHT } from "@/lib/post-dedupe";
 
 export const dynamic = "force-dynamic";
 
-/**
- * RecurPost answers a successful schedule with { post_data: { id } }. That id is
- * the only handle on a queued post, and since their API has no way to change or
- * cancel one, it is what the team types into RecurPost's Queue to remove a post
- * they need to correct. Worth a column of its own.
- */
-function recurPostIdOf(res: unknown): number | null {
-  const id = (res as { post_data?: { id?: unknown } })?.post_data?.id;
-  const n = typeof id === "string" ? Number(id) : typeof id === "number" ? id : NaN;
-  return Number.isFinite(n) ? n : null;
-}
+// RecurPost's post id (post_data.id) is the only handle on a queued post —
+// what the team types into RecurPost's Queue to remove one. Reading it, and
+// reading the whole answer, now lives in post-dedupe beside the reservation
+// that guards every send.
 
 /**
  * RecurPost reports a refused post as HTTP 200 with a one-line body that names
@@ -58,13 +52,27 @@ export async function GET() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const SELECT = "*, clients(name), profiles:created_by(name, avatar_url, designation)";
   const { data, error } = await supabase
     .from("social_posts")
-    .select("*, clients(name), profiles:created_by(name, avatar_url, designation)")
+    .select(SELECT)
     .order("created_at", { ascending: false })
     .limit(60);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true, posts: data || [] });
+
+  // Every duplicate still waiting to be removed in RecurPost, however old.
+  // The Library only reads the newest 60, and a copy flagged last month is
+  // still publishing if nobody deleted it — it has to stay in front of the
+  // team until someone marks it removed or not a duplicate.
+  const { data: flagged } = await supabase
+    .from("social_posts")
+    .select(SELECT)
+    .eq("duplicate_resolution_status", "manual_removal_required")
+    .order("created_at", { ascending: false })
+    .limit(200);
+  const seen = new Set((data || []).map((p) => p.id));
+  const posts = [...(data || []), ...(flagged || []).filter((p) => !seen.has(p.id))];
+  return NextResponse.json({ success: true, posts });
 }
 
 // POST — publish/schedule via RecurPost (one call per platform × content type).
@@ -89,12 +97,35 @@ export async function POST(request: NextRequest) {
     const { data: post } = await admin.from("social_posts").select("*, clients(name)").eq("id", body.id).single();
     if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
 
+    // Somebody is sending this very row right now. A second press is the
+    // duplicate, so it is told so and nothing is called.
+    if (post.status === "sending") {
+      return NextResponse.json({ error: `${IN_FLIGHT} — this post is being sent right now.`, duplicate: true }, { status: 409 });
+    }
+
+    // RecurPost never answered this one clearly, so it may well be sitting in
+    // their queue already. Nobody resends it blind: the team looks first, and
+    // says so, and only then does it go again — on this same row.
+    const confirmedUncertain = post.status === "uncertain" && body.confirmedUncertain === true;
+    if (post.status === "uncertain" && !confirmedUncertain) {
+      return NextResponse.json(
+        {
+          error: "RecurPost may already have this. Check its Queue; resend only if it is not there.",
+          needsConfirmation: true,
+          uncertain: true,
+          recurpostPostId: post.recurpost_post_id ?? null,
+        },
+        { status: 409 }
+      );
+    }
+
     // A RecurPost id means they accepted this post and it is sitting in their
     // queue — whatever our own status column says. Sending it again adds a
     // second copy rather than replacing the first, because their API has no
     // cancel. That is the duplicate: not two clicks of Send, but a retry on a
-    // post RecurPost had already taken.
-    if (post.recurpost_post_id && !body.confirmedRemoved) {
+    // post RecurPost had already taken. (Confirming an uncertain row is the
+    // same promise — "I looked, it is not there" — so it answers this too.)
+    if (post.recurpost_post_id && !body.confirmedRemoved && !confirmedUncertain) {
       return NextResponse.json(
         {
           error: `RecurPost already has this queued as post ${post.recurpost_post_id}. Retrying adds a second copy — their API cannot replace one. Delete post ${post.recurpost_post_id} in RecurPost → Queue first, then retry.`,
@@ -188,32 +219,41 @@ export async function POST(request: NextRequest) {
     }
     if (post.platform === "pinterest") params.pi_title = pinterestTitle(post.title, post.caption);
 
-    let ok = false;
-    let detail = "";
-    let rpId: number | null = null;
-    try {
-      const res = await postContent(params);
-      detail = explainFailure(post.platform, JSON.stringify(res).slice(0, 300));
-      const lower = detail.toLowerCase();
-      // An id coming back means RecurPost queued it, and that is the truth
-      // regardless of any other wording in the body. Recording an accepted post
-      // as "failed" is what invites the retry that duplicates it.
-      rpId = recurPostIdOf(res);
-      ok = rpId !== null || !(lower.includes('"error"') || lower.includes('"status":"failed"') || lower.includes("invalid"));
-    } catch (err: unknown) {
-      detail = err instanceof Error ? err.message : String(err);
+    // Claim this same row before calling RecurPost — never a new one. An
+    // uncertain row keeps the key it already holds; any other retry is keyed
+    // on what is actually being sent now (its slot if still ahead, "now"
+    // otherwise), so a live copy of exactly that is refused by the index.
+    const future = !!params.schedule_date_time;
+    const claim = await reclaim(
+      admin,
+      post.id as string,
+      post.status as string,
+      {
+        clientId: post.client_id as string,
+        accountId,
+        platform: post.platform as string,
+        contentType: post.content_type as string,
+        mediaUrl: post.media_url as string,
+        scheduledIso: future ? new Date(post.scheduled_for as string).toISOString() : null,
+      },
+      post.status === "uncertain" ? ((post.dedupe_key as string | null) ?? null) : null
+    );
+    if (claim.kind === "duplicate") {
+      return NextResponse.json({ error: claim.message, duplicate: true, alreadyOut: claim.alreadyOut }, { status: 409 });
     }
-    await admin
-      .from("social_posts")
-      .update({
-        status: ok ? "sent" : "failed",
-        // Record the id whenever RecurPost gave one, even on a failure — it is
-        // the handle for deleting the copy they are holding.
-        ...(rpId !== null ? { recurpost_post_id: rpId, needs_recurpost_cleanup: false } : {}),
-        webhook_response: `[retry] ${detail}`,
-      })
-      .eq("id", body.id);
-    return NextResponse.json({ success: ok, detail, recurpostPostId: rpId }, { status: ok ? 200 : 500 });
+    if (claim.kind === "error") return NextResponse.json({ error: claim.message }, { status: 500 });
+
+    // An id coming back means RecurPost queued it, and that is the truth
+    // regardless of any other wording in the body. Recording an accepted post
+    // as "failed" is what invites the retry that duplicates it.
+    const outcome = await sendToRecurPost(params);
+    const ok = outcome.status === "sent";
+    const detail = explainFailure(post.platform, outcome.detail);
+    await settle(admin, claim.id, outcome, `[retry] ${detail}`, outcome.rpId !== null ? { needs_recurpost_cleanup: false } : {});
+    return NextResponse.json(
+      { success: ok, detail, recurpostPostId: outcome.rpId, uncertain: outcome.status === "uncertain" },
+      { status: ok ? 200 : outcome.status === "uncertain" ? 502 : 500 }
+    );
   }
 
   const { clientId, platforms, title, caption, mediaUrl, thumbnailUrl, scheduledFor, uploadId, thumbUploadId } = body;
@@ -292,6 +332,11 @@ export async function POST(request: NextRequest) {
   // is warned about in the composer; if they choose it anyway that's their
   // call, and the failure shows in the Library with the reason.
   const skipped: string[] = [];
+  // A send skipped because another copy is still on its way (sending, or
+  // never answered clearly) has not put this creative out yet — so the hub
+  // upload stays where it is. One skipped because the copy is already out
+  // has, and does not hold it back.
+  let heldBack = false;
 
   for (const platform of platforms) {
     // feed/story/reel only differ on FB & IG — other platforms get one post.
@@ -302,7 +347,7 @@ export async function POST(request: NextRequest) {
       );
       let ok = false;
       let detail = "";
-      let rpId: number | null = null;
+      // A fast pre-filter only — the reservation below is the authority.
       if (alreadyKey.has(`${platform}|${contentType}`)) {
         // Same client, same media, same slot, already away — don't post twice.
         skipped.push(`${platform} ${contentType} — already posted.`);
@@ -315,8 +360,25 @@ export async function POST(request: NextRequest) {
         skipped.push("youtube — YouTube only accepts video. Upload a video to include YouTube.");
         continue;
       }
+      const row = {
+        client_id: clientId,
+        created_by: user.id,
+        platform,
+        content_type: contentType,
+        title: title || null,
+        caption: caption || null,
+        // Record what was actually sent, not the Drive original — so the
+        // Library preview and any retry use the same fetchable URL.
+        media_url: publishUrl,
+        media_is_video: mediaIsVideo,
+        thumbnail_url: thumbnailUrl || null,
+        scheduled_for: scheduledIso,
+      };
       if (!accountId) {
+        // Nothing goes to RecurPost, so there is no slot to claim — the
+        // failure is simply recorded, as it always was.
         detail = `No RecurPost account mapped for ${client?.name || "this client"} on ${platform} — map it in Social Publisher → RecurPost Accounts.`;
+        await admin.from("social_posts").insert({ ...row, status: "failed", recurpost_post_id: null, webhook_response: `[recurpost] ${detail}` });
       } else {
         const params: Record<string, unknown> = {
           id: accountId,
@@ -354,35 +416,29 @@ export async function POST(request: NextRequest) {
           if (sendThumb) params.yt_thumb = sendThumb;
         }
         if (platform === "pinterest") params.pi_title = pinterestTitle(title, caption);
-        try {
-          const res = await postContent(params);
-          detail = explainFailure(platform, JSON.stringify(res).slice(0, 300));
-          const lower = detail.toLowerCase();
+
+        // Claim the slot first. Only the request that wrote the row calls
+        // RecurPost; a second click, a second person or a blind resend finds
+        // the slot taken and is told so instead.
+        const claim = await reserve(admin, row, {
+          clientId, accountId, platform, contentType, mediaUrl: publishUrl, scheduledIso,
+        });
+        if (claim.kind === "duplicate") {
+          skipped.push(`${platform} ${contentType} — ${claim.message}.`);
+          if (!claim.alreadyOut) heldBack = true;
+          continue;
+        }
+        if (claim.kind === "error") {
+          detail = claim.message;
+        } else {
           // A post id back means RecurPost queued it — that settles it. Only
           // when there is no id do we fall back to reading the body for errors.
-          rpId = recurPostIdOf(res);
-          ok = rpId !== null || !(lower.includes('"error"') || lower.includes('"status":"failed"') || lower.includes("invalid"));
-        } catch (err: unknown) {
-          detail = err instanceof Error ? err.message : String(err);
+          const outcome = await sendToRecurPost(params);
+          detail = explainFailure(platform, outcome.detail);
+          ok = outcome.status === "sent";
+          await settle(admin, claim.id, outcome, `[recurpost] ${detail}`);
         }
       }
-      await admin.from("social_posts").insert({
-        client_id: clientId,
-        created_by: user.id,
-        platform,
-        content_type: contentType,
-        title: title || null,
-        caption: caption || null,
-        // Record what was actually sent, not the Drive original — so the
-        // Library preview and any retry use the same fetchable URL.
-        media_url: publishUrl,
-        media_is_video: mediaIsVideo,
-        thumbnail_url: thumbnailUrl || null,
-        scheduled_for: scheduledFor ? istWallClockToUtc(scheduledFor).toISOString() : null,
-        status: ok ? "sent" : "failed",
-        recurpost_post_id: rpId,
-        webhook_response: `[recurpost] ${detail}`,
-      });
       results.push({ platform, contentType, ok, detail });
     }
   }
@@ -393,7 +449,7 @@ export async function POST(request: NextRequest) {
   // so it leaves the "received" tray.
   // The thumbnail comes from its own Content Hub section (designers upload covers
   // separately from the editors' reels) — retire it with the reel it was used on.
-  if (failed.length === 0) {
+  if (failed.length === 0 && !heldBack) {
     const usedIds = [uploadId, thumbUploadId].filter(Boolean) as string[];
     if (usedIds.length > 0) {
       await admin.from("creative_uploads").update({ status: "scheduled" }).in("id", usedIds);
@@ -430,6 +486,28 @@ export async function PATCH(request: NextRequest) {
   if (!body.id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
   const admin = createServiceRoleClient();
+
+  // A flagged duplicate, closed out by a person: "Mark removed" once the copy
+  // is deleted in RecurPost's Queue, "Not a duplicate" when the flag was
+  // wrong. Only the flag changes — the row, and the original it pointed at,
+  // stay exactly as they are. Nothing is deleted here or anywhere.
+  if (body.action === "duplicate_resolution") {
+    const resolution = body.resolution === "resolved" || body.resolution === "ignored" ? body.resolution : null;
+    if (!resolution) return NextResponse.json({ error: "resolution must be resolved or ignored" }, { status: 400 });
+    const { data: upd, error } = await admin
+      .from("social_posts")
+      .update({ duplicate_resolution_status: resolution })
+      .eq("id", body.id)
+      .eq("duplicate_resolution_status", "manual_removal_required")
+      .select("id");
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!upd || upd.length === 0) return NextResponse.json({ error: "This post is not flagged as a duplicate any more." }, { status: 409 });
+    return NextResponse.json({
+      success: true,
+      message: resolution === "resolved" ? "Marked removed — the duplicate is closed." : "Marked as not a duplicate.",
+    });
+  }
+
   const { data: post } = await admin.from("social_posts").select("*").eq("id", body.id).maybeSingle();
   if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
 

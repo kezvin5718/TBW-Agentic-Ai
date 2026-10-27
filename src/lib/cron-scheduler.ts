@@ -219,6 +219,43 @@ export function startCronScheduler() {
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;
 
+  // 6e. Send watchdog (every 5 minutes) — a send interrupted by a restart
+  // leaves its row at "sending". Ten minutes on it becomes "uncertain": the
+  // Library asks a person to check RecurPost's Queue, and nothing resends it
+  // on its own.
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      const { expireStaleSending } = await import("@/lib/post-dedupe");
+      const moved = await expireStaleSending();
+      cronSchedulerStatus.lastRun["send_watchdog"] = new Date().toISOString();
+      await recordRun("send_watchdog", "ok", moved ? `${moved} interrupted send(s) marked uncertain` : undefined);
+      if (moved > 0) console.warn(`⚠️ In-App Cron: ${moved} interrupted send(s) marked uncertain — check RecurPost's Queue before resending.`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: send watchdog failed:", msg);
+      await recordRun("send_watchdog", "failed", msg);
+    }
+  }, { timezone: "Asia/Kolkata" });
+  cronSchedulerStatus.jobsScheduledCount++;
+
+  // 6f. Duplicate safety net (hourly, at :20) — flags any two live posts that
+  // are one creative on one platform in one slot. It only flags: the Library
+  // shows the chip and the team removes the copy in RecurPost. Never deletes.
+  cron.schedule("20 * * * *", async () => {
+    try {
+      const { scanForDuplicates } = await import("@/lib/post-dedupe");
+      const flagged = await scanForDuplicates();
+      cronSchedulerStatus.lastRun["duplicate_scan"] = new Date().toISOString();
+      await recordRun("duplicate_scan", "ok", flagged ? `${flagged} duplicate(s) flagged for manual removal` : undefined);
+      if (flagged > 0) console.warn(`⚠️ In-App Cron: ${flagged} duplicate post(s) flagged — remove them in RecurPost.`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: duplicate scan failed:", msg);
+      await recordRun("duplicate_scan", "failed", msg);
+    }
+  }, { timezone: "Asia/Kolkata" });
+  cronSchedulerStatus.jobsScheduledCount++;
+
   // 7. Storage sweep (3:30 AM IST) — move spent files to Drive, free Supabase.
   cron.schedule("30 3 * * *", async () => {
     console.log("⏰ In-App Cron: Starting Storage Sweep...");
