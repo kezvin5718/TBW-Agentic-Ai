@@ -923,6 +923,13 @@ export default function SocialPublisherPage() {
     risk_accepted_at?: string | null;
     /** A carousel's slides, in order — the list read attaches them to carousel rows only. */
     slides?: Array<{ slide_no: number; file_url: string; file_name: string | null }>;
+    /** The designer's own 9:16 Story of this post, paired in the hub — it goes out in this row's slot. */
+    linked_story_id?: string | null;
+    story_link_source?: "auto" | "manual" | null;
+    linked_story?: {
+      id: string; file_url: string; file_name: string | null; media_type: string;
+      thumbnail_url: string | null; qc_status: string | null; qc_note?: string | null; status: string;
+    } | null;
   }
   type Cadence = "daily" | "alternate" | "manual";
   /** "N slides" — read from the slides when the list carried them, else from the name the hub saved. */
@@ -958,6 +965,9 @@ export default function SocialPublisherPage() {
   // entry means Feed — the row goes out exactly as it was uploaded. The server
   // unrolls the Story pass from this row's slot, like a repeat.
   const [autoAs, setAutoAs] = useState<Record<string, "feed" | "story" | "both">>({});
+  // Rows whose linked Story is left behind this time ("Include Story" off). No
+  // entry means the Story goes, in the row's own slot — the default.
+  const [autoNoStory, setAutoNoStory] = useState<Set<string>>(new Set());
   // Gap between posts that land on the same day. Null means nobody is spaced
   // automatically and the times on the rows are the only source.
   const [gapMins, setGapMins] = useState<number | null>(5);
@@ -1113,6 +1123,7 @@ export default function SocialPublisherPage() {
       setAutoTimes({});
       setAutoRepeat({});
       setAutoAs({});
+      setAutoNoStory(new Set());
       setAutoSkip(new Set());
       // Auto-dating from the library was removed (20 Oct, founder's order):
       // the start is simply tomorrow, and every date is the team's to set.
@@ -1238,9 +1249,19 @@ export default function SocialPublisherPage() {
   /** "2026-10-07" → "7 Oct". Already an IST calendar date, so read as-is. */
   const dayLabel = (date: string) =>
     new Date(`${date}T00:00:00Z`).toLocaleDateString("en-IN", { timeZone: "UTC", day: "numeric", month: "short" });
-  /** Where this row goes. Only a post or a reel can be re-routed; the rest go as uploaded. */
+  /**
+   * Where this row goes. Only a post or a reel can be re-routed; the rest go as
+   * uploaded. A row with its own linked Story is never re-routed — the real
+   * Story replaces converting the post.
+   */
   const sendAsOf = (r: AutoRow): "feed" | "story" | "both" =>
-    (r.content_type === "post" || r.content_type === "reel") ? (autoAs[r.id] ?? "feed") : "feed";
+    (r.content_type === "post" || r.content_type === "reel") && !r.linked_story ? (autoAs[r.id] ?? "feed") : "feed";
+  /** The linked Story is ticked to go with this row. */
+  const storyRides = (r: AutoRow) => !!r.linked_story && !autoNoStory.has(r.id);
+  /** QC has passed the linked Story itself — Clear mode sends nothing QC has not. */
+  const storyCleared = (r: AutoRow) => r.linked_story?.qc_status === "match" && r.linked_story?.status === "uploaded";
+  /** It will actually go: ticked, and either QC-clean or this is a Risk run (the override covers it). */
+  const storyGoes = (r: AutoRow) => storyRides(r) && (autoMode === "risk" || storyCleared(r));
 
   /**
    * The whole schedule, worked out in one pass.
@@ -1334,13 +1355,14 @@ export default function SocialPublisherPage() {
   const repeatOf = (r: AutoRow) => (r.content_type === "story" ? autoRepeat[r.id] : undefined);
   // What actually goes out: a repeated story counts once per day it runs, and
   // a post sent as feed + Story counts twice.
+  // A linked Story going with its post is one more run, at the same slot.
   const autoOccurrences = autoReady.reduce((n, r) => {
     const rep = repeatOf(r);
-    return n + (rep ? clampTimes(rep.times) : sendAsOf(r) === "both" ? 2 : 1);
+    return n + (rep ? clampTimes(rep.times) : sendAsOf(r) === "both" ? 2 : 1) + (storyGoes(r) ? 1 : 0);
   }, 0);
   // The Story passes only land on Instagram and Facebook, so the post count
   // is worked out per pass rather than runs × every platform picked.
-  const autoStoryPasses = autoReady.filter((r) => sendAsOf(r) !== "feed").length;
+  const autoStoryPasses = autoReady.filter((r) => sendAsOf(r) !== "feed").length + autoReady.filter(storyGoes).length;
   const autoStoryPlatforms = autoPlatforms.filter((p) => p === "instagram" || p === "facebook").length;
   const autoPosts = (autoOccurrences - autoStoryPasses) * autoPlatforms.length + autoStoryPasses * autoStoryPlatforms;
 
@@ -1366,6 +1388,9 @@ export default function SocialPublisherPage() {
             scheduledFor: `${schedule[r.id].date}T${schedule[r.id].time}`,
             ...(rep ? { repeat: { mode: rep.mode, times: clampTimes(rep.times) } } : {}),
             ...(as !== "feed" ? { sendAs: as } : {}),
+            // Only "leave it behind" is said; the server takes the linked
+            // Story along by default.
+            ...(r.linked_story && !storyRides(r) ? { withStory: false } : {}),
           };
         });
       const repeated = items.filter((i) => i.repeat);
@@ -2678,6 +2703,19 @@ export default function SocialPublisherPage() {
                     </div>
                     <ThumbNote u={autoThumbOf(r)} className="mt-0.5" wrap />
                     </div>
+                    {/* The post's own Story, beside it — it goes out in this
+                        row's slot. Dimmed when it is being left behind. */}
+                    {r.linked_story && (
+                      <div className={`w-7 shrink-0 ${storyGoes(r) ? "" : "opacity-40"}`} title={`Story: ${r.linked_story.file_name || ""}`}>
+                        <div className="relative w-7 aspect-[9/16] rounded-md overflow-hidden border border-indigo-500/60 bg-slate-900">
+                          {(r.linked_story.media_type === "video" ? r.linked_story.thumbnail_url : r.linked_story.file_url)
+                            // eslint-disable-next-line @next/next/no-img-element
+                            ? <img src={(r.linked_story.media_type === "video" ? r.linked_story.thumbnail_url : r.linked_story.file_url) as string} alt="" className="w-full h-full object-cover" />
+                            : <div className="w-full h-full flex items-center justify-center text-slate-500 text-[9px]">▶</div>}
+                        </div>
+                        <span className="block text-[8px] font-bold text-indigo-300 text-center mt-0.5 uppercase">Story</span>
+                      </div>
+                    )}
 
                     <div className="min-w-[140px] sm:min-w-0 flex-1 space-y-2">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -2845,7 +2883,30 @@ export default function SocialPublisherPage() {
                       {/* A post or reel can go out as a Story too, or instead.
                           Same slot; the server adds the Story pass. A story
                           row needs none of this — it already is one. */}
-                      {(r.content_type === "post" || r.content_type === "reel") && (
+                      {/* A linked Story goes with the post, same slot, unless
+                          unticked. It replaces Send-as: the designer's real
+                          Story beats converting the post into one. */}
+                      {r.linked_story && (
+                        <div className="flex flex-col items-end gap-0.5">
+                          <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-300 cursor-pointer min-h-[40px] lg:min-h-0"
+                            title="Sent as a Story at this row's time — Instagram and Facebook only, no caption">
+                            <input
+                              type="checkbox"
+                              checked={storyRides(r)}
+                              onChange={() => setAutoNoStory((p) => { const n = new Set(p); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; })}
+                              className="accent-indigo-500 cursor-pointer"
+                            />
+                            <span>Include Story</span>
+                          </label>
+                          {storyRides(r) && autoMode === "clear" && !storyCleared(r) && (
+                            <span className="text-[9px] font-bold text-amber-400 text-right max-w-[220px] leading-snug"
+                              title={r.linked_story.qc_note || ""}>
+                              Story not QC-approved — the post goes, the Story is skipped
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {(r.content_type === "post" || r.content_type === "reel") && !r.linked_story && (
                         <div className="flex items-center justify-end gap-1 flex-wrap">
                           <span className="text-[9px] font-bold text-slate-500 uppercase">Send as</span>
                           <div className="flex bg-slate-950 border border-slate-800 rounded-lg p-0.5"
@@ -2882,13 +2943,14 @@ export default function SocialPublisherPage() {
                       {slot?.collides && (
                         <span className="text-[9px] font-bold text-rose-400" title="Same instant as the post above — set a time or pick a gap">⚠ same time</span>
                       )}
-                      {(autoDates[r.id] || autoTimes[r.id] || autoRepeat[r.id] || autoAs[r.id]) && (
+                      {(autoDates[r.id] || autoTimes[r.id] || autoRepeat[r.id] || autoAs[r.id] || autoNoStory.has(r.id)) && (
                         <button
                           onClick={() => {
                             setAutoDates((d) => { const n = { ...d }; delete n[r.id]; return n; });
                             setAutoTimes((t) => { const n = { ...t }; delete n[r.id]; return n; });
                             setAutoRepeat((p) => { const n = { ...p }; delete n[r.id]; return n; });
                             setAutoAs((a) => { const n = { ...a }; delete n[r.id]; return n; });
+                            setAutoNoStory((p) => { const n = new Set(p); n.delete(r.id); return n; });
                           }}
                           className="text-[9px] font-bold text-slate-600 hover:text-white cursor-pointer min-h-[40px] lg:min-h-0">reset</button>
                       )}
@@ -2909,7 +2971,7 @@ export default function SocialPublisherPage() {
               <p className="text-[11px] text-slate-500">
                 {autoReady.length === 0
                   ? "Nothing selected — every row is skipped or has no date."
-                  : <>Will schedule <span className="signal">{autoPosts}</span> post(s) — {autoReady.length} creative(s){autoOccurrences > autoReady.length ? ` (${autoOccurrences} runs with ${[autoReady.some((r) => repeatOf(r)) ? "story repeats" : "", autoReady.some((r) => sendAsOf(r) === "both") ? "Story passes" : ""].filter(Boolean).join(" and ")})` : ""} × {autoPlatforms.length} platform(s){autoSameDay > 0 ? `, with ${autoSameDay} spaced 5 minutes apart on a shared day` : `, all at ${autoTime}`}{autoStoryPasses > 0 && autoStoryPlatforms < autoPlatforms.length ? `; ${autoStoryPasses} Story pass(es) go to Instagram/Facebook only` : ""}{autoSpan ? (autoSpan.first === autoSpan.last ? ` · on ${dayLabel(autoSpan.first)}` : ` · running ${dayLabel(autoSpan.first)} → ${dayLabel(autoSpan.last)}`) : ""}.</>}
+                  : <>Will schedule <span className="signal">{autoPosts}</span> post(s) — {autoReady.length} creative(s){autoOccurrences > autoReady.length ? ` (${autoOccurrences} runs with ${[autoReady.some((r) => repeatOf(r)) ? "story repeats" : "", autoReady.some((r) => sendAsOf(r) === "both") ? "Story passes" : "", autoReady.some(storyGoes) ? "linked Stories" : ""].filter(Boolean).join(" and ")})` : ""} × {autoPlatforms.length} platform(s){autoSameDay > 0 ? `, with ${autoSameDay} spaced 5 minutes apart on a shared day` : `, all at ${autoTime}`}{autoStoryPasses > 0 && autoStoryPlatforms < autoPlatforms.length ? `; ${autoStoryPasses} Story pass(es) go to Instagram/Facebook only` : ""}{autoSpan ? (autoSpan.first === autoSpan.last ? ` · on ${dayLabel(autoSpan.first)}` : ` · running ${dayLabel(autoSpan.first)} → ${dayLabel(autoSpan.last)}`) : ""}.</>}
               </p>
               <button onClick={sendAutomation} disabled={autoSending || autoReady.length === 0 || autoPlatforms.length === 0}
                 className={`w-full px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 transition-all ${!autoSending && autoReady.length > 0 && autoPlatforms.length > 0 ? "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-600 cursor-not-allowed"}`}>

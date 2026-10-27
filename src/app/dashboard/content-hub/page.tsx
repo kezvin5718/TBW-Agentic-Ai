@@ -33,7 +33,55 @@ interface UploadRow {
   profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
   /** A carousel's slides, in order — the list read attaches them to carousel rows only. */
   slides?: Array<{ slide_no: number; file_url: string; file_name: string | null }>;
+  /** On a post, reel or carousel: the 9:16 Story that travels with it, and how it got there. */
+  linked_story_id?: string | null;
+  story_link_source?: "auto" | "manual" | null;
+  linked_story?: StoryLite | null;
+  /** On a Story: the post holding it — said on the row so nobody sends it twice by hand. */
+  linked_to?: { id: string; file_name: string | null } | null;
 }
+/** A Story as the list carries it beside its post, or in a client's waiting list. */
+interface StoryLite {
+  id: string;
+  client_id: string | null;
+  file_url: string;
+  file_name: string | null;
+  media_type: "image" | "video";
+  thumbnail_url: string | null;
+  qc_status?: string | null;
+  status: string;
+  created_at: string;
+}
+/** What can carry a Story. A Story cannot carry another. */
+const STORY_HOLDERS = ["post", "reel", "carousel"];
+
+/**
+ * Stories by shape. Designers make every creative twice — the feed post and a
+ * 9:16 Story of it — and drop both on the Posts & Reels card. An image within
+ * ±3% of 9:16 is the Story: read from its own pixels in the browser before
+ * anything goes up, never from its name. 4:5 keeps its old meaning (a cover,
+ * or a post), and a video is never taken for a Story here — Story videos come
+ * through the Story card.
+ */
+const STORY_RATIO = 9 / 16;
+const isStoryRatio = (w: number, h: number) => w > 0 && h > 0 && Math.abs(w / h / STORY_RATIO - 1) <= 0.03;
+const shapeKey = (f: File) => `${f.name}-${f.size}`;
+/** "other" when the browser cannot open it (a HEIC, say) — then it is a post, as before. */
+const readShape = (f: File): Promise<"story" | "other"> =>
+  new Promise((resolve) => {
+    const url = URL.createObjectURL(f);
+    const img = new window.Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(isStoryRatio(img.naturalWidth, img.naturalHeight) ? "story" : "other"); };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve("other"); };
+    img.src = url;
+  });
+/**
+ * What a drop left behind for the Story matcher: the posts it made, the
+ * Stories it made, and whether a panel (covers, carousels) still has to be
+ * confirmed — in which case the matcher waits for that confirm, when the posts
+ * it would compare against actually exist.
+ */
+interface DropResult { failed: string[]; postIds: string[]; storyIds: string[]; panel: boolean }
 
 /**
  * Editors export from Premiere, CapCut, phones and WhatsApp, so the same reel
@@ -161,6 +209,87 @@ function ThumbNote({ u }: { u: UploadRow }) {
   if (st === "none") return <span className="mt-0.5 block text-[9px] text-slate-600 whitespace-nowrap">no thumbnail</span>;
   return null;
 }
+/** A linked Story, small and 9:16 — its own picture, or its video's thumbnail. */
+function StoryThumb({ s }: { s: StoryLite }) {
+  const pic = s.media_type === "video" ? s.thumbnail_url : s.file_url;
+  return (
+    <a
+      href={driveOpen(s.file_url)}
+      target="_blank"
+      rel="noreferrer"
+      title={`Story: ${s.file_name || ""}`}
+      className="w-[23px] h-10 shrink-0 rounded-md overflow-hidden bg-slate-900 border border-indigo-500/60 flex items-center justify-center text-slate-500 hover:text-indigo-400"
+    >
+      {pic
+        // eslint-disable-next-line @next/next/no-img-element
+        ? <img src={pic} alt={s.file_name || "Story"} className="w-full h-full object-cover" />
+        : <Smartphone className="w-3 h-3" />}
+    </a>
+  );
+}
+
+/**
+ * Under a post's name: whether a Story travels with it and how it got there,
+ * and the way to change that. Change ▾ offers the client's Stories still
+ * waiting for a post; Unlink sends the Story back to waiting. A scheduled
+ * post only says what it went with — there is nothing left to change.
+ */
+function StoryLinkControl({ u, waiting, busy, locked, onChange }: {
+  u: UploadRow;
+  waiting: StoryLite[];
+  busy: boolean;
+  locked: boolean;
+  onChange: (storyId: string | null) => void;
+}) {
+  const open = u.status !== "scheduled";
+  const linked = !!u.linked_story_id;
+  if (!linked && !open) return null;
+  return (
+    <div className="mt-1 space-y-1 min-w-0">
+      {linked ? (
+        <span
+          title={u.linked_story?.file_name || ""}
+          className="inline-block px-2 py-0.5 rounded-full bg-indigo-950/40 border border-indigo-900 text-indigo-300 text-[10px] font-bold whitespace-nowrap"
+        >
+          {u.story_link_source === "manual" ? "✓ Story linked by hand" : "✓ Story matched automatically"}
+        </span>
+      ) : open ? (
+        <span className="block text-[10px] text-slate-600">No matching Story</span>
+      ) : null}
+      {open && (linked || waiting.length > 0) && (
+        <div className="flex items-center gap-1.5 min-w-0">
+          {waiting.length > 0 && (
+            <select
+              value=""
+              onChange={(e) => { if (e.target.value) onChange(e.target.value); }}
+              disabled={locked}
+              aria-label={linked ? "Change the linked Story" : "Link a Story"}
+              className="min-w-0 max-w-[140px] min-h-[40px] lg:min-h-0 bg-slate-900/60 border border-slate-800 rounded-lg py-0.5 px-1.5 text-[10px] text-white focus:outline-none focus:border-indigo-500 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <option value="">{linked ? "Change ▾" : "Link a Story ▾"}</option>
+              {waiting.map((s) => (
+                <option key={s.id} value={s.id}>{s.file_name || "Story"}</option>
+              ))}
+            </select>
+          )}
+          {linked && (
+            <button
+              type="button"
+              onClick={() => onChange(null)}
+              disabled={locked}
+              title="The Story goes back to waiting and is sent on its own"
+              className="min-h-[40px] lg:min-h-0 px-1.5 text-[10px] font-bold text-slate-500 hover:text-rose-400 cursor-pointer disabled:opacity-50"
+            >
+              Unlink
+            </button>
+          )}
+          {busy && <Loader2 className="w-3 h-3 animate-spin text-indigo-400 shrink-0" />}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const driveOpen = (u: string) => {
   const m = u.match(/googleusercontent\.com\/d\/([^=/?]+)/);
   return m ? `https://drive.google.com/file/d/${m[1]}/view` : u;
@@ -229,10 +358,23 @@ export default function ContentHubPage() {
     thumbnail: useRef<HTMLInputElement>(null),
   };
 
+  // Each staged image's shape on the Posts & Reels card, read as it is added.
+  // No entry yet means still being read — the Upload button waits for it, so
+  // a Story is never sent up as a post because the browser was slow.
+  const [shapes, setShapes] = useState<Record<string, "story" | "other">>({});
+  const isStoryFile = (f: File) => !isVideoFile(f) && shapes[shapeKey(f)] === "story";
+  const shapeUnread = (files: File[]) => files.some((f) => !isVideoFile(f) && !shapes[shapeKey(f)]);
+
   const naturalSort = (a: File, b: File) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
   const addFiles = (key: string, list: FileList | File[]) => {
     const incoming = Array.from(list);
     if (incoming.length === 0) return;
+    if (key === "mix") {
+      for (const f of incoming) {
+        if (isVideoFile(f) || shapes[shapeKey(f)]) continue;
+        void readShape(f).then((shape) => setShapes((prev) => ({ ...prev, [shapeKey(f)]: shape })));
+      }
+    }
     setStaged((prev) => {
       const existing = prev[key] || [];
       const merged = [...existing];
@@ -304,6 +446,7 @@ export default function ContentHubPage() {
       if (res.ok) {
         const data = await res.json();
         setUploads(data.uploads || []);
+        setWaitingStories((data.waitingStories || []) as StoryLite[]);
         return (data.uploads || []) as UploadRow[];
       }
     } catch {
@@ -311,6 +454,109 @@ export default function ContentHubPage() {
     }
     return null;
   }, []);
+
+  // --- Linked Stories -------------------------------------------------------------
+  // Each client's Stories still waiting for a post — what Change ▾ offers.
+  const [waitingStories, setWaitingStories] = useState<StoryLite[]>([]);
+  // The last Story match, said in one line under the banners.
+  const [storyNote, setStoryNote] = useState<{ busy: boolean; text: string } | null>(null);
+  const [storyBusy, setStoryBusy] = useState<string | null>(null);
+
+  /**
+   * Stories go up one row each, as content_type 'story', through the same
+   * POST the Story card uses — QC as today. Deliberately no batch: a batch is
+   * approved or rejected as ONE, and a Story failing QC must never take its
+   * post down with it (the post still goes; the Story is skipped).
+   */
+  const uploadStories = async (files: File[], clientId: string) => {
+    const ids: string[] = [];
+    const failed: string[] = [];
+    const failedNames: string[] = [];
+    // "post" keeps the Posts & Reels card showing busy while they go up.
+    setUploadingType("post");
+    for (let i = 0; i < files.length; i++) {
+      setUploadCount({ done: i, total: files.length });
+      try {
+        const fd = new FormData();
+        fd.append("file", files[i]);
+        fd.append("clientId", clientId);
+        fd.append("contentType", "story");
+        const res = await fetch("/api/content-hub", { method: "POST", body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Upload failed");
+        if (data.upload?.id) ids.push(data.upload.id as string);
+      } catch (err: unknown) {
+        failed.push(`${files[i].name} (${err instanceof Error ? err.message : "failed"})`);
+        failedNames.push(files[i].name);
+      }
+    }
+    setUploadCount(null);
+    setUploadingType(null);
+    return { ids, failed, failedNames };
+  };
+
+  /**
+   * Ask the matcher to pair Stories with posts, either way round: new posts
+   * look through the client's waiting Stories (post-first), new Stories are
+   * looked for among the client's waiting posts (Story-first). Only a certain
+   * answer links anything; the rest is left for a person on the post's row.
+   */
+  const matchStories = async (clientId: string, postIds: string[], storyIds: string[]) => {
+    if (!clientId || (postIds.length === 0 && storyIds.length === 0)) return;
+    setStoryNote({ busy: true, text: "Looking for each post's Story by sight…" });
+    try {
+      const pairs: Array<{ postId: string; storyId: string | null; confidence: "high" | "low" | null; note?: string }> = [];
+      // The route takes twenty posts a call; the Stories ride along every time.
+      const chunks: string[][] = [];
+      for (let i = 0; i < postIds.length; i += 20) chunks.push(postIds.slice(i, i + 20));
+      if (chunks.length === 0) chunks.push([]);
+      for (const chunk of chunks) {
+        const res = await fetch("/api/content-hub/match-stories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientId, postIds: chunk, storyIds: storyIds.slice(0, 20) }),
+        });
+        const data = await res.json();
+        if (!res.ok || !Array.isArray(data.pairs)) throw new Error(data.error || "Story matcher failed");
+        pairs.push(...data.pairs);
+      }
+      const fresh = pairs.filter((p) => p.storyId && p.confidence === "high");
+      const placed = new Set(fresh.map((p) => p.storyId as string));
+      const clashes = pairs.filter((p) => !p.storyId && (p.note || "").startsWith("another post claimed")).length;
+      const stillWaiting = storyIds.filter((id) => !placed.has(id)).length;
+      const parts = [
+        `${fresh.length} Stor${fresh.length === 1 ? "y" : "ies"} linked to ${fresh.length === 1 ? "its post" : "their posts"} by sight`,
+        ...(clashes ? [`${clashes} post${clashes === 1 ? "" : "s"} claimed the same Story — link by hand`] : []),
+        ...(stillWaiting ? [`${stillWaiting} new Stor${stillWaiting === 1 ? "y is" : "ies are"} still waiting for a post — link from the post's row below, or it links when its post arrives`] : []),
+      ];
+      setStoryNote({ busy: false, text: `Stories: ${parts.join(" · ")}.` });
+      await fetchUploads();
+    } catch (err: unknown) {
+      // Nothing is lost: the Stories are uploaded and wait; any post's row can
+      // link one by hand.
+      setStoryNote({ busy: false, text: `The Story matcher is unavailable (${err instanceof Error ? err.message : "failed"}) — link Stories by hand from each post's row below.` });
+    }
+  };
+
+  /** A person's link (Change ▾) or unlink — final, and never redone by the matcher. */
+  const setStoryLink = async (postId: string, storyId: string | null) => {
+    setStoryBusy(postId);
+    setError(null);
+    try {
+      const res = await fetch("/api/content-hub/match-stories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(storyId ? { link: { postId, storyId } } : { unlink: { postId } }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not change the Story");
+      await fetchUploads();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not change the Story");
+    } finally {
+      setStoryBusy(null);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -398,7 +644,9 @@ export default function ContentHubPage() {
   const [coverBusy, setCoverBusy] = useState<string | null>(null);
   // What the drop's videos went up as, and the batch they share — the posts
   // made from the leftovers join that same batch, as they would have on upload.
-  const [coverDrop, setCoverDrop] = useState<{ contentType: string; batchId: string } | null>(null);
+  // storyIds: the drop's Stories, waiting for the confirm to make the posts
+  // they will be matched against.
+  const [coverDrop, setCoverDrop] = useState<{ contentType: string; batchId: string; storyIds: string[] } | null>(null);
   const [adopting, setAdopting] = useState(false);
   const coverHolders = new Map(coverCards.filter((c) => c.image).map((c) => [c.image!.url, c.id]));
   // The images no video holds. Before the confirm they are offered as posts;
@@ -413,7 +661,7 @@ export default function ContentHubPage() {
    * looking. A video it is not sure about is left without a cover and flagged
    * on its card — never given a frame-grab instead.
    */
-  const doMixedUpload = async (contentType: string, files: File[]) => {
+  const doMixedUpload = async (contentType: string, files: File[], storyIds: string[] = []): Promise<DropResult> => {
     const videos = files.filter(isVideoFile);
     const images = files.filter((f) => !isVideoFile(f));
     setError(null);
@@ -464,9 +712,12 @@ export default function ContentHubPage() {
     setUploadingType(null);
     setCoverPool(pool);
     setCoverCards(fresh);
-    setCoverDrop({ contentType, batchId });
+    setCoverDrop({ contentType, batchId, storyIds });
     await fetchUploads();
     runQc(); // brand-check the fresh videos in the background, same as always
+    // The panel below opens whenever there is a video or an image to show, and
+    // its confirm is what runs the Story matcher then.
+    const result = (panel: boolean): DropResult => ({ failed: failedNames, postIds: fresh.map((c) => c.id), storyIds: [], panel });
 
     const problems = [
       ...(failed.length ? [`${failed.length} video${failed.length > 1 ? "s" : ""} failed: ${failed.slice(0, 3).join("; ")}${failed.length > 3 ? "…" : ""}`] : []),
@@ -477,11 +728,11 @@ export default function ContentHubPage() {
     // No video made it up, so there is nothing to match against — but the
     // images are stored, and they are not dropped quietly: the panel offers
     // every one of them as a post.
-    if (fresh.length === 0) { setCoverState(pool.length > 0 ? "done" : null); return failedNames; }
+    if (fresh.length === 0) { setCoverState(pool.length > 0 ? "done" : null); return result(pool.length > 0); }
     if (pool.length === 0) {
       // Nothing to pair with — every card simply waits for a cover.
       setCoverState("done");
-      return failedNames;
+      return result(true);
     }
 
     setCoverState("matching");
@@ -521,7 +772,7 @@ export default function ContentHubPage() {
       setCoverState("down");
       setSuccess(`Uploaded ${fresh.length} video${fresh.length > 1 ? "s" : ""} and ${pool.length} image${pool.length > 1 ? "s" : ""}. The cover matcher is unavailable — pick each cover below; any image left over becomes a post when you confirm.`);
     }
-    return failedNames;
+    return result(true);
   };
 
   /** A person's pick, or clearing one. Same route, no AI. */
@@ -554,14 +805,21 @@ export default function ContentHubPage() {
     const leftovers = leftoverCovers;
     const reels = coverCards.length;
     const covers = coverCards.filter((c) => c.image).length;
+    // The Story matcher runs now, not at the drop: only now do the posts exist,
+    // and the reels carry the covers just paired — a better picture to compare.
+    const reelIds = coverCards.map((c) => c.id);
+    const dropStories = coverDrop?.storyIds || [];
+    const clientId = selectedClient;
     if (leftovers.length === 0) {
       closeCoverPanel();
       setSuccess(`Done — ${reels} ${coverDrop?.contentType === "post" ? "video post" : "reel"}${reels === 1 ? "" : "s"}, ${covers} cover${covers === 1 ? "" : "s"}, no posts.`);
+      void matchStories(clientId, reelIds, dropStories);
       return;
     }
     setAdopting(true);
     setError(null);
     const settled = new Set<string>();
+    const adoptedIds: string[] = [];
     let made = 0;
     try {
       // The route takes twenty at a time, the same ceiling as the pool.
@@ -578,12 +836,14 @@ export default function ContentHubPage() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not make the posts");
         made += (data.uploads || []).length;
+        adoptedIds.push(...((data.uploads || []) as UploadRow[]).map((u) => u.id));
         // Recorded now, or skipped because it is already a post (an earlier
         // click) or already a video's cover — either way, nothing left to do.
         for (const img of chunk) settled.add(img.url);
       }
       closeCoverPanel();
       setSuccess(`Done — ${reels} ${coverDrop?.contentType === "post" ? "video post" : "reel"}${reels === 1 ? "" : "s"}, ${covers} cover${covers === 1 ? "" : "s"}, ${made} post${made === 1 ? "" : "s"}. Brand QC is checking the posts now…`);
+      void matchStories(clientId, [...reelIds, ...adoptedIds], dropStories);
     } catch (err: unknown) {
       setCoverPool((pool) => pool.filter((img) => !settled.has(img.url)));
       setError(`${err instanceof Error ? err.message : "Could not make the posts"} — the images still waiting are below; confirm again to retry.`);
@@ -609,10 +869,12 @@ export default function ContentHubPage() {
   const [carSightDown, setCarSightDown] = useState(false);
   const [carClient, setCarClient] = useState("");
   const [carSaving, setCarSaving] = useState(false);
+  // The drop's Stories, waiting for the save to make the posts they match.
+  const [carStoryIds, setCarStoryIds] = useState<string[]>([]);
   const carPanelOpen = carState !== null;
   const closeCarPanel = () => {
     setCarGroups([]); setCarSingles([]); setCarIssues([]); setCarPool([]); setCarPicked([]);
-    setCarState(null); setCarSightDown(false); setCarClient("");
+    setCarState(null); setCarSightDown(false); setCarClient(""); setCarStoryIds([]);
   };
   const undecided = carGroups.filter((g) => g.needsYes && !g.yes).length;
   // Back in the posts list, an image takes its place in drop order again.
@@ -669,15 +931,16 @@ export default function ContentHubPage() {
    * carousel-detect says what they are. If detection is down, nothing is lost:
    * every image is offered as a post, and any can be grouped by hand.
    */
-  const doCarouselUpload = async (files: File[]) => {
+  const doCarouselUpload = async (files: File[], storyIds: string[] = []): Promise<DropResult> => {
     const images = [...files].sort(naturalSort);
     const clientId = selectedClient;
     // Kept staged, not dropped, if there is no client to file them under.
-    if (!clientId) { setError("Please select a client / brand first."); return images.map((f) => f.name); }
+    const out = (failed: string[], panel: boolean): DropResult => ({ failed, postIds: [], storyIds: [], panel });
+    if (!clientId) { setError("Please select a client / brand first."); return out(images.map((f) => f.name), false); }
     // The detector looks at thirty at most — said before anything is stored.
     if (images.length > CAROUSEL_DROP_MAX) {
       setError(`Up to ${CAROUSEL_DROP_MAX} images at a time when looking for carousels — upload these in two drops.`);
-      return images.map((f) => f.name);
+      return out(images.map((f) => f.name), false);
     }
     setError(null);
     setSuccess(null);
@@ -707,16 +970,17 @@ export default function ContentHubPage() {
     if (poolFailed.length) {
       setError(`${poolFailed.length} image${poolFailed.length > 1 ? "s" : ""} could not be stored: ${poolFailed.slice(0, 3).join("; ")}${poolFailed.length > 3 ? "…" : ""}`);
     }
-    if (pool.length === 0) return failedNames;
+    if (pool.length === 0) return out(failedNames, false);
 
     setCarPool(pool);
     setCarClient(clientId);
+    setCarStoryIds(storyIds);
     setCarGroups([]);
     setCarIssues([]);
     setCarPicked([]);
     setCarSightDown(false);
     // One survived the upload: nothing to group it with, so it is simply a post.
-    if (pool.length < 2) { setCarSingles(pool); setCarState("done"); return failedNames; }
+    if (pool.length < 2) { setCarSingles(pool); setCarState("done"); return out(failedNames, true); }
 
     setCarSingles([]);
     setCarState("detecting");
@@ -769,7 +1033,7 @@ export default function ContentHubPage() {
       setCarState("done");
       setSuccess(`Stored ${pool.length} images. Carousel detection is unavailable right now — they are listed below as posts; tick any that are one carousel and group them by hand.`);
     }
-    return failedNames;
+    return out(failedNames, true);
   };
 
   /**
@@ -789,6 +1053,11 @@ export default function ContentHubPage() {
     let carousels = 0;
     let posts = 0;
     let keepGroups = groups;
+    // For the Story matcher, which runs once these posts exist. The client and
+    // the drop's Stories are read now — closing the panel clears both.
+    const madeIds: string[] = [];
+    const matchClient = carClient;
+    const dropStories = carStoryIds;
     try {
       if (groups.length > 0) {
         try {
@@ -808,6 +1077,7 @@ export default function ContentHubPage() {
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Could not save the carousels");
           carousels = (data.uploads || []).length;
+          madeIds.push(...((data.uploads || []) as UploadRow[]).map((u) => u.id));
           const failed = (data.failed || []) as Array<{ index: number; error: string }>;
           for (const f of failed) problems.push(`${groups[f.index]?.slides[0]?.name || "a carousel"}: ${f.error}`);
           // Skipped means already in the hub (an earlier click) — nothing left to do.
@@ -834,6 +1104,7 @@ export default function ContentHubPage() {
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Could not make the posts");
           posts += (data.uploads || []).length;
+          madeIds.push(...((data.uploads || []) as UploadRow[]).map((u) => u.id));
           for (const img of chunk) settled.add(img.url);
         }
       } catch (err: unknown) {
@@ -855,6 +1126,13 @@ export default function ContentHubPage() {
       setCarSaving(false);
       await fetchUploads();
       if (carousels + posts > 0) runQc();
+      // Every post made gets its look for a Story; the drop's own Stories are
+      // offered once — after that they are simply "waiting", and a later save
+      // or upload finds them that way.
+      if (madeIds.length > 0 || (problems.length === 0 && dropStories.length > 0)) {
+        if (dropStories.length > 0) setCarStoryIds([]);
+        void matchStories(matchClient, madeIds, dropStories);
+      }
     }
   };
 
@@ -870,7 +1148,7 @@ export default function ContentHubPage() {
   // Upload one or many files. Files are naturally sorted by their filename
   // numbering (1, 2, … 9, 10 — not 1, 10, 2) and uploaded sequentially so the
   // sequence is preserved for the social team.
-  const doUpload = async (contentType: string, fileList: FileList | File[]) => {
+  const doUpload = async (contentType: string, fileList: FileList | File[], storyIds: string[] = []): Promise<DropResult | undefined> => {
     const files = Array.from(fileList);
     if (files.length === 0) return;
     if (!selectedClient) {
@@ -880,7 +1158,7 @@ export default function ContentHubPage() {
     files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
     // Videos and images together on a post or reel card are reels and their
     // covers. Anything else carries on below exactly as it always has.
-    if (isMixedDrop(contentType, files)) return doMixedUpload(contentType, files);
+    if (isMixedDrop(contentType, files)) return doMixedUpload(contentType, files, storyIds);
 
     setError(null);
     setSuccess(null);
@@ -892,6 +1170,9 @@ export default function ContentHubPage() {
     let ok = 0;
     const failed: string[] = [];
     const failedNames: string[] = [];
+    // The rows made, for the Story matcher: posts and reels to place, or —
+    // from the Story card — Stories looking for their posts.
+    const madeIds: string[] = [];
     for (let i = 0; i < files.length; i++) {
       setUploadCount({ done: i, total: files.length });
       try {
@@ -904,6 +1185,7 @@ export default function ContentHubPage() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Upload failed");
         ok++;
+        if (data.upload?.id) madeIds.push(data.upload.id as string);
       } catch (err: unknown) {
         failed.push(`${files[i].name} (${err instanceof Error ? err.message : "failed"})`);
         failedNames.push(files[i].name);
@@ -920,7 +1202,8 @@ export default function ContentHubPage() {
     } else {
       setError(`${ok} uploaded, ${failed.length} failed: ${failed.slice(0, 3).join("; ")}${failed.length > 3 ? "…" : ""}`);
     }
-    return failedNames;
+    const isStory = contentType === "story";
+    return { failed: failedNames, postIds: isStory ? [] : madeIds, storyIds: isStory ? madeIds : [], panel: false };
   };
 
   // Upload everything staged in a card; failed files stay staged for retry.
@@ -933,12 +1216,51 @@ export default function ContentHubPage() {
   const uploadStaged = async (key: string) => {
     const files = staged[key] || [];
     if (files.length === 0) return;
+    if (!selectedClient) { setError("Please select a client / brand first."); return; }
+    const clientId = selectedClient;
+    // The 9:16 images on the Posts & Reels card are Stories: they go up first,
+    // each its own row, and everything else in the drop then goes exactly the
+    // way it always has — mixed, carousels or plain.
+    const storyFiles = key === "mix" ? files.filter(isStoryFile).sort(naturalSort) : [];
+    const rest = files.filter((f) => !storyFiles.includes(f));
+    setStoryNote(null);
+    const failedNames: string[] = [];
+    let storyIds: string[] = [];
+    let storyFailed: string[] = [];
+    if (storyFiles.length > 0) {
+      setError(null);
+      setSuccess(null);
+      const s = await uploadStories(storyFiles, clientId);
+      storyIds = s.ids;
+      storyFailed = s.failed;
+      failedNames.push(...s.failedNames);
+    }
     // Two or more images and nothing else: looked at for carousels first. One
     // image, or any drop with a video in it, goes exactly as it always has.
-    const failedNames = isCarouselDrop(key, files)
-      ? await doCarouselUpload(files)
-      : await doUpload(key === "mix" ? mixContentType(files) : key, files);
-    setStaged((prev) => ({ ...prev, [key]: (prev[key] || []).filter((f) => (failedNames || []).includes(f.name)) }));
+    const carouselPath = rest.length > 0 && isCarouselDrop(key, rest);
+    let drop: DropResult | undefined;
+    if (rest.length > 0) {
+      drop = carouselPath
+        ? await doCarouselUpload(rest, storyIds)
+        : await doUpload(key === "mix" ? mixContentType(rest) : key, rest, storyIds);
+      failedNames.push(...(drop?.failed || []));
+    } else if (storyIds.length > 0) {
+      await fetchUploads();
+      setSuccess(`Uploaded ${storyIds.length} ${storyIds.length === 1 ? "Story" : "Stories"}. Brand QC is checking ${storyIds.length === 1 ? "it" : "them"} now…`);
+    }
+    // The other paths run QC themselves; a carousel drop only does on its
+    // save, and the Stories should not wait for that.
+    if (storyIds.length > 0 && (rest.length === 0 || carouselPath)) runQc();
+    if (storyFailed.length > 0) {
+      const text = `${storyFailed.length} ${storyFailed.length === 1 ? "Story" : "Stories"} failed: ${storyFailed.slice(0, 3).join("; ")}${storyFailed.length > 3 ? "…" : ""}`;
+      setError((prev) => (prev ? `${prev} · ${text}` : text));
+    }
+    // The Story matcher, both directions. A drop whose posts still wait on a
+    // panel (covers, carousels) is matched from that panel's confirm instead.
+    if ((key === "mix" || key === "story") && !drop?.panel) {
+      void matchStories(clientId, drop?.postIds || [], [...storyIds, ...(drop?.storyIds || [])]);
+    }
+    setStaged((prev) => ({ ...prev, [key]: (prev[key] || []).filter((f) => failedNames.includes(f.name)) }));
   };
 
   // --- Sections ----------------------------------------------------------------
@@ -1160,6 +1482,11 @@ export default function ContentHubPage() {
           <CheckCircle2 className="w-4 h-4 shrink-0" /> <span>{success}</span>
         </div>
       )}
+      {storyNote && (
+        <div className="bg-indigo-950/30 border border-indigo-900/60 rounded-xl p-3 text-sm text-indigo-300 flex items-center space-x-2">
+          {storyNote.busy ? <Loader2 className="w-4 h-4 shrink-0 animate-spin" /> : <Smartphone className="w-4 h-4 shrink-0" />} <span>{storyNote.text}</span>
+        </div>
+      )}
 
       {/* Same pills as Task Manager. Two tabs never need the sideways scroll,
           but they get the same row so the control reads the same everywhere. */}
@@ -1214,14 +1541,22 @@ export default function ContentHubPage() {
             // The Posts & Reels card uploads as "post" or "reel", whichever the
             // drop turned out to be — both are its own.
             const busy = isMix ? uploadingType === "post" || uploadingType === "reel" : uploadingType === key;
-            const mixed = isMixedDrop(key, staged[key] || []);
-            const stagedVideos = (staged[key] || []).filter(isVideoFile).length;
-            const stagedCovers = (staged[key]?.length || 0) - stagedVideos;
+            // The drop's 9:16 images are Stories and leave the rest of the
+            // sorting alone: covers, carousels and posts are decided on what
+            // is left, exactly as before.
+            const all = staged[key] || [];
+            const stagedStories = isMix ? all.filter(isStoryFile) : [];
+            const rest = all.filter((f) => !stagedStories.includes(f));
+            const readingShapes = isMix && shapeUnread(all);
+            const storyWord = (n: number) => `${n} ${n === 1 ? "story" : "stories"}`;
+            const mixed = isMixedDrop(key, rest);
+            const stagedVideos = rest.filter(isVideoFile).length;
+            const stagedCovers = rest.length - stagedVideos;
             // A second mixed drop would replace the panel below before its
             // leftovers were settled — finish that one first.
             const waitForPanel = isMix && mixed && coverPanelOpen;
             // Same for an all-image drop and the carousels panel.
-            const carouselDrop = isCarouselDrop(key, staged[key] || []);
+            const carouselDrop = isCarouselDrop(key, rest);
             const waitForCarousels = carouselDrop && carPanelOpen;
             const videoWord = videosAs === "reel" ? "reel" : "feed post";
             // Match on extension as well as MIME. Listing MIME types alone
@@ -1331,13 +1666,22 @@ export default function ContentHubPage() {
                       drop is about to become. */}
                   {isMix && (staged[key]?.length || 0) > 0 && (
                     <p className="text-[10px] text-indigo-300/90 leading-snug">
-                      {mixed
-                        ? `${stagedVideos} video${stagedVideos > 1 ? "s" : ""} → ${videoWord}s. The ${stagedCovers} image${stagedCovers > 1 ? "s" : ""} will be matched to them by sight as covers; any that match no video are offered as posts for you to confirm.`
-                        : stagedVideos > 0
-                        ? `${stagedVideos} video${stagedVideos > 1 ? "s" : ""} → ${videoWord}${stagedVideos > 1 ? "s" : ""}.`
-                        : carouselDrop
-                        ? `${stagedCovers} images → checked for carousels (filenames first, then by sight). You review the groups before anything is saved; the rest become posts.`
-                        : `${stagedCovers} image${stagedCovers > 1 ? "s" : ""} → post${stagedCovers > 1 ? "s" : ""}.`}
+                      {readingShapes
+                        ? "Reading each image's shape…"
+                        : [
+                            rest.length === 0 ? ""
+                            : mixed
+                            ? `${stagedVideos} video${stagedVideos > 1 ? "s" : ""} → ${videoWord}s. The ${stagedCovers} image${stagedCovers > 1 ? "s" : ""} will be matched to them by sight as covers; any that match no video are offered as posts for you to confirm.`
+                            : stagedVideos > 0
+                            ? `${stagedVideos} video${stagedVideos > 1 ? "s" : ""} → ${videoWord}${stagedVideos > 1 ? "s" : ""}.`
+                            : carouselDrop
+                            ? `${stagedCovers} images → checked for carousels (filenames first, then by sight). You review the groups before anything is saved; the rest become posts.`
+                            : `${stagedCovers} image${stagedCovers > 1 ? "s" : ""} → post${stagedCovers > 1 ? "s" : ""}.`,
+                            // Named before the click: these go up as Stories, not posts.
+                            stagedStories.length > 0
+                              ? `${storyWord(stagedStories.length)} (9:16) will be linked to ${stagedStories.length === 1 ? "its post" : "their posts"} by sight.`
+                              : "",
+                          ].filter(Boolean).join(" ")}
                     </p>
                   )}
                   {waitForPanel && (
@@ -1353,7 +1697,7 @@ export default function ContentHubPage() {
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      disabled={busy || waitForPanel || waitForCarousels || !selectedClient || (staged[key]?.length || 0) === 0}
+                      disabled={busy || readingShapes || waitForPanel || waitForCarousels || !selectedClient || (staged[key]?.length || 0) === 0}
                       onClick={() => uploadStaged(key)}
                       title={!selectedClient ? "Select a client first" : (staged[key]?.length || 0) === 0 ? "Add files first" : waitForPanel ? "Confirm the covers panel below first" : waitForCarousels ? "Save the carousels panel below first" : ""}
                       className={`flex-1 py-2 min-h-[40px] lg:min-h-0 rounded-lg text-white text-xs font-bold ${a.btn} disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer`}
@@ -1367,11 +1711,13 @@ export default function ContentHubPage() {
                         ? "⬆ Upload (pick a client above first)"
                         : (staged[key]?.length || 0) === 0
                         ? "⬆ Upload (add files first)"
+                        : readingShapes
+                        ? "Reading image shapes…"
                         : mixed
-                        ? `⬆ Upload ${stagedVideos} video${stagedVideos > 1 ? "s" : ""} + ${stagedCovers} image${stagedCovers > 1 ? "s" : ""} & match`
+                        ? `⬆ Upload ${stagedVideos} video${stagedVideos > 1 ? "s" : ""} + ${stagedCovers} image${stagedCovers > 1 ? "s" : ""}${stagedStories.length ? ` + ${storyWord(stagedStories.length)}` : ""} & match`
                         : carouselDrop
-                        ? `⬆ Upload ${stagedCovers} images & find carousels`
-                        : `⬆ Upload ${staged[key].length} file${staged[key].length > 1 ? "s" : ""} & run QC`}
+                        ? `⬆ Upload ${stagedCovers} images${stagedStories.length ? ` + ${storyWord(stagedStories.length)}` : ""} & find carousels`
+                        : `⬆ Upload ${staged[key].length} file${staged[key].length > 1 ? "s" : ""}${stagedStories.length ? ` (${storyWord(stagedStories.length)})` : ""} & run QC`}
                     </button>
                     {(staged[key]?.length || 0) > 0 && (
                       <button type="button" disabled={busy} onClick={() => clearStaged(key)} className="px-3 py-2 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white text-xs font-bold cursor-pointer">Clear</button>
@@ -2171,6 +2517,7 @@ export default function ContentHubPage() {
                       )}
                     </td>
                     <td className="py-2 pr-3">
+                      <div className="flex items-start gap-1">
                       <div className="relative w-10 h-10 rounded-lg overflow-hidden bg-slate-900 border border-slate-800">
                         {u.content_type === "carousel" ? (
                           // A carousel's preview opens its slides, not just the cover.
@@ -2196,10 +2543,28 @@ export default function ContentHubPage() {
                           <img src={u.file_url} alt={u.file_name || ""} className="w-full h-full object-cover" />
                         )}
                       </div>
+                      {/* The Story that travels with this post, small and tall
+                          beside it — opens the Story itself. */}
+                      {u.linked_story && <StoryThumb s={u.linked_story} />}
+                      </div>
                       <ThumbNote u={u} />
                     </td>
-                    <td className="py-2 pr-3 max-w-[180px]">
+                    <td className="py-2 pr-3 max-w-[220px]">
                       <span className="block truncate">{u.file_name}</span>
+                      {STORY_HOLDERS.includes(u.content_type) && (
+                        <StoryLinkControl
+                          u={u}
+                          waiting={waitingStories.filter((s) => s.client_id === u.client_id)}
+                          busy={storyBusy === u.id}
+                          locked={!!storyBusy}
+                          onChange={(storyId) => setStoryLink(u.id, storyId)}
+                        />
+                      )}
+                      {u.content_type === "story" && u.linked_to && (
+                        <span className="mt-0.5 block truncate text-[10px] text-indigo-300" title={`Goes out with ${u.linked_to.file_name || "its post"} — no need to send it by hand`}>
+                          linked to {u.linked_to.file_name || "a post"}
+                        </span>
+                      )}
                       {u.content_type === "carousel" && (
                         <button
                           type="button"

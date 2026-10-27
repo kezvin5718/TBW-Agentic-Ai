@@ -86,7 +86,7 @@ export async function GET(request: NextRequest) {
   const risk = request.nextUrl.searchParams.get("risk") === "1";
 
   const admin = createServiceRoleClient();
-  const COLUMNS = "id, file_url, file_name, media_type, content_type, caption, caption_status, qc_status, qc_note, rejected_reason, risk_accepted_at, thumbnail_url, created_at";
+  const COLUMNS = "id, file_url, file_name, media_type, content_type, caption, caption_status, qc_status, qc_note, rejected_reason, risk_accepted_at, thumbnail_url, created_at, linked_story_id, story_link_source";
   const { data, error } = await admin
     .from("creative_uploads")
     .select(COLUMNS)
@@ -169,7 +169,36 @@ export async function GET(request: NextRequest) {
     rejectedQuery().order("created_at", { ascending: false }).limit(10),
   ]);
 
-  const rows: Record<string, unknown>[] = [...(data || []).map((r) => ({ ...r, rejected: false })), ...refused];
+  // Linked Stories travel with their post. A Story some still-waiting post
+  // holds is left out of the list entirely — it goes in its post's slot, and
+  // listing it as well is how it would be sent twice. A Story whose post has
+  // already gone out (and the Story failed) is listed on its own again, as
+  // any unlinked Story is, so it can be retried.
+  const { data: holders } = await admin
+    .from("creative_uploads")
+    .select("linked_story_id")
+    .eq("client_id", clientId)
+    .neq("status", "scheduled")
+    .not("linked_story_id", "is", null);
+  const travelling = new Set((holders || []).map((h) => h.linked_story_id as string));
+
+  const rows: Record<string, unknown>[] = [...(data || []).map((r) => ({ ...r, rejected: false })), ...refused]
+    .filter((r) => !(r.content_type === "story" && travelling.has(r.id as string)));
+
+  // Each post's Story, beside it: enough for the screen to show it, gate it
+  // and count it. A Story already scheduled is not offered again.
+  const storyIds = rows.map((r) => r.linked_story_id as string | null).filter((x): x is string => !!x);
+  if (storyIds.length > 0) {
+    const { data: stories } = await admin
+      .from("creative_uploads")
+      .select("id, file_url, file_name, media_type, thumbnail_url, qc_status, qc_note, status")
+      .in("id", storyIds);
+    const byStory = new Map((stories || []).map((s) => [s.id as string, s]));
+    for (const r of rows) {
+      const s = r.linked_story_id ? byStory.get(r.linked_story_id as string) : undefined;
+      r.linked_story = s && s.status !== "scheduled" ? s : null;
+    }
+  }
 
   // A carousel is one row with its slides beside it — the same read the hub
   // list makes, scoped to the carousels on this screen, in slide order. If it
@@ -224,6 +253,11 @@ export async function GET(request: NextRequest) {
  * image_url in slide order, to Instagram and Facebook only. It is never
  * repeated or re-routed: neither control is offered on it, and the unroll
  * below only ever applies them to stories, posts and reels.
+ *
+ * A post, reel or carousel with a linked Story (the designer's own 9:16
+ * version, paired in the hub) takes that Story along in the same slot unless
+ * the row carries withStory: false. The Story goes out as its own upload, on
+ * the same story path Send-as uses — and replaces Send-as for that row.
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -294,7 +328,7 @@ export async function POST(request: NextRequest) {
   }
 
   const platforms: string[] = Array.isArray(body.platforms) ? body.platforms.filter(Boolean) : [];
-  const items: Array<{ uploadId: string; caption?: string; scheduledFor: string; repeat?: unknown; sendAs?: unknown }> = Array.isArray(body.items) ? body.items : [];
+  const items: Array<{ uploadId: string; caption?: string; scheduledFor: string; repeat?: unknown; sendAs?: unknown; withStory?: unknown }> = Array.isArray(body.items) ? body.items : [];
 
   if (!clientId) return NextResponse.json({ error: "Select a client" }, { status: 400 });
   if (platforms.length === 0) return NextResponse.json({ error: "Select at least one platform" }, { status: 400 });
@@ -315,11 +349,33 @@ export async function POST(request: NextRequest) {
   const { data: client } = await admin.from("clients").select("name").eq("id", clientId).maybeSingle();
 
   const ids = items.map((i) => i.uploadId);
+  const UPLOAD_COLUMNS = "id, client_id, file_url, file_name, media_type, content_type, status, qc_status, thumbnail_url, linked_story_id";
   const { data: uploads } = await admin
     .from("creative_uploads")
-    .select("id, file_url, file_name, media_type, content_type, status, qc_status, thumbnail_url")
+    .select(UPLOAD_COLUMNS)
     .in("id", ids);
   const byId = new Map((uploads || []).map((u) => [u.id, u]));
+
+  // Linked Stories, read once for the run. Only a Story that is this client's,
+  // still a Story and not already scheduled can ride along; anything else is
+  // left where it is and the post goes alone, exactly as before.
+  const POST_KINDS = ["post", "reel", "carousel"];
+  const wantedStoryIds = [...new Set(
+    items
+      .filter((i) => i.withStory !== false)
+      .map((i) => byId.get(i.uploadId))
+      .filter((u) => !!u && POST_KINDS.includes(String(u.content_type)) && !!u.linked_story_id)
+      .map((u) => u!.linked_story_id as string)
+  )];
+  const ridingStory = new Map<string, NonNullable<typeof uploads>[number]>();
+  if (wantedStoryIds.length > 0) {
+    const { data: stories } = await admin.from("creative_uploads").select(UPLOAD_COLUMNS).in("id", wantedStoryIds);
+    for (const st of stories || []) {
+      if (st.content_type !== "story" || st.client_id !== clientId || st.status === "scheduled") continue;
+      ridingStory.set(st.id as string, st);
+      byId.set(st.id, st);
+    }
+  }
 
   // A carousel goes out as one post whose image_url is every slide, in
   // carousel_slides.slide_no order and exactly as stored — the hub's order is
@@ -353,7 +409,7 @@ export async function POST(request: NextRequest) {
   // cause. Ask Drive once, before anything is sent, and say the single true
   // thing instead. Images are untouched by this — Drive serves those directly,
   // so an image-only batch goes out exactly as it does today.
-  const needsDrive = (uploads || []).some(
+  const needsDrive = [...byId.values()].some(
     (u) => u.media_type === "video" && typeof u.file_url === "string" && isDriveUrl(u.file_url)
   );
   if (needsDrive && !(await isDriveConnected())) {
@@ -389,10 +445,30 @@ export async function POST(request: NextRequest) {
   // never combine — repeats are offered on story rows, send-as on feed rows —
   // so a row that somehow carries both has its repeat dropped rather than
   // multiplied into a week of Stories nobody saw on screen.
-  type Occurrence = { uploadId: string; caption?: string; scheduledFor: string; asStory?: boolean };
-  const occurrences = items.flatMap((item): Occurrence[] => {
-    const { repeat, sendAs, ...plain } = item;
-    const kind = byId.get(item.uploadId)?.content_type;
+  //
+  // A linked Story, unrolled in the same pass: the post exactly as today, then
+  // its Story as an occurrence of its OWN upload at the same slot, flagged
+  // asStory so it takes the one story path every Story pass takes (story post
+  // types, the client-name message, Instagram and Facebook only). storyOf
+  // names the post it travels with, for the gate below. The real Story
+  // replaces converting the post, so Send-as is not applied to that row. A
+  // Story riding with a post is never also sent as a row of its own.
+  type Occurrence = { uploadId: string; caption?: string; scheduledFor: string; asStory?: boolean; storyOf?: string };
+  const riding = new Set<string>();
+  for (const item of items) {
+    const sid = item.withStory !== false ? byId.get(item.uploadId)?.linked_story_id : null;
+    if (sid && ridingStory.has(sid as string) && POST_KINDS.includes(String(byId.get(item.uploadId)?.content_type))) riding.add(sid as string);
+  }
+  const occurrences = items.filter((item) => !riding.has(item.uploadId)).flatMap((item): Occurrence[] => {
+    const { repeat, sendAs, withStory, ...plain } = item;
+    const upload = byId.get(item.uploadId);
+    const kind = upload?.content_type;
+    const story = withStory !== false && upload?.linked_story_id && POST_KINDS.includes(String(kind))
+      ? ridingStory.get(upload.linked_story_id as string)
+      : undefined;
+    if (story) {
+      return [plain, { uploadId: story.id as string, scheduledFor: item.scheduledFor, asStory: true, storyOf: item.uploadId }];
+    }
     const route = sendAsOf(sendAs);
     if (route !== "feed" && (kind === "post" || kind === "reel")) {
       return route === "story" ? [{ ...plain, asStory: true }] : [plain, { ...plain, asStory: true }];
@@ -443,10 +519,18 @@ export async function POST(request: NextRequest) {
   // day either. Remembered so a repeated story is tried — and reported — once,
   // not once per day.
   const stageFailed = new Map<string, string>();
+  // Posts the gate refused outright. Their linked Story does not go out alone —
+  // it travels with its post or not at all.
+  const notSent = new Set<string>();
+  const nameOf = (id: string) => byId.get(id)?.file_name || "a creative";
 
   for (const item of occurrences) {
     const upload = byId.get(item.uploadId);
     if (!upload) { skipped.push(`${item.uploadId} — no longer in the hub.`); continue; }
+    if (item.storyOf && notSent.has(item.storyOf)) {
+      skipped.push(`${nameOf(item.storyOf)}: linked Story held back — its post was not sent.`);
+      continue;
+    }
     // Re-checked at send time: a batch can be rejected between loading the
     // screen and pressing the button, and rejected work must never go out —
     // unless this run is an explicit override of exactly that.
@@ -461,7 +545,13 @@ export async function POST(request: NextRequest) {
       (upload.status === "uploaded" && upload.qc_status !== "match")
     );
     if (!isOverride && (upload.status !== "uploaded" || upload.qc_status !== "match")) {
-      skipped.push(`${upload.id} — no longer approved (${upload.status}/${upload.qc_status}).`);
+      // A linked Story is gated on its own QC, not its post's: in Clear mode a
+      // Story QC has not passed stays behind and the post goes without it.
+      if (item.storyOf) skipped.push(`${nameOf(item.storyOf)}: linked Story not QC-approved — skipped.`);
+      else {
+        notSent.add(upload.id as string);
+        skipped.push(`${upload.id} — no longer approved (${upload.status}/${upload.qc_status}).`);
+      }
       continue;
     }
     if (isOverride) overridden.push(upload.id as string);
@@ -476,11 +566,13 @@ export async function POST(request: NextRequest) {
     if (isCarousel) {
       const slides = slidesOf.get(upload.id as string) || [];
       if (slides.length === 0) {
+        notSent.add(upload.id as string);
         results.push({ uploadId: upload.id, platform: "-", ok: false, detail: `${upload.file_name || "This carousel"} has no slides on record — nothing was sent rather than the cover alone. Rebuild it in the hub.` });
         continue;
       }
       const holes = slides.filter((s) => !s.url).map((s) => s.no);
       if (holes.length > 0) {
+        notSent.add(upload.id as string);
         results.push({ uploadId: upload.id, platform: "-", ok: false, detail: `${upload.file_name || "This carousel"}: slide ${holes.join(", ")} has no file on record — nothing was sent. Rebuild it in the hub.` });
         continue;
       }

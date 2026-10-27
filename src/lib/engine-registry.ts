@@ -81,7 +81,7 @@ export const ENGINES: EngineEntry[] = [
   },
   {
     area: "Content Hub QC — right brand, right festival",
-    purposes: ["qc-checks", "thumb-match", "carousel-detect"],
+    purposes: ["qc-checks", "thumb-match", "carousel-detect", "story-match"],
     config: "MODEL_FAST",
     changeWhere: LLM_CONFIG,
     source: "src/app/api/content-hub/qc/route.ts:107, src/lib/qc-utils.ts:117",

@@ -45,7 +45,42 @@ export async function GET(request: NextRequest) {
     }
     for (const r of rows) if (r.content_type === "carousel") r.slides = byUpload.get(r.id as string) || [];
   }
-  return NextResponse.json({ success: true, uploads: rows });
+
+  // Linked Stories. A post carries its Story beside it (linked_story), a Story
+  // says which post holds it (linked_to) so nobody sends it twice by hand, and
+  // the Change ▾ list is each client's Stories still waiting for a post. Read
+  // with the service role, scoped to the clients already on this list; a
+  // failed read only costs the display, never the list.
+  let waitingStories: Array<Record<string, unknown>> = [];
+  const clientIds = [...new Set(rows.map((r) => r.client_id as string | null).filter((x): x is string => !!x))];
+  if (clientIds.length > 0) {
+    const admin = createServiceRoleClient();
+    const STORY_COLS = "id, client_id, file_url, file_name, media_type, thumbnail_url, qc_status, status, created_at";
+    const [{ data: linkers }, { data: waiting }] = await Promise.all([
+      admin.from("creative_uploads").select("id, file_name, linked_story_id").in("client_id", clientIds).not("linked_story_id", "is", null),
+      admin
+        .from("creative_uploads")
+        .select(STORY_COLS)
+        .in("client_id", clientIds)
+        .eq("status", "uploaded")
+        .eq("content_type", "story")
+        .is("festival_id", null)
+        .order("created_at", { ascending: false })
+        .limit(200),
+    ]);
+    const holderOf = new Map((linkers || []).map((l) => [l.linked_story_id as string, { id: l.id as string, file_name: (l.file_name as string | null) ?? null }]));
+    const linkedIds = rows.map((r) => r.linked_story_id as string | null).filter((x): x is string => !!x);
+    const { data: linkedStories } = linkedIds.length
+      ? await admin.from("creative_uploads").select(STORY_COLS).in("id", linkedIds)
+      : { data: [] as Array<Record<string, unknown>> };
+    const storyById = new Map((linkedStories || []).map((s) => [s.id as string, s]));
+    for (const r of rows) {
+      if (r.linked_story_id) r.linked_story = storyById.get(r.linked_story_id as string) || null;
+      if (r.content_type === "story") r.linked_to = holderOf.get(r.id as string) || null;
+    }
+    waitingStories = (waiting || []).filter((s) => !holderOf.has(s.id as string));
+  }
+  return NextResponse.json({ success: true, uploads: rows, waitingStories });
 }
 
 // POST (multipart) — upload a creative file for a client, store it, record it.
