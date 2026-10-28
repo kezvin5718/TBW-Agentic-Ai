@@ -148,10 +148,38 @@ const sendingMark = () => `[sending since ${new Date().toISOString()}]`;
  * is a clean "already on its way", never an error. RecurPost is called only
  * when this returns kind "ours".
  */
+/**
+ * The same post already scheduled under a DIFFERENT account id.
+ *
+ * Keys carry the RecurPost account id, and a re-mapped account gets a new one
+ * (svarahi, Swarna Kanchi — Oct 2026), so a resend after a remap would carry a
+ * fresh key the index has never seen. This asks the question without the
+ * account: same client, platform, type, file and exact slot, already live.
+ */
+async function sameSlotAnyAccount(admin: Admin, input: DedupeInput): Promise<LiveRow | null> {
+  if (!input.scheduledIso) return null;
+  const { data } = await admin
+    .from("social_posts")
+    .select("id, status, recurpost_post_id, created_at, media_url")
+    .eq("client_id", input.clientId)
+    .eq("platform", input.platform)
+    .eq("content_type", input.contentType)
+    .eq("scheduled_for", new Date(input.scheduledIso).toISOString())
+    .in("status", ["sending", "sent", "published", "uncertain"])
+    .is("duplicate_of", null)
+    .limit(20);
+  const want = mediaIdentity(input.mediaUrl);
+  const hit = (data || []).find((r) => mediaIdentity(r.media_url as string) === want);
+  return hit ? { id: hit.id as string, status: hit.status as string, recurpost_post_id: (hit.recurpost_post_id as number | null) ?? null, created_at: hit.created_at as string } : null;
+}
+
 export async function reserve(admin: Admin, row: Record<string, unknown>, input: DedupeInput): Promise<Reservation> {
   if (!input.scheduledIso) {
     const recent = await recentNowSend(admin, input);
     if (recent) return duplicateOf(recent);
+  } else {
+    const twin = await sameSlotAnyAccount(admin, input);
+    if (twin) return duplicateOf(twin);
   }
   const key = dedupeKey(input);
   // Two goes: a holder can settle as failed between our refused insert and
