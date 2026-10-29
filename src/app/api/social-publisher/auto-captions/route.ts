@@ -37,12 +37,14 @@ export async function POST(request: NextRequest) {
 
   const { captionForUpload } = await import("@/lib/upload-batch");
   const force = body.force === true;
+  // The team's direction from the box above the rows — tone, angle, an offer.
+  const brief = typeof body.brief === "string" ? body.brief.trim().slice(0, 500) : "";
 
   // One at a time: each is a paid call, and a burst of forty would put the
   // whole batch at the mercy of one rate limit.
   const results: { id: string; ok: boolean; caption?: string; error?: string }[] = [];
   for (const id of ids) {
-    const out = await captionForUpload(id, { force });
+    const out = await captionForUpload(id, { force, brief: brief || undefined });
     results.push({ id, ...out });
   }
 

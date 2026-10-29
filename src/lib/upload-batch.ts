@@ -82,7 +82,7 @@ export async function writeCaptionFor(uploadId: string): Promise<boolean> {
  */
 export async function captionForUpload(
   uploadId: string,
-  opts: { force?: boolean } = {}
+  opts: { force?: boolean; brief?: string } = {}
 ): Promise<CaptionOutcome> {
   const admin = createServiceRoleClient();
   const { data: row } = await admin
@@ -129,6 +129,7 @@ export async function captionForUpload(
       clientId: row.client_id,
       platform: "instagram",
       contentType: row.content_type || "post",
+      brief: opts.brief,
       mediaUrl: row.file_url,
       mediaIsVideo: row.media_type === "video",
       thumbnailUrl: row.thumbnail_url || undefined,

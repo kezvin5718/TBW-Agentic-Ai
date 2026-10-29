@@ -129,7 +129,7 @@ TEXT PRINTED ON THE CREATIVE, copied word for word:
 ${onCreativeText}
 
 These are the facts the creative itself is making. Any price, weight, purity, carat, discount, scheme name, date or offer above must appear in the caption EXACTLY as written — same number, same currency, same spelling. Do not round "₹45,999" to "45,000", do not turn "22KT 916 Hallmark" into "22 carat", and do not add a figure that is not in that list. If the creative names a price, the caption must not read as though it has no price.` : `
-No text was readable on the creative, so state no price, weight, purity, discount or offer of any kind — there is nothing to take one from, and inventing one is the single worst thing this caption can do.`}
+No text was readable on the creative, so state no price, weight, purity, discount or offer of any kind${brief ? " unless the team's instructions below state it" : ""} — there is nothing else to take one from, and inventing one is the single worst thing this caption can do.`}
 
 Brand tone: ${brain?.caption_tone || "professional, warm"}
 Target audience: ${client.target_audience || "general"}
@@ -144,7 +144,9 @@ Rules and corrections the founder has explicitly given for this brand — follow
 ${JSON.stringify(rules)}
 ${feedbackDigest ? `\nRecent feedback on past posts:\n${feedbackDigest}` : ""}
 
-${brief ? `What this post is about / offer details supplied for this post: ${brief}` : "No offer or special instruction was supplied for this post."}
+${brief ? `INSTRUCTIONS FROM THE TEAM for this caption — how they want it written and what it should say:
+"${brief}"
+Follow these. They decide the tone, angle, length and focus of the hook and main passage, and override the brand's default tone and your own guess at the content type below. Any offer, price or fact they state counts as supplied. They do NOT change the format, the HARD RULES, or the ban on inventing facts the creative and these instructions do not state.` : "No offer or special instruction was supplied for this post."}
 ${rules.current_offer ? `Current offer on record for this brand: ${JSON.stringify(rules.current_offer)}` : ""}
 
 FIRST, decide what kind of content this actually is — a product showcase, a customer testimonial or happy-customer video, a bridal video, an offer/promotion, a new collection, a store experience, an educational piece, an event, festive content, or behind-the-scenes — and write for THAT, not a product ad by default:

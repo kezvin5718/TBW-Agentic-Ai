@@ -992,6 +992,10 @@ export default function SocialPublisherPage() {
   const [writeAllTotal, setWriteAllTotal] = useState(0);
   const [captionErrors, setCaptionErrors] = useState<Record<string, string>>({});
   const [regenId, setRegenId] = useState<string | null>(null);
+  // The team's own direction for the captions about to be written — tone,
+  // angle, an offer to mention. Rides along with every write on this screen;
+  // each video is still read on its own, this only steers the writing.
+  const [autoCaptionBrief, setAutoCaptionBrief] = useState("");
   // Which rows the current batch is writing RIGHT NOW — each card can say
   // "Writing…" itself instead of leaving the team to divide a counter.
   const [writingIds, setWritingIds] = useState<Set<string>>(new Set());
@@ -1041,7 +1045,7 @@ export default function SocialPublisherPage() {
         setWritingIds(new Set(slice));
         const res = await fetch("/api/social-publisher/auto-captions", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ uploadIds: slice, force }),
+          body: JSON.stringify({ uploadIds: slice, force, brief: autoCaptionBrief.trim() || undefined }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not write the captions");
@@ -1077,7 +1081,7 @@ export default function SocialPublisherPage() {
     try {
       const res = await fetch("/api/social-publisher/auto-captions", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uploadIds: [id], force: true }),
+        body: JSON.stringify({ uploadIds: [id], force: true, brief: autoCaptionBrief.trim() || undefined }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not write the caption");
@@ -2714,6 +2718,21 @@ export default function SocialPublisherPage() {
                       captions is one too many — the indigo one covers the rows on
                       screen with per-row feedback, so the amber one retired. */}
                 </div>
+              </div>
+              <div>
+                <textarea
+                  value={autoCaptionBrief}
+                  onChange={(e) => setAutoCaptionBrief(e.target.value.slice(0, 500))}
+                  rows={2}
+                  disabled={writeAllBusy}
+                  placeholder="Optional: how should the captions be written? e.g. festive Diwali tone, mention 0% making charges, keep it short, focus on bridal sets…"
+                  className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-600 resize-y disabled:opacity-50"
+                />
+                <p className="text-[10px] text-slate-600 mt-0.5">
+                  {autoCaptionBrief.trim()
+                    ? "Used by Write all captions, Regenerate all and every ✨ below. Each video is still analysed on its own."
+                    : "Leave empty and captions are written from the video alone."}
+                </p>
               </div>
 
               {orderedRows.map((r, i) => {
