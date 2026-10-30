@@ -15,6 +15,7 @@ export async function completeVision({
   model,
   maxTokens,
   purpose,
+  reasoningEffort,
 }: {
   system?: string;
   prompt: string;
@@ -27,6 +28,8 @@ export async function completeVision({
   maxTokens?: number;
   /** What this call is for, in Credit Logs terms. */
   purpose?: string;
+  /** For reasoning models only: how hard to think before answering. */
+  reasoningEffort?: string;
 }): Promise<string> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey || apiKey === "mock" || apiKey.startsWith("mock_")) {
@@ -55,7 +58,14 @@ export async function completeVision({
       "X-Title": "tbw-os",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ model: model || MODEL_FAST, messages, max_tokens: maxTokens || 300, usage: { include: true } }),
+    body: JSON.stringify({
+      model: model || MODEL_FAST,
+      messages,
+      max_tokens: maxTokens || 300,
+      usage: { include: true },
+      // Thinking spends from max_tokens too — see complete() in llm.ts.
+      ...(reasoningEffort ? { reasoning: { effort: reasoningEffort, exclude: true } } : {}),
+    }),
   });
   if (!res.ok) {
     await logUsage({ model: model || MODEL_FAST, purpose, kind: "vision", ok: false });

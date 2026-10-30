@@ -31,6 +31,7 @@ export type EngineConfigKey =
   | "MODEL_SMART"
   | "MODEL_FAST"
   | "MODEL_CHATGPT"
+  | "MODEL_CAPTIONS"
   | "IMAGE_MODEL env"
   | "OPENAI_API_KEY (Whisper)"
   | "hardcoded in openai-images.ts";
@@ -89,7 +90,7 @@ export const ENGINES: EngineEntry[] = [
   {
     area: "Captions — the social copywriter",
     purposes: ["captions"],
-    config: "MODEL_CHATGPT",
+    config: "MODEL_CAPTIONS",
     alsoConfig: "MODEL_FAST",
     alsoNote: "when the caller picks Gemini",
     changeWhere: LLM_CONFIG,
@@ -161,9 +162,9 @@ export const ENGINES: EngineEntry[] = [
   {
     area: "Creative reading — what a finished post actually shows",
     purposes: ["creative-reading"],
-    config: "MODEL_FAST",
+    config: "MODEL_CAPTIONS",
     changeWhere: LLM_CONFIG,
-    source: "src/lib/creative-reader.ts:129 (completeVision default)",
+    source: "src/lib/creative-reader.ts (completeVision, model: MODEL_CAPTIONS)",
   },
   {
     area: "Style extraction — turns reference designs into presets",

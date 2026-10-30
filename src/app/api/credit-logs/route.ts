@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
-import { MODEL_SMART, MODEL_FAST, MODEL_CHATGPT } from "@/lib/llm-config";
+import { MODEL_SMART, MODEL_FAST, MODEL_CHATGPT, MODEL_CAPTIONS } from "@/lib/llm-config";
 import { imageModelName } from "@/lib/integrations/openai-images";
 import { ENGINES, type EngineConfigKey } from "@/lib/engine-registry";
 
@@ -21,6 +21,8 @@ function resolveModel(key: EngineConfigKey): string {
       return MODEL_FAST;
     case "MODEL_CHATGPT":
       return MODEL_CHATGPT;
+    case "MODEL_CAPTIONS":
+      return MODEL_CAPTIONS;
     // Same default logic generateBrandImage() uses, borrowed from the module
     // itself so the two can never drift apart.
     case "IMAGE_MODEL env":

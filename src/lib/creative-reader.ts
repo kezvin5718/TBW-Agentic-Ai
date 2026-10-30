@@ -1,5 +1,6 @@
 import { completeVision } from "@/lib/llm-vision";
 import { safeJsonParse } from "@/lib/llm";
+import { MODEL_CAPTIONS, CAPTIONS_REASONING_EFFORT } from "@/lib/llm-config";
 import { downloadDriveFileByUrl } from "@/lib/google-drive";
 import sharp from "sharp";
 import { spawn } from "child_process";
@@ -135,7 +136,12 @@ export async function readCreative(url: string, mediaType: string): Promise<Crea
 
     for (const imageDataUrl of images) {
       try {
-        const raw = await completeVision({ system: READ_SYSTEM, prompt: READ_PROMPT, imageDataUrl, purpose: "creative-reading" });
+        // 1500 rather than the default 300: the answer is ~150 tokens, the rest
+        // is room for the model's thinking so the answer is never cut off.
+        const raw = await completeVision({
+          system: READ_SYSTEM, prompt: READ_PROMPT, imageDataUrl, purpose: "creative-reading",
+          model: MODEL_CAPTIONS, maxTokens: 1500, reasoningEffort: CAPTIONS_REASONING_EFFORT,
+        });
         const v = safeJsonParse<{ description?: string; on_creative_text?: string }>(raw, {});
         if (v.description) descriptions.push(String(v.description).trim());
         if (v.on_creative_text) texts.push(String(v.on_creative_text).trim());

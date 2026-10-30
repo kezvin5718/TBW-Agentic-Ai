@@ -1,6 +1,6 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { complete } from "@/lib/llm";
-import { MODEL_CHATGPT, MODEL_FAST } from "@/lib/llm-config";
+import { MODEL_CAPTIONS, MODEL_FAST, CAPTIONS_REASONING_EFFORT } from "@/lib/llm-config";
 import { describeImageViaVision } from "@/lib/integrations/openai-images";
 import { readCreative } from "@/lib/creative-reader";
 
@@ -113,7 +113,7 @@ export async function writeCaptionForClient(input: CaptionInput): Promise<Captio
     ? (brain!.feedback_log as unknown[]).slice(-5).map((f) => (typeof f === "string" ? f : JSON.stringify(f))).join("\n")
     : "";
 
-  const chosenModel = model === "gemini" ? MODEL_FAST : MODEL_CHATGPT;
+  const chosenModel = model === "gemini" ? MODEL_FAST : MODEL_CAPTIONS;
 
   const caption = await complete({
     purpose: "captions",
@@ -186,7 +186,9 @@ HARD RULES:
 Output only the caption, nothing else — no options, no explanations.`,
     }],
     model: chosenModel,
-    maxTokens: 700,
+    // Room for the reasoning model's thinking on top of a ~300-token caption.
+    maxTokens: chosenModel === MODEL_CAPTIONS ? 2500 : 700,
+    reasoningEffort: chosenModel === MODEL_CAPTIONS ? CAPTIONS_REASONING_EFFORT : undefined,
   });
 
   // The founder banned em dashes outright; a model that slips one through is

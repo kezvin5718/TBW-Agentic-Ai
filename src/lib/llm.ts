@@ -14,6 +14,8 @@ export interface CompleteParams {
   maxTokens?: number;
   /** What this call is for, in Credit Logs terms — "captions", "post-design (5b)", … */
   purpose?: string;
+  /** For reasoning models only: how hard to think before answering. */
+  reasoningEffort?: string;
 }
 
 /**
@@ -61,6 +63,7 @@ export async function complete({
   model,
   maxTokens,
   purpose,
+  reasoningEffort,
 }: CompleteParams): Promise<string> {
   const apiKey = process.env.OPENROUTER_API_KEY;
 
@@ -124,6 +127,9 @@ export async function complete({
   if (jsonSchema) {
     body.response_format = { type: "json_object" };
   }
+  // Thinking spends from the same max_tokens as the answer, so a reasoning
+  // model left to its default effort can use it all up and return nothing.
+  if (reasoningEffort) body.reasoning = { effort: reasoningEffort, exclude: true };
 
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
