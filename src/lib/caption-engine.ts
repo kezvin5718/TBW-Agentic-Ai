@@ -61,7 +61,7 @@ export async function writeCaptionForClient(input: CaptionInput): Promise<Captio
   if (!client) return { ok: false, error: "Client not found", code: "no_client" };
   const { data: brain } = await admin
     .from("brand_brain")
-    .select("brand_brief, caption_tone, design_preferences, feedback_log, addresses, caption_signature")
+    .select("brand_brief, caption_tone, design_preferences, feedback_log, addresses, caption_signature, caption_language")
     .eq("client_id", clientId)
     .maybeSingle();
 
@@ -114,6 +114,14 @@ export async function writeCaptionForClient(input: CaptionInput): Promise<Captio
     : "";
 
   const chosenModel = model === "gemini" ? MODEL_FAST : MODEL_CAPTIONS;
+
+  // Most brands post in English; a few (Shree Arbuda, Gujarati) post in their
+  // customers' own language. Only the hook and main passage change — keywords
+  // and hashtags stay English because that is what people search.
+  const language = String(brain?.caption_language || "").trim();
+  const languageRule = language && !/^english$/i.test(language)
+    ? `- Write the hook and the main passage in ${language}, in its own script, as a native ${language} copywriter would: natural, fluent and warm, never a word-for-word translation of English. Keep the 🏷️ keywords and the hashtags in English.`
+    : "- Plain, premium, simple English. No complicated vocabulary, no robotic wording, no excessive adjectives, nothing overly poetic.";
 
   const caption = await complete({
     purpose: "captions",
@@ -181,7 +189,7 @@ HARD RULES:
 - Do not repeat the brand name unnecessarily.
 - Do not write the address, phone number, Instagram handle or website anywhere — those lines are appended automatically and must not be duplicated.
 - Do not write "follow @…" or cross-account promotion lines — those are appended automatically too.
-- Plain, premium, simple English. No complicated vocabulary, no robotic wording, no excessive adjectives, nothing overly poetic.
+${languageRule}
 
 Output only the caption, nothing else — no options, no explanations.`,
     }],
