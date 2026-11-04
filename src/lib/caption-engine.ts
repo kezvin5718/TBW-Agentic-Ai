@@ -228,13 +228,20 @@ Output only the caption, nothing else — no options, no explanations.`,
   const socials = (client.social_accounts || {}) as Record<string, unknown>;
   const insta = String(socials.instagram || "").trim();
   const site = String(socials.website || "").trim();
+  // A 📍 line in the sign-off is another branch (Shree Arbuda's નવી શાખા). It
+  // sits directly under the first address so the reader sees both stores
+  // together, not one at the top and the other after the DM line.
+  const isBranch = (l: string) => /^\s*📍/u.test(l);
+  const branchLines = signature.split("\n").filter(isBranch).map((l) => l.trim());
+  const signOff = signature.split("\n").filter((l) => !isBranch(l)).join("\n").trim();
   const contactBlock = [
     `📍 Visit us: ${addr!.address}`,
+    ...branchLines,
     `📞 Call: ${addr!.phone}`,
     insta ? `📩 DM ${insta.startsWith("@") || insta.startsWith("http") ? insta : `@${insta}`}` : null,
     site ? `🌐 ${site}` : null,
   ].filter(Boolean).join("\n");
-  const block = signature ? `${contactBlock}\n\n${signature}` : contactBlock;
+  const block = signOff ? `${contactBlock}\n\n${signOff}` : contactBlock;
   // A model that has seen this brand's past captions may reproduce a follow-line
   // itself; an exact repeat of one is dropped so the sign-off cannot double.
   const kept = text
