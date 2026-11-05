@@ -61,7 +61,7 @@ export async function writeCaptionForClient(input: CaptionInput): Promise<Captio
   if (!client) return { ok: false, error: "Client not found", code: "no_client" };
   const { data: brain } = await admin
     .from("brand_brain")
-    .select("brand_brief, caption_tone, design_preferences, feedback_log, addresses, caption_signature, caption_language")
+    .select("brand_brief, caption_tone, design_preferences, feedback_log, addresses, caption_signature, caption_language, no_phone")
     .eq("client_id", clientId)
     .maybeSingle();
 
@@ -97,7 +97,11 @@ export async function writeCaptionForClient(input: CaptionInput): Promise<Captio
   // them and no acceptable way to fill the gap: an invented address or a made-up
   // phone number on a live jewellery post is worse than no post at all. So this
   // refuses, names what is missing, and says where to add it.
-  const missingContact = [!addr?.address && "address", !addr?.phone && "phone number"].filter(Boolean);
+  // The one exception is a brand the founder has confirmed has no public phone
+  // (Anantam, 5 Nov). That is a recorded decision, not a gap, so its captions
+  // carry the address alone rather than refusing forever.
+  const noPhone = brain?.no_phone === true;
+  const missingContact = [!addr?.address && "address", !addr?.phone && !noPhone && "phone number"].filter(Boolean);
   if (missingContact.length > 0) {
     return {
       ok: false,
@@ -245,7 +249,7 @@ Output only the caption, nothing else — no options, no explanations.`,
   const contactBlock = [
     `📍 Visit us: ${addr!.address}`,
     ...branchLines,
-    `📞 Call: ${addr!.phone}`,
+    addr!.phone ? `📞 Call: ${addr!.phone}` : null,
     insta ? `📩 DM ${insta.startsWith("@") || insta.startsWith("http") ? insta : `@${insta}`}` : null,
     site ? `🌐 ${site}` : null,
   ].filter(Boolean).join("\n");

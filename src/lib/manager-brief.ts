@@ -109,11 +109,12 @@ async function collectFindings(): Promise<Finding[]> {
   const clientName = new Map((clients || []).map((c) => [c.id as string, c.name as string]));
 
   // ── Brand Manager ─────────────────────────────────────────────────────────
-  const { data: brains } = await admin.from("brand_brain").select("client_id, addresses");
+  const { data: brains } = await admin.from("brand_brain").select("client_id, addresses, no_phone");
   const brainByClient = new Map((brains || []).map((b) => [b.client_id as string, b]));
   for (const c of clients || []) {
-    const addr = ((brainByClient.get(c.id as string)?.addresses as AddressEntry[] | null) || [])[0];
-    if (!addr?.address || !addr?.phone) {
+    const brain = brainByClient.get(c.id as string);
+    const addr = ((brain?.addresses as AddressEntry[] | null) || [])[0];
+    if (!addr?.address || (!addr?.phone && brain?.no_phone !== true)) {
       found.push({
         manager: "brand",
         key: `missing_contact:${c.id}`,
