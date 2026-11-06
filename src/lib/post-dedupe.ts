@@ -1,5 +1,6 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { postContent } from "@/lib/recurpost";
+import { accountsFor, loadAccountMap, type AccountMap } from "@/lib/recurpost-accounts";
 
 /**
  * One creative, one account, one slot, one post.
@@ -158,9 +159,16 @@ const sendingMark = () => `[sending since ${new Date().toISOString()}]`;
  */
 async function sameSlotAnyAccount(admin: Admin, input: DedupeInput): Promise<LiveRow | null> {
   if (!input.scheduledIso) return null;
+  // The client's OTHER live accounts on this platform are not a remap: a copy
+  // on one of them is that account's own post, and this account still needs
+  // its copy (Gupta's two Instagram profiles). Only a copy under an account
+  // that is no longer mapped — or one with no account on record — is a twin.
+  const siblings = new Set(
+    accountsFor(await loadAccountMap(admin), input.clientId, input.platform).filter((a) => a !== input.accountId)
+  );
   const { data } = await admin
     .from("social_posts")
-    .select("id, status, recurpost_post_id, created_at, media_url")
+    .select("id, status, recurpost_post_id, created_at, media_url, social_account_id")
     .eq("client_id", input.clientId)
     .eq("platform", input.platform)
     .eq("content_type", input.contentType)
@@ -169,7 +177,9 @@ async function sameSlotAnyAccount(admin: Admin, input: DedupeInput): Promise<Liv
     .is("duplicate_of", null)
     .limit(20);
   const want = mediaIdentity(input.mediaUrl);
-  const hit = (data || []).find((r) => mediaIdentity(r.media_url as string) === want);
+  const hit = (data || []).find(
+    (r) => mediaIdentity(r.media_url as string) === want && !(r.social_account_id && siblings.has(r.social_account_id as string))
+  );
   return hit ? { id: hit.id as string, status: hit.status as string, recurpost_post_id: (hit.recurpost_post_id as number | null) ?? null, created_at: hit.created_at as string } : null;
 }
 
@@ -360,8 +370,27 @@ interface ScanRow {
   scheduled_for: string | null;
   created_at: string;
   dedupe_key: string | null;
+  social_account_id: string | null;
   duplicate_of: string | null;
   duplicate_resolution_status: string | null;
+}
+
+/**
+ * Which account's copy a row is, for grouping. With one account (or none) on
+ * the platform every row is the same copy, as before. With several, each
+ * mapped account is its own copy; a row on an account no longer mapped, or
+ * with none on record, is compared against the first account — where every
+ * post went before a client could post to more than one.
+ */
+function accountBucket(map: AccountMap, cache: Map<string, string[]>, r: ScanRow): string {
+  const ck = `${r.client_id}|${r.platform}`;
+  let mapped = cache.get(ck);
+  if (!mapped) {
+    mapped = accountsFor(map, r.client_id, r.platform);
+    cache.set(ck, mapped);
+  }
+  if (mapped.length < 2) return "*";
+  return r.social_account_id && mapped.includes(r.social_account_id) ? r.social_account_id : mapped[0];
 }
 
 /** The identity a row was keyed on, if it has a key; its URL's otherwise. */
@@ -391,7 +420,9 @@ function identityOf(r: ScanRow): string {
  */
 export async function scanForDuplicates(): Promise<number> {
   const admin = createServiceRoleClient();
-  const COLS = "id, client_id, platform, content_type, media_url, scheduled_for, created_at, dedupe_key, duplicate_of, duplicate_resolution_status";
+  const COLS = "id, client_id, platform, content_type, media_url, scheduled_for, created_at, dedupe_key, social_account_id, duplicate_of, duplicate_resolution_status";
+  const accountMap = await loadAccountMap(admin);
+  const mappedCache = new Map<string, string[]>();
   const live = LIVE_STATUSES as unknown as string[];
   const createdSince = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
   const dueSince = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
@@ -412,7 +443,7 @@ export async function scanForDuplicates(): Promise<number> {
   const groups = new Map<string, ScanRow[]>();
   for (const r of rows.values()) {
     const slot = r.scheduled_for ? new Date(r.scheduled_for).toISOString().slice(0, 16) : "now";
-    const g = [r.client_id, r.platform, r.content_type, identityOf(r), slot].join("|");
+    const g = [r.client_id, r.platform, accountBucket(accountMap, mappedCache, r), r.content_type, identityOf(r), slot].join("|");
     const list = groups.get(g) || [];
     list.push(r);
     groups.set(g, list);

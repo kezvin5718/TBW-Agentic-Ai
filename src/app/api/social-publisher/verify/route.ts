@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { getHistory, isRecurPostConfigured } from "@/lib/recurpost";
+import { accountsFor, loadAccountMap } from "@/lib/recurpost-accounts";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -32,13 +33,12 @@ export async function POST(request: NextRequest) {
   const platformFilter: string | null = body.platform || null;
 
   const admin = createServiceRoleClient();
-  const { data: mapRow } = await admin.from("agency_settings").select("value").eq("key", "recurpost_account_map").maybeSingle();
-  const map = (mapRow?.value as Record<string, { client_id: string; platform: string }>) || {};
+  const map = await loadAccountMap(admin);
 
   // Only posts whose scheduled moment has passed can have an outcome yet.
   let q = admin
     .from("social_posts")
-    .select("id, client_id, platform, content_type, status, recurpost_post_id, scheduled_for, created_at")
+    .select("id, client_id, platform, content_type, status, recurpost_post_id, scheduled_for, created_at, social_account_id")
     .not("recurpost_post_id", "is", null)
     .in("status", ["sent", "failed"])
     .order("created_at", { ascending: false })
@@ -57,7 +57,11 @@ export async function POST(request: NextRequest) {
   // One history call per RecurPost account rather than per post.
   const accountsNeeded = new Set<string>();
   for (const p of due) {
-    const accId = Object.keys(map).find((k) => map[k]?.client_id === p.client_id && map[k]?.platform === p.platform);
+    // The account the post actually went to; older rows (none on record) went
+    // to the first one mapped.
+    const mapped = accountsFor(map, p.client_id as string, p.platform as string);
+    const own = p.social_account_id as string | null;
+    const accId = own && mapped.includes(own) ? own : mapped[0];
     if (accId) accountsNeeded.add(accId);
   }
 

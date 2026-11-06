@@ -5,6 +5,7 @@ import { istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
 import { toPublishableVideoUrl, toPublishableThumbUrl, isDriveUrl } from "@/lib/publishable-media";
 import { isDriveConnected } from "@/lib/google-drive";
 import { reserve, settle, sendToRecurPost } from "@/lib/post-dedupe";
+import { accountsFor, accountLabel, loadAccountMap } from "@/lib/recurpost-accounts";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -336,10 +337,10 @@ export async function POST(request: NextRequest) {
   }
 
   const admin = createServiceRoleClient();
-  const { data: mapRow } = await admin.from("agency_settings").select("value").eq("key", "recurpost_account_map").maybeSingle();
-  const rpMapping = (mapRow?.value as Record<string, { client_id: string; platform: string }>) || {};
-  const accountFor = (platform: string) =>
-    Object.keys(rpMapping).find((id) => rpMapping[id]?.client_id === clientId && rpMapping[id]?.platform === platform);
+  const rpMapping = await loadAccountMap(admin);
+  // Every account the client has on a platform — two Instagram profiles get
+  // two Instagram posts.
+  const accountsOn = (platform: string) => accountsFor(rpMapping, clientId, platform);
 
   const { data: client } = await admin.from("clients").select("name").eq("id", clientId).maybeSingle();
 
@@ -416,7 +417,7 @@ export async function POST(request: NextRequest) {
 
   // duplicate: the slot was already claimed by another send, so RecurPost was
   // never called for this one — a skip, not a failure.
-  const results: Array<{ uploadId: string; platform: string; ok: boolean; detail: string; skipped?: boolean; duplicate?: boolean }> = [];
+  const results: Array<{ uploadId: string; platform: string; account?: string; ok: boolean; detail: string; skipped?: boolean; duplicate?: boolean }> = [];
   const skipped: string[] = [];
   const doneUploads = new Set<string>();
   const stagedCache = new Map<string, string>();
@@ -629,90 +630,93 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      const accountId = accountFor(platform);
-      let ok = false;
-      let detail = "";
+      const accounts = accountsOn(platform);
+      for (const accountId of accounts.length > 0 ? accounts : [undefined]) {
+        const label = accountLabel(platform, accounts, accountId);
+        let ok = false;
+        let detail = "";
 
-      const row = {
-        client_id: clientId,
-        created_by: user.id,
-        platform,
-        content_type: contentType,
-        title: null,
-        caption: contentType === "story" ? null : (item.caption || null),
-        media_url: publishUrl,
-        media_is_video: isVideo,
-        thumbnail_url: isCarousel ? null : (upload.thumbnail_url || null),
-        scheduled_for: scheduledIso,
-      };
-      // The cover stands for the carousel in the Library; the note says how
-      // many slides went with it, so history reads what was actually sent.
-      const note = (d: string) => `${isOverride ? "[risk-override] " : ""}[automation] ${d}${isCarousel ? ` [carousel ${slideUrls.length} slides]` : ""}`;
-
-      if (!accountId) {
-        // No call is made, so there is no slot to claim — the failure is
-        // recorded as it always was.
-        detail = `No RecurPost account mapped for ${client?.name || "this client"} on ${platform}.`;
-        await admin.from("social_posts").insert({ ...row, status: "failed", recurpost_post_id: null, webhook_response: note(detail) });
-      } else {
-        const params: Record<string, unknown> = {
-          id: accountId,
-          // A Story drops the text, but RecurPost rejects an empty message
-          // outright — so it always carries something.
-          message: contentType === "story" ? (client?.name || "Story") : (item.caption || client?.name || ""),
-          schedule_date_time: utcToIstWallClock(scheduledUtc),
+        const row = {
+          client_id: clientId,
+          created_by: user.id,
+          platform,
+          content_type: contentType,
+          title: null,
+          caption: contentType === "story" ? null : (item.caption || null),
+          media_url: publishUrl,
+          media_is_video: isVideo,
+          thumbnail_url: isCarousel ? null : (upload.thumbnail_url || null),
+          scheduled_for: scheduledIso,
         };
-        // image_url is an array already; a carousel simply fills it, every
-        // slide in order. That is the whole of the difference to RecurPost.
-        if (isVideo) params.video_url = publishUrl;
-        else params.image_url = isCarousel ? slideUrls : [publishUrl];
-        // A carousel IS a feed post to RecurPost, so it carries no post type
-        // of its own — "carousel" is our word, not one of theirs.
-        if (!isCarousel && platform === "facebook" && contentType !== "post") params.fb_post_type = contentType;
-        if (!isCarousel && platform === "instagram" && contentType !== "post") params.in_post_type = contentType;
-        if (platform === "instagram" && contentType === "reel") params.in_reel_share_in_feed = "yes";
-        if (isVideo && upload.thumbnail_url) {
-          // The manual publisher checks a cover against the platform's upload
-          // ceiling before sending it; this path did not, so a designer's
-          // 20MB print-resolution cover went out raw and came back
-          // re-compressed. Same guard, same rule: full resolution kept, only
-          // an over-ceiling file is made lighter.
-          const cover = thumbCache.get(upload.thumbnail_url as string)
-            ?? (await toPublishableThumbUrl(upload.thumbnail_url as string)).url;
-          thumbCache.set(upload.thumbnail_url as string, cover);
-          if (platform === "facebook") params.fb_thumb = cover;
-          if (platform === "instagram") params.in_thumb = cover;
-        }
+        // The cover stands for the carousel in the Library; the note says how
+        // many slides went with it, so history reads what was actually sent.
+        const note = (d: string) => `${isOverride ? "[risk-override] " : ""}[automation] ${d}${isCarousel ? ` [carousel ${slideUrls.length} slides]` : ""}`;
 
-        // Claim the slot before RecurPost hears of it. A double-click, a
-        // second tab or a resend of the same run finds it taken: no call, and
-        // the run says so. The same creative on another day, another account
-        // or as the Story beside the post is a different key and goes out.
-        const claim = await reserve(admin, row, {
-          clientId, accountId, platform, contentType, mediaUrl: publishUrl, scheduledIso,
-        });
-        if (claim.kind === "duplicate") {
-          results.push({ uploadId: upload.id, platform, ok: false, skipped: true, duplicate: true, detail: claim.message });
-          skipped.push(`${upload.file_name || upload.id} ${platform}: ${claim.message}.`);
-          // Already out means the creative genuinely is published, so it
-          // counts for retiring the upload. Still in flight does not: that
-          // other send retires it itself if it lands.
-          if (claim.alreadyOut) anyOk = true;
-          continue;
-        }
-        if (claim.kind === "error") {
-          detail = claim.message;
+        if (!accountId) {
+          // No call is made, so there is no slot to claim — the failure is
+          // recorded as it always was.
+          detail = `No RecurPost account mapped for ${client?.name || "this client"} on ${platform}.`;
+          await admin.from("social_posts").insert({ ...row, status: "failed", recurpost_post_id: null, webhook_response: note(detail) });
         } else {
-          const outcome = await sendToRecurPost(params);
-          detail = outcome.detail;
-          ok = outcome.status === "sent";
-          await settle(admin, claim.id, outcome, note(detail));
-        }
-        if (!ok) console.error(`automation ${upload.id} ${platform} rejected: ${detail} · sent ${JSON.stringify({ ...params, id: "<account>" }).slice(0, 260)}`);
-      }
+          const params: Record<string, unknown> = {
+            id: accountId,
+            // A Story drops the text, but RecurPost rejects an empty message
+            // outright — so it always carries something.
+            message: contentType === "story" ? (client?.name || "Story") : (item.caption || client?.name || ""),
+            schedule_date_time: utcToIstWallClock(scheduledUtc),
+          };
+          // image_url is an array already; a carousel simply fills it, every
+          // slide in order. That is the whole of the difference to RecurPost.
+          if (isVideo) params.video_url = publishUrl;
+          else params.image_url = isCarousel ? slideUrls : [publishUrl];
+          // A carousel IS a feed post to RecurPost, so it carries no post type
+          // of its own — "carousel" is our word, not one of theirs.
+          if (!isCarousel && platform === "facebook" && contentType !== "post") params.fb_post_type = contentType;
+          if (!isCarousel && platform === "instagram" && contentType !== "post") params.in_post_type = contentType;
+          if (platform === "instagram" && contentType === "reel") params.in_reel_share_in_feed = "yes";
+          if (isVideo && upload.thumbnail_url) {
+            // The manual publisher checks a cover against the platform's upload
+            // ceiling before sending it; this path did not, so a designer's
+            // 20MB print-resolution cover went out raw and came back
+            // re-compressed. Same guard, same rule: full resolution kept, only
+            // an over-ceiling file is made lighter.
+            const cover = thumbCache.get(upload.thumbnail_url as string)
+              ?? (await toPublishableThumbUrl(upload.thumbnail_url as string)).url;
+            thumbCache.set(upload.thumbnail_url as string, cover);
+            if (platform === "facebook") params.fb_thumb = cover;
+            if (platform === "instagram") params.in_thumb = cover;
+          }
 
-      results.push({ uploadId: upload.id, platform, ok, detail });
-      if (ok) anyOk = true;
+          // Claim the slot before RecurPost hears of it. A double-click, a
+          // second tab or a resend of the same run finds it taken: no call, and
+          // the run says so. The same creative on another day, another account
+          // or as the Story beside the post is a different key and goes out.
+          const claim = await reserve(admin, row, {
+            clientId, accountId, platform, contentType, mediaUrl: publishUrl, scheduledIso,
+          });
+          if (claim.kind === "duplicate") {
+            results.push({ uploadId: upload.id, platform, account: label, ok: false, skipped: true, duplicate: true, detail: claim.message });
+            skipped.push(`${upload.file_name || upload.id} ${label}: ${claim.message}.`);
+            // Already out means the creative genuinely is published, so it
+            // counts for retiring the upload. Still in flight does not: that
+            // other send retires it itself if it lands.
+            if (claim.alreadyOut) anyOk = true;
+            continue;
+          }
+          if (claim.kind === "error") {
+            detail = claim.message;
+          } else {
+            const outcome = await sendToRecurPost(params);
+            detail = outcome.detail;
+            ok = outcome.status === "sent";
+            await settle(admin, claim.id, outcome, note(detail));
+          }
+          if (!ok) console.error(`automation ${upload.id} ${label} rejected: ${detail} · sent ${JSON.stringify({ ...params, id: "<account>" }).slice(0, 260)}`);
+        }
+
+        results.push({ uploadId: upload.id, platform, account: label, ok, detail });
+        if (ok) anyOk = true;
+      }
     }
 
     if (anyOk) doneUploads.add(upload.id);

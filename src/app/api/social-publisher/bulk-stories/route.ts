@@ -4,6 +4,7 @@ import { isRecurPostConfigured } from "@/lib/recurpost";
 import { istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
 import { toPublishableVideoUrl } from "@/lib/publishable-media";
 import { reserve, settle, sendToRecurPost } from "@/lib/post-dedupe";
+import { accountsFor, accountLabel, loadAccountMap } from "@/lib/recurpost-accounts";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -65,14 +66,14 @@ export async function POST(request: NextRequest) {
   }
 
   const admin = createServiceRoleClient();
-  const { data: mapRow } = await admin.from("agency_settings").select("value").eq("key", "recurpost_account_map").maybeSingle();
-  const rpMapping = (mapRow?.value as Record<string, { client_id: string; platform: string }>) || {};
+  const rpMapping = await loadAccountMap(admin);
   const { data: client } = await admin.from("clients").select("name").eq("id", clientId).single();
 
-  const accountFor = (platform: string) =>
-    Object.keys(rpMapping).find((id) => rpMapping[id]?.client_id === clientId && rpMapping[id]?.platform === platform);
+  // Every account the client has on a platform gets the story — two
+  // Instagram profiles, two Instagram stories.
+  const accountsOn = (platform: string) => accountsFor(rpMapping, clientId, platform);
 
-  const missing = platforms.filter((p) => !accountFor(p));
+  const missing = platforms.filter((p) => accountsOn(p).length === 0);
   if (missing.length === platforms.length) {
     return NextResponse.json(
       { error: `No RecurPost account mapped for ${client?.name || "this client"} on ${missing.join(" or ")} — map it in Social Publisher → RecurPost Accounts.` },
@@ -104,16 +105,19 @@ export async function POST(request: NextRequest) {
   const sinceIso = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const { data: alreadySent } = await admin
     .from("social_posts")
-    .select("platform, media_url, scheduled_for")
+    .select("platform, media_url, scheduled_for, social_account_id")
     .eq("client_id", clientId)
     .eq("content_type", "story")
     .not("recurpost_post_id", "is", null)
     .gte("created_at", sinceIso);
   const alreadyKey = new Set(
-    (alreadySent || []).map((p) => `${p.platform}|${p.media_url}|${p.scheduled_for ?? ""}`)
+    // Per account; a row with none on record went to the first account.
+    (alreadySent || []).map(
+      (p) => `${p.platform}|${p.social_account_id || accountsOn(p.platform)[0] || ""}|${p.media_url}|${p.scheduled_for ?? ""}`
+    )
   );
 
-  const results: Array<{ slot: number; platform: string; scheduledFor: string; ok: boolean; detail: string }> = [];
+  const results: Array<{ slot: number; platform: string; account?: string; scheduledFor: string; ok: boolean; detail: string }> = [];
   const skipped: string[] = [];
   const doneUploadIds = new Set<string>();
 
@@ -134,78 +138,81 @@ export async function POST(request: NextRequest) {
     let slotAllOk = true;
 
     for (const platform of platforms) {
-      // A fast pre-filter only — the reservation below is the authority.
-      if (alreadyKey.has(`${platform}|${publishUrl}|${scheduledIso}`)) {
-        skipped.push(`Slot ${idx + 1} ${platform} — already queued for that time.`);
-        continue;
-      }
-
-      const accountId = accountFor(platform);
-      let ok = false;
-      let detail = "";
-
-      const row = {
-        client_id: clientId,
-        created_by: user.id,
-        platform,
-        content_type: "story",
-        title: null,
-        caption: null,
-        media_url: publishUrl,
-        media_is_video: isVideo,
-        thumbnail_url: null,
-        scheduled_for: scheduledIso,
-      };
-
-      if (!accountId) {
-        // No call, so no slot to claim — the failure is recorded as before.
-        detail = `No RecurPost account mapped for ${client?.name || "this client"} on ${platform}.`;
-        await admin.from("social_posts").insert({ ...row, status: "failed", recurpost_post_id: null, webhook_response: `[recurpost bulk-story] ${detail}` });
-      } else {
-        const params: Record<string, unknown> = {
-          id: accountId,
-          // Both platforms drop the text on a Story, so this is never seen — but
-          // RecurPost rejects the call with "Bad Request" when message is empty,
-          // so it carries the client name rather than nothing.
-          message: client?.name || "Story",
-          // RecurPost schedules in the account's own (IST) clock, so send IST
-          // wall clock rather than the UTC instant.
-          schedule_date_time: utcToIstWallClock(scheduledUtc),
-        };
-        if (isVideo) params.video_url = publishUrl;
-        else params.image_url = [publishUrl];
-        if (platform === "facebook") params.fb_post_type = "story";
-        if (platform === "instagram") params.in_post_type = "story";
-
-        // Claim the slot first; only the claim's owner calls RecurPost. The
-        // same story on the same account at the same time — a second press,
-        // or a batch that lists one slot twice — is a skip, said in words.
-        const claim = await reserve(admin, row, {
-          clientId, accountId, platform, contentType: "story", mediaUrl: publishUrl, scheduledIso,
-        });
-        if (claim.kind === "duplicate") {
-          skipped.push(`Slot ${idx + 1} ${platform} — ${claim.message}.`);
-          // Already out counts as done for this slot; still in flight does
-          // not, so the hub item stays until that other send lands.
-          if (!claim.alreadyOut) slotAllOk = false;
+      const accounts = accountsOn(platform);
+      for (const accountId of accounts.length > 0 ? accounts : [undefined]) {
+        const label = accountLabel(platform, accounts, accountId);
+        // A fast pre-filter only — the reservation below is the authority.
+        if (accountId && alreadyKey.has(`${platform}|${accountId}|${publishUrl}|${scheduledIso}`)) {
+          skipped.push(`Slot ${idx + 1} ${label} — already queued for that time.`);
           continue;
         }
-        if (claim.kind === "error") {
-          detail = claim.message;
+
+        let ok = false;
+        let detail = "";
+
+        const row = {
+          client_id: clientId,
+          created_by: user.id,
+          platform,
+          content_type: "story",
+          title: null,
+          caption: null,
+          media_url: publishUrl,
+          media_is_video: isVideo,
+          thumbnail_url: null,
+          scheduled_for: scheduledIso,
+        };
+
+        if (!accountId) {
+          // No call, so no slot to claim — the failure is recorded as before.
+          detail = `No RecurPost account mapped for ${client?.name || "this client"} on ${platform}.`;
+          await admin.from("social_posts").insert({ ...row, status: "failed", recurpost_post_id: null, webhook_response: `[recurpost bulk-story] ${detail}` });
         } else {
-          // An id back means RecurPost queued it, whatever else the body says.
-          // Recording an accepted post as failed is what invites the duplicate.
-          const outcome = await sendToRecurPost(params);
-          detail = outcome.detail;
-          ok = outcome.status === "sent";
-          await settle(admin, claim.id, outcome, `[recurpost bulk-story] ${detail}`);
+          const params: Record<string, unknown> = {
+            id: accountId,
+            // Both platforms drop the text on a Story, so this is never seen — but
+            // RecurPost rejects the call with "Bad Request" when message is empty,
+            // so it carries the client name rather than nothing.
+            message: client?.name || "Story",
+            // RecurPost schedules in the account's own (IST) clock, so send IST
+            // wall clock rather than the UTC instant.
+            schedule_date_time: utcToIstWallClock(scheduledUtc),
+          };
+          if (isVideo) params.video_url = publishUrl;
+          else params.image_url = [publishUrl];
+          if (platform === "facebook") params.fb_post_type = "story";
+          if (platform === "instagram") params.in_post_type = "story";
+
+          // Claim the slot first; only the claim's owner calls RecurPost. The
+          // same story on the same account at the same time — a second press,
+          // or a batch that lists one slot twice — is a skip, said in words.
+          const claim = await reserve(admin, row, {
+            clientId, accountId, platform, contentType: "story", mediaUrl: publishUrl, scheduledIso,
+          });
+          if (claim.kind === "duplicate") {
+            skipped.push(`Slot ${idx + 1} ${label} — ${claim.message}.`);
+            // Already out counts as done for this slot; still in flight does
+            // not, so the hub item stays until that other send lands.
+            if (!claim.alreadyOut) slotAllOk = false;
+            continue;
+          }
+          if (claim.kind === "error") {
+            detail = claim.message;
+          } else {
+            // An id back means RecurPost queued it, whatever else the body says.
+            // Recording an accepted post as failed is what invites the duplicate.
+            const outcome = await sendToRecurPost(params);
+            detail = outcome.detail;
+            ok = outcome.status === "sent";
+            await settle(admin, claim.id, outcome, `[recurpost bulk-story] ${detail}`);
+          }
         }
+
+        if (ok) alreadyKey.add(`${platform}|${accountId ?? ""}|${publishUrl}|${scheduledIso}`);
+        else slotAllOk = false;
+
+        results.push({ slot: idx + 1, platform, account: label, scheduledFor: item.scheduledFor, ok, detail });
       }
-
-      if (ok) alreadyKey.add(`${platform}|${publishUrl}|${scheduledIso}`);
-      else slotAllOk = false;
-
-      results.push({ slot: idx + 1, platform, scheduledFor: item.scheduledFor, ok, detail });
     }
 
     if (slotAllOk && item.uploadId) doneUploadIds.add(item.uploadId);

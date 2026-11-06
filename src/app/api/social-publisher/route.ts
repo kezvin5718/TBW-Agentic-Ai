@@ -4,6 +4,7 @@ import { isRecurPostConfigured } from "@/lib/recurpost";
 import { istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
 import { toPublishableVideoUrl, toPublishableThumbUrl } from "@/lib/publishable-media";
 import { reserve, reclaim, settle, sendToRecurPost, IN_FLIGHT } from "@/lib/post-dedupe";
+import { accountsFor, accountLabel, loadAccountMap } from "@/lib/recurpost-accounts";
 
 export const dynamic = "force-dynamic";
 
@@ -136,9 +137,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { data: mapRow } = await admin.from("agency_settings").select("value").eq("key", "recurpost_account_map").maybeSingle();
-    const map = (mapRow?.value as Record<string, { client_id: string; platform: string }>) || {};
-    const accountId = Object.keys(map).find((k) => map[k]?.client_id === post.client_id && map[k]?.platform === post.platform);
+    // A retry goes back to the account it was first sent to, while that
+    // account is still mapped — with two Instagram profiles, retrying the
+    // second one's copy must not land on the first. Older rows (no account on
+    // record) and remapped accounts fall back to the first account, as before.
+    const mapped = accountsFor(await loadAccountMap(admin), post.client_id as string, post.platform as string);
+    const own = post.social_account_id as string | null;
+    const accountId = own && mapped.includes(own) ? own : mapped[0];
     if (!accountId) {
       return NextResponse.json({ error: `No RecurPost account mapped for this client on ${post.platform}.` }, { status: 400 });
     }
@@ -281,8 +286,7 @@ export async function POST(request: NextRequest) {
   }
 
   const admin = createServiceRoleClient();
-  const { data: mapRow } = await admin.from("agency_settings").select("value").eq("key", "recurpost_account_map").maybeSingle();
-  const rpMapping = (mapRow?.value as Record<string, { client_id: string; platform: string }>) || {};
+  const rpMapping = await loadAccountMap(admin);
 
   const { data: client } = await admin.from("clients").select("name").eq("id", clientId).single();
 
@@ -305,7 +309,7 @@ export async function POST(request: NextRequest) {
   // failure through and the same creative went out twice.
   let alreadyQ = admin
     .from("social_posts")
-    .select("platform, content_type, scheduled_for")
+    .select("platform, content_type, scheduled_for, social_account_id")
     .eq("client_id", clientId)
     .eq("media_url", publishUrl)
     .not("recurpost_post_id", "is", null)
@@ -324,9 +328,16 @@ export async function POST(request: NextRequest) {
   }
   alreadyQ = scheduledIso ? alreadyQ.eq("scheduled_for", scheduledIso) : alreadyQ.is("scheduled_for", null);
   const { data: alreadySent } = await alreadyQ;
-  const alreadyKey = new Set((alreadySent || []).map((p) => `${p.platform}|${p.content_type}`));
+  // Keyed per account: a copy already on one Instagram profile says nothing
+  // about the client's other one. A row with no account on record went to the
+  // first account, the only one anything was ever sent to.
+  const alreadyKey = new Set(
+    (alreadySent || []).map(
+      (p) => `${p.platform}|${p.content_type}|${p.social_account_id || accountsFor(rpMapping, clientId, p.platform)[0] || ""}`
+    )
+  );
 
-  const results: Array<{ platform: string; contentType: string; ok: boolean; detail: string }> = [];
+  const results: Array<{ platform: string; account: string; contentType: string; ok: boolean; detail: string }> = [];
 
   // Whatever the team selected is what gets sent. YouTube rejecting an image
   // is warned about in the composer; if they choose it anyway that's their
@@ -341,18 +352,11 @@ export async function POST(request: NextRequest) {
   for (const platform of platforms) {
     // feed/story/reel only differ on FB & IG — other platforms get one post.
     const typesForPlatform = ["facebook", "instagram"].includes(platform) ? contentTypes : [contentTypes[0]];
+    // Every account the client has on this platform gets its own copy — two
+    // Instagram profiles means two Instagram posts. None mapped still makes
+    // one pass, which records the "no account mapped" failure as before.
+    const accounts = accountsFor(rpMapping, clientId, platform);
     for (const contentType of typesForPlatform) {
-      const accountId = Object.keys(rpMapping).find(
-        (id) => rpMapping[id]?.client_id === clientId && rpMapping[id]?.platform === platform
-      );
-      let ok = false;
-      let detail = "";
-      // A fast pre-filter only — the reservation below is the authority.
-      if (alreadyKey.has(`${platform}|${contentType}`)) {
-        // Same client, same media, same slot, already away — don't post twice.
-        skipped.push(`${platform} ${contentType} — already posted.`);
-        continue;
-      }
       // YouTube only accepts video. Platforms are auto-selected from the client
       // mapping, so an image post riding along isn't a conscious choice — skip
       // it cleanly rather than letting RecurPost reject it and log a failure.
@@ -360,86 +364,97 @@ export async function POST(request: NextRequest) {
         skipped.push("youtube — YouTube only accepts video. Upload a video to include YouTube.");
         continue;
       }
-      const row = {
-        client_id: clientId,
-        created_by: user.id,
-        platform,
-        content_type: contentType,
-        title: title || null,
-        caption: caption || null,
-        // Record what was actually sent, not the Drive original — so the
-        // Library preview and any retry use the same fetchable URL.
-        media_url: publishUrl,
-        media_is_video: mediaIsVideo,
-        thumbnail_url: thumbnailUrl || null,
-        scheduled_for: scheduledIso,
-      };
-      if (!accountId) {
-        // Nothing goes to RecurPost, so there is no slot to claim — the
-        // failure is simply recorded, as it always was.
-        detail = `No RecurPost account mapped for ${client?.name || "this client"} on ${platform} — map it in Social Publisher → RecurPost Accounts.`;
-        await admin.from("social_posts").insert({ ...row, status: "failed", recurpost_post_id: null, webhook_response: `[recurpost] ${detail}` });
-      } else {
-        const params: Record<string, unknown> = {
-          id: accountId,
-          message: caption || title || "",
-        };
-        // The composer's date/time pickers are already IST wall clock — which is
-        // exactly what RecurPost expects, so pass it through.
-        if (scheduledFor) params.schedule_date_time = utcToIstWallClock(istWallClockToUtc(scheduledFor));
-        if (mediaIsVideo) params.video_url = publishUrl;
-        else params.image_url = [publishUrl];
-        // Same reason as the retry path: cut the cover to the format's frame
-        // ourselves rather than letting the platform re-encode a print file.
-        let sendThumb = thumbnailUrl as string | null;
-        if (mediaIsVideo && sendThumb) {
-          const norm = await toPublishableThumbUrl(sendThumb);
-          sendThumb = norm.url;
-          if (norm.note) console.log(`🖼️ ${platform} ${contentType}: ${norm.note}`);
-        }
-        // fb_thumb / in_thumb / ln_thumb only apply to video posts — RecurPost
-        // ignores them on an image post since there's nothing to override.
-        if (platform === "facebook") {
-          if (contentType !== "post") params.fb_post_type = contentType;
-          if (mediaIsVideo && sendThumb) params.fb_thumb = sendThumb;
-        }
-        if (platform === "instagram") {
-          if (contentType !== "post") params.in_post_type = contentType;
-          if (contentType === "reel") params.in_reel_share_in_feed = "yes";
-          if (mediaIsVideo && sendThumb) params.in_thumb = sendThumb;
-        }
-        if (platform === "linkedin" && mediaIsVideo && sendThumb) params.ln_thumb = sendThumb;
-        if (platform === "youtube") {
-          if (title) params.yt_title = title;
-          // yt_thumb, not yt_thumbnail — the wrong name was accepted with a 200
-          // and dropped, so thumbnails never reached YouTube.
-          if (sendThumb) params.yt_thumb = sendThumb;
-        }
-        if (platform === "pinterest") params.pi_title = pinterestTitle(title, caption);
-
-        // Claim the slot first. Only the request that wrote the row calls
-        // RecurPost; a second click, a second person or a blind resend finds
-        // the slot taken and is told so instead.
-        const claim = await reserve(admin, row, {
-          clientId, accountId, platform, contentType, mediaUrl: publishUrl, scheduledIso,
-        });
-        if (claim.kind === "duplicate") {
-          skipped.push(`${platform} ${contentType} — ${claim.message}.`);
-          if (!claim.alreadyOut) heldBack = true;
+      for (const accountId of accounts.length > 0 ? accounts : [undefined]) {
+        const label = accountLabel(platform, accounts, accountId);
+        let ok = false;
+        let detail = "";
+        // A fast pre-filter only — the reservation below is the authority.
+        if (accountId && alreadyKey.has(`${platform}|${contentType}|${accountId}`)) {
+          // Same client, same media, same slot, same account, already away — don't post twice.
+          skipped.push(`${label} ${contentType} — already posted.`);
           continue;
         }
-        if (claim.kind === "error") {
-          detail = claim.message;
+        const row = {
+          client_id: clientId,
+          created_by: user.id,
+          platform,
+          content_type: contentType,
+          title: title || null,
+          caption: caption || null,
+          // Record what was actually sent, not the Drive original — so the
+          // Library preview and any retry use the same fetchable URL.
+          media_url: publishUrl,
+          media_is_video: mediaIsVideo,
+          thumbnail_url: thumbnailUrl || null,
+          scheduled_for: scheduledIso,
+        };
+        if (!accountId) {
+          // Nothing goes to RecurPost, so there is no slot to claim — the
+          // failure is simply recorded, as it always was.
+          detail = `No RecurPost account mapped for ${client?.name || "this client"} on ${platform} — map it in Social Publisher → RecurPost Accounts.`;
+          await admin.from("social_posts").insert({ ...row, status: "failed", recurpost_post_id: null, webhook_response: `[recurpost] ${detail}` });
         } else {
-          // A post id back means RecurPost queued it — that settles it. Only
-          // when there is no id do we fall back to reading the body for errors.
-          const outcome = await sendToRecurPost(params);
-          detail = explainFailure(platform, outcome.detail);
-          ok = outcome.status === "sent";
-          await settle(admin, claim.id, outcome, `[recurpost] ${detail}`);
+          const params: Record<string, unknown> = {
+            id: accountId,
+            message: caption || title || "",
+          };
+          // The composer's date/time pickers are already IST wall clock — which is
+          // exactly what RecurPost expects, so pass it through.
+          if (scheduledFor) params.schedule_date_time = utcToIstWallClock(istWallClockToUtc(scheduledFor));
+          if (mediaIsVideo) params.video_url = publishUrl;
+          else params.image_url = [publishUrl];
+          // Same reason as the retry path: cut the cover to the format's frame
+          // ourselves rather than letting the platform re-encode a print file.
+          let sendThumb = thumbnailUrl as string | null;
+          if (mediaIsVideo && sendThumb) {
+            const norm = await toPublishableThumbUrl(sendThumb);
+            sendThumb = norm.url;
+            if (norm.note) console.log(`🖼️ ${platform} ${contentType}: ${norm.note}`);
+          }
+          // fb_thumb / in_thumb / ln_thumb only apply to video posts — RecurPost
+          // ignores them on an image post since there's nothing to override.
+          if (platform === "facebook") {
+            if (contentType !== "post") params.fb_post_type = contentType;
+            if (mediaIsVideo && sendThumb) params.fb_thumb = sendThumb;
+          }
+          if (platform === "instagram") {
+            if (contentType !== "post") params.in_post_type = contentType;
+            if (contentType === "reel") params.in_reel_share_in_feed = "yes";
+            if (mediaIsVideo && sendThumb) params.in_thumb = sendThumb;
+          }
+          if (platform === "linkedin" && mediaIsVideo && sendThumb) params.ln_thumb = sendThumb;
+          if (platform === "youtube") {
+            if (title) params.yt_title = title;
+            // yt_thumb, not yt_thumbnail — the wrong name was accepted with a 200
+            // and dropped, so thumbnails never reached YouTube.
+            if (sendThumb) params.yt_thumb = sendThumb;
+          }
+          if (platform === "pinterest") params.pi_title = pinterestTitle(title, caption);
+
+          // Claim the slot first. Only the request that wrote the row calls
+          // RecurPost; a second click, a second person or a blind resend finds
+          // the slot taken and is told so instead.
+          const claim = await reserve(admin, row, {
+            clientId, accountId, platform, contentType, mediaUrl: publishUrl, scheduledIso,
+          });
+          if (claim.kind === "duplicate") {
+            skipped.push(`${label} ${contentType} — ${claim.message}.`);
+            if (!claim.alreadyOut) heldBack = true;
+            continue;
+          }
+          if (claim.kind === "error") {
+            detail = claim.message;
+          } else {
+            // A post id back means RecurPost queued it — that settles it. Only
+            // when there is no id do we fall back to reading the body for errors.
+            const outcome = await sendToRecurPost(params);
+            detail = explainFailure(platform, outcome.detail);
+            ok = outcome.status === "sent";
+            await settle(admin, claim.id, outcome, `[recurpost] ${detail}`);
+          }
         }
+        results.push({ platform, account: label, contentType, ok, detail });
       }
-      results.push({ platform, contentType, ok, detail });
     }
   }
 

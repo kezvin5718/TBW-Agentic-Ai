@@ -3,6 +3,7 @@ import { isRecurPostConfigured } from "@/lib/recurpost";
 import { utcToIstWallClock } from "@/lib/time";
 import { toPublishableVideoUrl } from "@/lib/publishable-media";
 import { reserve, settle, sendToRecurPost } from "@/lib/post-dedupe";
+import { accountsFor, accountLabel, loadAccountMap } from "@/lib/recurpost-accounts";
 
 /** Stories exist only on Meta. Nothing else can carry one. */
 const STORY_PLATFORMS = ["facebook", "instagram"];
@@ -65,12 +66,12 @@ export async function scheduleFestivalStory(uploadId: string): Promise<FestivalS
     return { scheduled: 0, failed: 0, blocked: true, notes: ["RecurPost is not configured, so nothing could be scheduled."] };
   }
 
-  const { data: mapRow } = await admin.from("agency_settings").select("value").eq("key", "recurpost_account_map").maybeSingle();
-  const rpMapping = (mapRow?.value as Record<string, { client_id: string; platform: string }>) || {};
-  const accountFor = (platform: string) =>
-    Object.keys(rpMapping).find((id) => rpMapping[id]?.client_id === upload.client_id && rpMapping[id]?.platform === platform);
+  const rpMapping = await loadAccountMap(admin);
+  // Every account the client has on a platform gets the story — two
+  // Instagram profiles, two Instagram stories.
+  const accountsOn = (platform: string) => accountsFor(rpMapping, upload.client_id as string, platform);
 
-  const platforms = STORY_PLATFORMS.filter((p) => accountFor(p));
+  const platforms = STORY_PLATFORMS.filter((p) => accountsOn(p).length > 0);
   if (platforms.length === 0) {
     return {
       scheduled: 0,
@@ -96,13 +97,14 @@ export async function scheduleFestivalStory(uploadId: string): Promise<FestivalS
   // RecurPost has no cancel, so a duplicate has to be removed there by hand.
   const { data: already } = await admin
     .from("social_posts")
-    .select("platform")
+    .select("platform, social_account_id")
     .eq("client_id", upload.client_id)
     .eq("media_url", publishUrl)
     .eq("content_type", "story")
     .eq("scheduled_for", scheduledIso)
     .not("recurpost_post_id", "is", null);
-  const done = new Set((already || []).map((p) => p.platform));
+  // Per account; a row with none on record went to the first account.
+  const done = new Set((already || []).map((p) => `${p.platform}|${p.social_account_id || accountsOn(p.platform)[0] || ""}`));
 
   let scheduled = 0;
   let failed = 0;
@@ -111,78 +113,82 @@ export async function scheduleFestivalStory(uploadId: string): Promise<FestivalS
   let alreadyOut = 0;
 
   for (const platform of platforms) {
-    // A fast pre-filter only — the reservation below is the authority.
-    if (done.has(platform)) {
-      notes.push(`${platform} — already queued for ${festival.name}.`);
-      continue;
-    }
-
-    const params: Record<string, unknown> = {
-      id: accountFor(platform)!,
-      // Both platforms drop the text on a Story, so this is never seen — but
-      // RecurPost rejects the call outright with "Bad Request" when message is
-      // empty, so it carries the festival name rather than nothing.
-      message: festival.name || "Festival story",
-      schedule_date_time: utcToIstWallClock(when),
-    };
-    if (isVideo) params.video_url = publishUrl;
-    else params.image_url = [publishUrl];
-    if (platform === "facebook") params.fb_post_type = "story";
-    if (platform === "instagram") params.in_post_type = "story";
-
-    // Claim the slot before RecurPost is called. QC re-running, the batch
-    // route and the single route can all reach this for one upload at once;
-    // whichever writes the row first is the only one that sends.
-    const claim = await reserve(
-      admin,
-      {
-        client_id: upload.client_id,
-        platform,
-        content_type: "story",
-        title: festival.name || null,
-        caption: null,
-        media_url: publishUrl,
-        media_is_video: isVideo,
-        scheduled_for: scheduledIso,
-      },
-      {
-        clientId: upload.client_id as string,
-        accountId: accountFor(platform)!,
-        platform,
-        contentType: "story",
-        mediaUrl: publishUrl,
-        scheduledIso,
+    const accounts = accountsOn(platform);
+    for (const accountId of accounts) {
+      const label = accountLabel(platform, accounts, accountId);
+      // A fast pre-filter only — the reservation below is the authority.
+      if (done.has(`${platform}|${accountId}`)) {
+        notes.push(`${label} — already queued for ${festival.name}.`);
+        continue;
       }
-    );
-    if (claim.kind === "duplicate") {
-      notes.push(`${platform} — ${claim.message}.`);
-      if (claim.alreadyOut) alreadyOut++;
-      continue;
-    }
-    if (claim.kind === "error") {
-      failed++;
-      notes.push(`${platform} — could not be scheduled: ${claim.message}`);
-      continue;
-    }
 
-    const outcome = await sendToRecurPost(params);
-    const ok = outcome.status === "sent";
-    const detail = outcome.detail;
+      const params: Record<string, unknown> = {
+        id: accountId,
+        // Both platforms drop the text on a Story, so this is never seen — but
+        // RecurPost rejects the call outright with "Bad Request" when message is
+        // empty, so it carries the festival name rather than nothing.
+        message: festival.name || "Festival story",
+        schedule_date_time: utcToIstWallClock(when),
+      };
+      if (isVideo) params.video_url = publishUrl;
+      else params.image_url = [publishUrl];
+      if (platform === "facebook") params.fb_post_type = "story";
+      if (platform === "instagram") params.in_post_type = "story";
 
-    if (!ok) {
-      // RecurPost answers HTTP 200 with a 400 in the body and no indication of
-      // which field it objected to. Record what was actually sent — minus the
-      // account id — so the next failure is readable instead of another guess.
-      const sent = { ...params, id: "<account>" };
-      console.error(`festival story ${uploadId} ${platform} rejected: ${detail} · sent ${JSON.stringify(sent).slice(0, 300)}`);
-    }
+      // Claim the slot before RecurPost is called. QC re-running, the batch
+      // route and the single route can all reach this for one upload at once;
+      // whichever writes the row first is the only one that sends.
+      const claim = await reserve(
+        admin,
+        {
+          client_id: upload.client_id,
+          platform,
+          content_type: "story",
+          title: festival.name || null,
+          caption: null,
+          media_url: publishUrl,
+          media_is_video: isVideo,
+          scheduled_for: scheduledIso,
+        },
+        {
+          clientId: upload.client_id as string,
+          accountId,
+          platform,
+          contentType: "story",
+          mediaUrl: publishUrl,
+          scheduledIso,
+        }
+      );
+      if (claim.kind === "duplicate") {
+        notes.push(`${label} — ${claim.message}.`);
+        if (claim.alreadyOut) alreadyOut++;
+        continue;
+      }
+      if (claim.kind === "error") {
+        failed++;
+        notes.push(`${label} — could not be scheduled: ${claim.message}`);
+        continue;
+      }
 
-    await settle(admin, claim.id, outcome, `[festival-story: ${festival.name}] ${detail}`);
+      const outcome = await sendToRecurPost(params);
+      const ok = outcome.status === "sent";
+      const detail = outcome.detail;
 
-    if (ok) scheduled++;
-    else {
-      failed++;
-      notes.push(`${platform} — could not be scheduled: ${detail.slice(0, 140)}`);
+      if (!ok) {
+        // RecurPost answers HTTP 200 with a 400 in the body and no indication of
+        // which field it objected to. Record what was actually sent — minus the
+        // account id — so the next failure is readable instead of another guess.
+        const sent = { ...params, id: "<account>" };
+        console.error(`festival story ${uploadId} ${label} rejected: ${detail} · sent ${JSON.stringify(sent).slice(0, 300)}`);
+      }
+
+      await settle(admin, claim.id, outcome, `[festival-story: ${festival.name}] ${detail}`);
+
+      if (ok) scheduled++;
+      else {
+        failed++;
+        notes.push(`${label} — could not be scheduled: ${detail.slice(0, 140)}`);
+      }
     }
   }
 
