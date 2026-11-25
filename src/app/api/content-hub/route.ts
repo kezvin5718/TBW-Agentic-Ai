@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { generateThumbnailFor } from "@/lib/video-thumbnail";
+import { kickCaptions } from "@/lib/caption-worker";
 import { storeContentHubUpload, deleteDriveFileByUrl } from "@/lib/google-drive";
 
 export const dynamic = "force-dynamic";
@@ -187,6 +188,9 @@ export async function POST(request: NextRequest) {
   if (mediaType === "video" && !thumbnailUrl && row?.id) {
     void generateThumbnailFor(row.id as string).catch((err: unknown) => console.error(`video thumbnail ${row.id}: could not start —`, err));
   }
+  // The caption starts writing now, in the background — queued by the
+  // database the moment the row was inserted, QC or no QC.
+  if (row?.caption_status === "pending") kickCaptions();
   return NextResponse.json({ success: true, upload: row });
 }
 

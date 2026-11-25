@@ -571,6 +571,11 @@ export async function POST(request: NextRequest) {
       g.slides.forEach((s) => taken.add(s.url));
       created.push({ ...row, slides: (slideRows || []).sort((a, b) => (a.slide_no as number) - (b.slide_no as number)) });
     }
+    // Each carousel is read slide by slide and captioned in the background.
+    if (created.length > 0) {
+      const { kickCaptions } = await import("@/lib/caption-worker");
+      kickCaptions();
+    }
     return NextResponse.json({ success: failed.length === 0, uploads: created, failed, skipped });
   }
 

@@ -28,6 +28,12 @@ interface UploadRow {
   thumbnail_status?: "pending" | "processing" | "completed" | "failed" | null;
   thumbnail_source?: "designer" | "matched" | "auto" | null;
   thumbnail_attempts?: number | null;
+  /** The automatic caption — written in the background as soon as it is uploaded. */
+  caption?: string | null;
+  caption_status?: string | null;
+  caption_source?: "ai" | "manual" | null;
+  caption_error?: string | null;
+  caption_attempts?: number | null;
   created_at: string;
   clients?: { name: string } | null;
   profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
@@ -52,6 +58,62 @@ interface StoryLite {
   status: string;
   created_at: string;
 }
+/** Three tries, then a person decides — the same limit the server keeps. */
+const CAPTION_TRIES = 3;
+/** The caption is still on its way: queued, being read, being written, or failed with a retry still to come. */
+const captionWorking = (u: UploadRow) =>
+  ["pending", "analysing", "writing"].includes(String(u.caption_status)) ||
+  (u.caption_status === "failed" && Number(u.caption_attempts || 0) < CAPTION_TRIES);
+
+/**
+ * Where a creative's automatic caption stands. Nobody presses anything to get
+ * one: it starts writing the moment the file lands, QC or no QC.
+ */
+function CaptionCell({ u, onRetry }: { u: UploadRow; onRetry: (id: string) => void }) {
+  const [copied, setCopied] = useState(false);
+  const st = String(u.caption_status || "");
+  const chip = "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap";
+  if (st === "skipped" || u.content_type === "story" || u.content_type === "thumbnail" || u.festival_id) {
+    return <span className="text-[10px] text-slate-600" title="Stories, thumbnails and festival creatives carry no caption">—</span>;
+  }
+  if (st === "pending") return <span className={`${chip} bg-slate-900 border border-slate-800 text-slate-400`}><Loader2 className="w-3 h-3 animate-spin" />Queued</span>;
+  if (st === "analysing") return <span className={`${chip} bg-indigo-950/40 border border-indigo-900 text-indigo-300`}><Loader2 className="w-3 h-3 animate-spin" />Analysing content</span>;
+  if (st === "writing") return <span className={`${chip} bg-indigo-950/40 border border-indigo-900 text-indigo-300`}><Loader2 className="w-3 h-3 animate-spin" />Generating caption</span>;
+  if (st === "no_contact") {
+    return <span title={u.caption_error || ""} className={`${chip} bg-amber-950/40 border border-amber-900 text-amber-400 cursor-help`}><AlertTriangle className="w-3 h-3" />No address on file</span>;
+  }
+  if (st === "failed") {
+    const tries = Number(u.caption_attempts || 0);
+    if (tries < CAPTION_TRIES) {
+      return <span title={u.caption_error || ""} className={`${chip} bg-amber-950/40 border border-amber-900 text-amber-400 cursor-help`}><Loader2 className="w-3 h-3 animate-spin" />Retrying ({tries} of {CAPTION_TRIES})</span>;
+    }
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <span title={u.caption_error || ""} className={`${chip} bg-rose-950/40 border border-rose-900 text-rose-400 cursor-help`}><AlertTriangle className="w-3 h-3" />Generation failed</span>
+        <button onClick={() => onRetry(u.id)} className="text-[10px] font-bold text-slate-300 hover:text-white underline underline-offset-2 cursor-pointer">Retry</button>
+      </span>
+    );
+  }
+  if (String(u.caption || "").trim()) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <span title={u.caption || ""} className={`${chip} bg-emerald-950/40 border border-emerald-900 text-emerald-400 cursor-help`}>
+          <CheckCircle2 className="w-3 h-3" />{u.caption_source === "manual" ? "Caption ready · edited" : "Caption ready"}
+        </span>
+        <button
+          onClick={async () => {
+            try { await navigator.clipboard.writeText(u.caption || ""); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* clipboard blocked */ }
+          }}
+          title="Copy the caption"
+          className="text-[10px] font-bold text-slate-400 hover:text-white cursor-pointer">
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </span>
+    );
+  }
+  return <span className="text-[10px] text-slate-600">—</span>;
+}
+
 /** What can carry a Story. A Story cannot carry another. */
 const STORY_HOLDERS = ["post", "reel", "carousel"];
 
@@ -611,6 +673,31 @@ export default function ContentHubPage() {
     }, 15_000);
     return () => clearInterval(timer);
   }, [thumbWaitKey, fetchUploads]);
+
+  // Captions write themselves in the background; while any on this list is
+  // still on its way, the list is read again every 10 seconds so the chip
+  // moves from Analysing to Ready without a reload. A quarter of an hour
+  // without anything new, and it stops asking.
+  const captionWaitKey = uploads.filter(captionWorking).map((u) => `${u.id}:${u.caption_status}`).join(",");
+  const captionWatch = useRef(0);
+  useEffect(() => {
+    if (!captionWaitKey) return;
+    captionWatch.current = Date.now();
+    const timer = setInterval(() => {
+      if (Date.now() - captionWatch.current > 15 * 60_000) { clearInterval(timer); return; }
+      fetchUploads();
+    }, 10_000);
+    return () => clearInterval(timer);
+  }, [captionWaitKey, fetchUploads]);
+
+  const retryCaption = async (id: string) => {
+    setUploads((prev) => prev.map((u) => (u.id === id ? { ...u, caption_status: "pending", caption_attempts: 0, caption_error: null } : u)));
+    try {
+      await fetch("/api/content-hub/caption", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, action: "retry" }) });
+    } finally {
+      await fetchUploads();
+    }
+  };
 
   // And the queue is nudged from here, at most once a minute, so it drains even
   // on a server running without the cron. Fire-and-forget: the answer only
@@ -2499,6 +2586,7 @@ export default function ContentHubPage() {
                   <th className="py-2 pr-3 font-bold">By</th>
                   <th className="py-2 pr-3 font-bold">Uploaded</th>
                   <th className="py-2 pr-3 font-bold">Brand QC</th>
+                  <th className="py-2 pr-3 font-bold">Caption</th>
                   <th className="py-2 pr-3 font-bold">Status</th>
                   <th className="py-2 pr-3 font-bold"></th>
                 </tr>
@@ -2603,6 +2691,9 @@ export default function ContentHubPage() {
                       {u.qc_status === "unsure" && <span title={u.qc_note || ""} className="px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400 text-[10px] font-bold cursor-help">? Unclear</span>}
                       {u.qc_status === "pending" && <span className="text-[10px] text-slate-500">checking…</span>}
                       {u.qc_status === "skipped" && <span title={u.qc_note || ""} className="text-[10px] text-slate-600">—</span>}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <CaptionCell u={u} onRetry={retryCaption} />
                     </td>
                     <td className="py-2 pr-3">
                       <span className="px-2 py-0.5 rounded-full bg-emerald-950/40 border border-emerald-900 text-emerald-400 text-[10px] font-bold capitalize">{u.status}</span>

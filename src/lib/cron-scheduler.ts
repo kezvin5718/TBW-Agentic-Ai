@@ -219,6 +219,28 @@ export function startCronScheduler() {
   }, { timezone: "Asia/Kolkata" });
   cronSchedulerStatus.jobsScheduledCount++;
 
+  // 6g. Captions (every 2 minutes) — every upload is captioned by itself, QC
+  // or no QC. Uploads also start their own run the moment they land; this is
+  // the backstop that retries failures, resumes jobs a restart cut off and
+  // re-queues brands whose address has since been added.
+  cron.schedule("*/2 * * * *", async () => {
+    try {
+      const { processPendingCaptions } = await import("@/lib/caption-worker");
+      const res = await processPendingCaptions(4);
+      cronSchedulerStatus.lastRun["captions"] = new Date().toISOString();
+      if (res.busy) return;
+      if (res.picked || res.recovered || res.requeued) {
+        await recordRun("captions", "ok", `${res.written} written, ${res.failed} failed of ${res.picked}${res.recovered ? `, ${res.recovered} resumed` : ""}${res.requeued ? `, ${res.requeued} re-queued` : ""}`);
+        console.log(`✅ In-App Cron: captions — ${res.written} written, ${res.failed} failed of ${res.picked}.`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("❌ In-App Cron: captions failed:", msg);
+      await recordRun("captions", "failed", msg);
+    }
+  }, { timezone: "Asia/Kolkata" });
+  cronSchedulerStatus.jobsScheduledCount++;
+
   // 6e. Send watchdog (every 5 minutes) — a send interrupted by a restart
   // leaves its row at "sending". Ten minutes on it becomes "uncertain": the
   // Library asks a person to check RecurPost's Queue, and nothing resends it

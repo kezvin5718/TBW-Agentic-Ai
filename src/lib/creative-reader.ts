@@ -1,6 +1,6 @@
 import { completeVision } from "@/lib/llm-vision";
 import { safeJsonParse } from "@/lib/llm";
-import { MODEL_CAPTIONS, CAPTIONS_REASONING_EFFORT } from "@/lib/llm-config";
+import { MODEL_CAPTIONS, MODEL_FAST, CAPTIONS_REASONING_EFFORT } from "@/lib/llm-config";
 import { downloadDriveFileByUrl } from "@/lib/google-drive";
 import sharp from "sharp";
 import { spawn } from "child_process";
@@ -30,6 +30,56 @@ export interface CreativeReading {
    */
   onCreativeText: string;
   framesRead: number;
+  /**
+   * What is SAID in a video — voiceover, dialogue, a presenter — transcribed in
+   * the language it is spoken. Empty when the clip is music only or silent.
+   */
+  audioTranscript: string;
+}
+
+/** The first three minutes are plenty for a reel, and keep the clip small. */
+const AUDIO_SECONDS = 180;
+const NO_SPEECH = "NO_SPEECH";
+
+/**
+ * Listen to a video's soundtrack and write down what is said.
+ *
+ * Reels carry their message in the voiceover as often as on screen — "flat 20%
+ * off this Dhanteras" is said, not printed. Bron has no Whisper key, so the
+ * clip goes to Gemini through OpenRouter, which hears Hindi, Gujarati and
+ * English mixed mid-sentence the way the clients actually speak.
+ *
+ * Never throws: a reel with no audio track, music only, or a failed call simply
+ * has no transcript, and the caption is still written from the frames.
+ */
+async function transcribeSoundtrack(videoPath: string, base: string, made: string[]): Promise<string> {
+  try {
+    const streams = await run("ffprobe", ["-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type", "-of", "csv=p=0", videoPath]);
+    if (!streams.trim()) return "";
+    const audioPath = `${base}-audio.mp3`;
+    made.push(audioPath);
+    // 16kHz mono — speech stays perfectly legible at a fraction of the size.
+    await run("ffmpeg", ["-y", "-i", videoPath, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", "-t", String(AUDIO_SECONDS), audioPath]);
+    const audio = await readFile(audioPath);
+    if (audio.length < 2000) return "";
+    const raw = await completeVision({
+      system: "You transcribe the soundtrack of short advertising videos for an Indian jewellery agency. You write down only words that are actually spoken or sung as lyrics, never describe the music, and never guess.",
+      prompt: `Transcribe every word spoken in this audio — voiceover, dialogue, a presenter — exactly as said, in the language it is spoken (Hindi, Gujarati, English or a mix; keep each in its own script). Copy prices, percentages, weights, dates and offer names exactly as heard.
+
+If there is no speech at all — only music, sound effects or silence — reply with exactly ${NO_SPEECH} and nothing else. Do not transcribe song lyrics of background music. Output only the transcript.`,
+      audioBase64: audio.toString("base64"),
+      audioFormat: "mp3",
+      purpose: "creative-audio",
+      model: MODEL_FAST,
+      maxTokens: 1500,
+    });
+    const text = String(raw || "").trim();
+    if (!text || text.toUpperCase().includes(NO_SPEECH)) return "";
+    return text.slice(0, 4000);
+  } catch (err: unknown) {
+    console.warn("creative reader: could not transcribe the soundtrack —", err instanceof Error ? err.message : err);
+    return "";
+  }
 }
 
 function run(cmd: string, args: string[]): Promise<string> {
@@ -66,7 +116,7 @@ const toDataUrl = async (buf: Buffer): Promise<string> => {
  * a card near the end. Reading a single early frame — which is what the caption
  * writer and QC both did — sees none of it.
  */
-async function videoFrames(buf: Buffer): Promise<string[]> {
+async function videoFrames(buf: Buffer, withAudio = false): Promise<{ frames: string[]; audioTranscript: string }> {
   const base = join(tmpdir(), `read-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
   const inPath = `${base}.video`;
   const made = [inPath];
@@ -93,7 +143,9 @@ async function videoFrames(buf: Buffer): Promise<string[]> {
         out.push(await toDataUrl(await readFile(framePath)));
       } catch { /* a frame that will not decode is skipped, not fatal */ }
     }
-    return out;
+    // The same file on disk serves the soundtrack — no second download.
+    const audioTranscript = withAudio ? await transcribeSoundtrack(inPath, base, made) : "";
+    return { frames: out, audioTranscript };
   } finally {
     await Promise.all(made.map((f) => rm(f, { force: true }).catch(() => {})));
   }
@@ -119,8 +171,8 @@ Copy text exactly as written — "₹45,999" stays "₹45,999", "22KT 916 Hallma
  * caption ends up describing a piece that is not in the video, or omitting the
  * price the creative is built around.
  */
-export async function readCreative(url: string, mediaType: string): Promise<CreativeReading> {
-  const empty: CreativeReading = { description: "", onCreativeText: "", framesRead: 0 };
+export async function readCreative(url: string, mediaType: string, opts: { audio?: boolean } = {}): Promise<CreativeReading> {
+  const empty: CreativeReading = { description: "", onCreativeText: "", framesRead: 0, audioTranscript: "" };
   try {
     const buf = await fetchBytes(url);
     const isVideo = mediaType === "video";
@@ -128,9 +180,35 @@ export async function readCreative(url: string, mediaType: string): Promise<Crea
       return { ...empty, description: "" };
     }
 
-    const images = isVideo ? await videoFrames(buf) : [await toDataUrl(buf)];
-    if (images.length === 0) return empty;
+    const video = isVideo ? await videoFrames(buf, opts.audio === true) : null;
+    const images = video ? video.frames : [await toDataUrl(buf)];
+    if (images.length === 0) return { ...empty, audioTranscript: video?.audioTranscript || "" };
+    const read = await readImages(images);
+    return { ...read, audioTranscript: video?.audioTranscript || "" };
+  } catch {
+    return empty;
+  }
+}
 
+/**
+ * A carousel is read slide by slide and reported as one piece: every slide's
+ * description in order, and every line of text from all of them. A caption
+ * written from the cover alone describes one necklace out of five.
+ */
+export async function readCarousel(urls: string[]): Promise<CreativeReading> {
+  const empty: CreativeReading = { description: "", onCreativeText: "", framesRead: 0, audioTranscript: "" };
+  const slides = urls.filter(Boolean).slice(0, MAX_FRAMES);
+  const images: string[] = [];
+  for (const u of slides) {
+    try { images.push(await toDataUrl(await fetchBytes(u))); } catch { /* one missing slide must not lose the rest */ }
+  }
+  if (images.length === 0) return empty;
+  const read = await readImages(images, true);
+  return { ...read, audioTranscript: "" };
+}
+
+/** Read each image, then merge: frames of one clip, or slides of one carousel. */
+async function readImages(images: string[], asSlides = false): Promise<Omit<CreativeReading, "audioTranscript">> {
     const descriptions: string[] = [];
     const texts: string[] = [];
 
@@ -143,7 +221,7 @@ export async function readCreative(url: string, mediaType: string): Promise<Crea
           model: MODEL_CAPTIONS, maxTokens: 1500, reasoningEffort: CAPTIONS_REASONING_EFFORT,
         });
         const v = safeJsonParse<{ description?: string; on_creative_text?: string }>(raw, {});
-        if (v.description) descriptions.push(String(v.description).trim());
+        if (v.description) descriptions.push(asSlides ? `Slide ${descriptions.length + 1}: ${String(v.description).trim()}` : String(v.description).trim());
         if (v.on_creative_text) texts.push(String(v.on_creative_text).trim());
       } catch { /* one unreadable frame must not lose the others */ }
     }
@@ -165,13 +243,11 @@ export async function readCreative(url: string, mediaType: string): Promise<Crea
       .join(" | ");
 
     return {
-      // The longest description is the most informative frame, rather than three
-      // near-identical ones concatenated.
-      description: descriptions.sort((a, b) => b.length - a.length)[0] || "",
+      // A clip's longest description is its most informative frame, rather than
+      // near-identical ones concatenated. A carousel's slides are different
+      // pieces, so every one is kept, in order.
+      description: asSlides ? descriptions.join("\n") : descriptions.sort((a, b) => b.length - a.length)[0] || "",
       onCreativeText: uniqueText,
       framesRead: images.length,
     };
-  } catch {
-    return empty;
-  }
 }

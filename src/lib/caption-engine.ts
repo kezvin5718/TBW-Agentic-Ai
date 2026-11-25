@@ -31,6 +31,8 @@ export interface CaptionInput {
   thumbnailUrl?: string;
   visionDescription?: string;
   onCreativeText?: string;
+  /** What is said in a video's soundtrack, when anything is. */
+  audioTranscript?: string;
 }
 
 export type CaptionEngineResult =
@@ -46,6 +48,28 @@ function splitPreferences(prefs: unknown[]): { notes: string[]; rules: Record<st
     else if (p && typeof p === "object") Object.assign(rules, p as Record<string, unknown>);
   }
   return { notes, rules };
+}
+
+/**
+ * Why this client cannot have a caption yet, or null when it can.
+ *
+ * The background writer asks this BEFORE reading a creative: a brand with no
+ * address on file would otherwise pay for ten frames of vision and a
+ * transcription, only to be refused at the last step — every sweep, forever.
+ */
+export async function contactGap(clientId: string | null | undefined): Promise<string | null> {
+  if (!clientId) return "This creative has no client yet — pick one in Content Hub.";
+  const admin = createServiceRoleClient();
+  const [{ data: client }, { data: brain }] = await Promise.all([
+    admin.from("clients").select("name").eq("id", clientId).maybeSingle(),
+    admin.from("brand_brain").select("addresses, no_phone").eq("client_id", clientId).maybeSingle(),
+  ]);
+  if (!client) return "This creative's client no longer exists.";
+  const addr = ((brain?.addresses as AddressEntry[]) || [])[0];
+  const missing = [!addr?.address && "address", !addr?.phone && brain?.no_phone !== true && "phone number"].filter(Boolean);
+  return missing.length
+    ? `${client.name} has no ${missing.join(" or ")} on file, and every caption must carry both. Add it in Brand Brain → ${client.name}.`
+    : null;
 }
 
 /**
@@ -74,6 +98,7 @@ export async function writeCaptionForClient(input: CaptionInput): Promise<Captio
   // alone. A price shown on screen never reached the caption.
   let visual = String(input.visionDescription || "").trim();
   let onCreativeText = String(input.onCreativeText || "").trim();
+  const spoken = String(input.audioTranscript || "").trim();
 
   if (!visual && !onCreativeText && mediaUrl) {
     try {
@@ -109,10 +134,11 @@ export async function writeCaptionForClient(input: CaptionInput): Promise<Captio
       code: "missing_contact",
     };
   }
-  // The founder's format (1 Oct): exactly 8 keywords and exactly 5 hashtags —
-  // unless a brand's own corrected rules say otherwise, which win as always.
+  // The founder's format (24 Nov, replacing 8 from 1 Oct): exactly 7 keywords
+  // and exactly 5 hashtags — unless a brand's own corrected rules say
+  // otherwise, which win as always.
   const hashtagCount = rules.hashtags || "exactly 5";
-  const keywordCount = rules.seo_keywords || "exactly 8";
+  const keywordCount = rules.seo_keywords || "exactly 7";
   const feedbackDigest = Array.isArray(brain?.feedback_log)
     ? (brain!.feedback_log as unknown[]).slice(-5).map((f) => (typeof f === "string" ? f : JSON.stringify(f))).join("\n")
     : "";
@@ -141,7 +167,12 @@ TEXT PRINTED ON THE CREATIVE, copied word for word:
 ${onCreativeText}
 
 These are the facts the creative itself is making. Any price, weight, purity, carat, discount, scheme name, date or offer above must appear in the caption EXACTLY as written — same number, same currency, same spelling. Do not round "₹45,999" to "45,000", do not turn "22KT 916 Hallmark" into "22 carat", and do not add a figure that is not in that list. If the creative names a price, the caption must not read as though it has no price.` : `
-No text was readable on the creative, so state no price, weight, purity, discount or offer of any kind${brief ? " unless the team's instructions below state it" : ""} — there is nothing else to take one from, and inventing one is the single worst thing this caption can do.`}
+No text was readable on the creative, so state no price, weight, purity, discount or offer of any kind${brief || spoken ? " unless the team's instructions or the clearly spoken words below state it" : ""} — there is nothing else to take one from, and inventing one is the single worst thing this caption can do.`}
+${spoken ? `
+WHAT IS SAID IN THE VIDEO (voiceover / dialogue, auto-transcribed — may contain small transcription slips):
+${spoken.slice(0, 2500)}
+
+Use it to understand the message, the occasion and the offer being made. An offer, price or date that is said clearly and unambiguously here counts as stated by the brand and may be used exactly as said; if a figure is unclear or could be a transcription slip, leave it out. Never quote the transcript or say "as mentioned in the video".` : ""}
 
 Brand tone: ${brain?.caption_tone || "professional, warm"}
 Target audience: ${client.target_audience || "general"}
@@ -174,7 +205,9 @@ Format the caption in EXACTLY this structure — a blank line between every bloc
 
 <ONE short hook line — a single line, engaging, natural, matched to the MOOD of this creative. Not a long sentence, not a generic AI opener, not the same style of opening every time. An emoji only if it suits this brand's tone.>
 <blank line>
-<the main passage: 2 to 3 natural lines written for the content type you identified — flowing like a professionally written Instagram caption, grounded only in what is actually visible and the supplied details.>
+<the main passage: 1 to 2 short, human, natural lines written for the content type you identified — flowing like a professionally written Instagram caption, grounded only in what is actually visible, said and supplied.>
+<blank line>
+<ONE short call-to-action line that suits this post — e.g. visit the store, call or WhatsApp to enquire, DM for details, or the brand's own approved CTA if its rules give one. It must not invent an offer, and must not contain the address, phone number or handle.>
 <blank line>
 🏷️ <${keywordCount} plain comma-separated SEO keyword phrases — lowercase, no # symbol, drawn from the brand, the content, the product or category, the offer when there is one, and the location. No near-duplicate keywords.>
 <blank line>
@@ -207,12 +240,12 @@ Output only the caption, nothing else — no options, no explanations.`,
   // corrected here rather than argued with.
   let text = caption.trim().replace(/\s*—\s*/g, ", ");
 
-  // Exactly 8 keywords and exactly 5 hashtags — enforced, not hoped for. Only
+  // Exactly 7 keywords and exactly 5 hashtags — enforced, not hoped for. Only
   // when the brand has no override of its own: a founder-corrected count wins.
   if (!rules.seo_keywords) {
     text = text.replace(/^(\s*🏷️\s*)(.+)$/mu, (_, pre: string, list: string) => {
       const parts = list.split(",").map((s) => s.trim()).filter(Boolean);
-      return pre + parts.slice(0, 8).join(", ");
+      return pre + parts.slice(0, 7).join(", ");
     });
   }
   if (!rules.hashtags) {

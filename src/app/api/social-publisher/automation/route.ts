@@ -82,7 +82,7 @@ export async function GET(request: NextRequest) {
   const risk = request.nextUrl.searchParams.get("risk") === "1";
 
   const admin = createServiceRoleClient();
-  const COLUMNS = "id, file_url, file_name, media_type, content_type, caption, caption_status, qc_status, qc_note, rejected_reason, risk_accepted_at, thumbnail_url, created_at, linked_story_id, story_link_source";
+  const COLUMNS = "id, file_url, file_name, media_type, content_type, caption, caption_status, caption_source, caption_error, caption_attempts, qc_status, qc_note, rejected_reason, risk_accepted_at, thumbnail_url, created_at, linked_story_id, story_link_source";
   const { data, error } = await admin
     .from("creative_uploads")
     .select(COLUMNS)

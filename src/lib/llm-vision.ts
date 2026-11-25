@@ -12,6 +12,8 @@ export async function completeVision({
   imageDataUrl,
   fileDataUrl,
   fileName,
+  audioBase64,
+  audioFormat,
   model,
   maxTokens,
   purpose,
@@ -24,6 +26,9 @@ export async function completeVision({
   /** A PDF as a data URI (data:application/pdf;base64,…) — Gemini reads these natively. */
   fileDataUrl?: string;
   fileName?: string;
+  /** Audio as raw base64 (no data: prefix) — Gemini listens to it natively. */
+  audioBase64?: string;
+  audioFormat?: "mp3" | "wav";
   model?: string;
   maxTokens?: number;
   /** What this call is for, in Credit Logs terms. */
@@ -36,9 +41,11 @@ export async function completeVision({
     return JSON.stringify({ verdict: "unsure", detected_brand: "unknown", reason: "OPENROUTER_API_KEY not set (mock mode)" });
   }
 
-  const attachment = fileDataUrl
-    ? { type: "file", file: { filename: fileName || "document.pdf", file_data: fileDataUrl } }
-    : { type: "image_url", image_url: { url: imageDataUrl } };
+  const attachment = audioBase64
+    ? { type: "input_audio", input_audio: { data: audioBase64, format: audioFormat || "mp3" } }
+    : fileDataUrl
+      ? { type: "file", file: { filename: fileName || "document.pdf", file_data: fileDataUrl } }
+      : { type: "image_url", image_url: { url: imageDataUrl } };
 
   const messages: Array<Record<string, unknown>> = [];
   if (system) messages.push({ role: "system", content: system });

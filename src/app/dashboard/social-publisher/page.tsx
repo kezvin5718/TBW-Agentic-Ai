@@ -10,7 +10,37 @@ import GridAds from "./GridAds";
 import { uploadDirect } from "@/lib/direct-upload";
 
 /** One creative's answer from the caption writer. */
-interface CaptionResult { id: string; ok: boolean; caption?: string; error?: string }
+interface CaptionResult { id: string; ok: boolean; caption?: string; error?: string; busy?: boolean }
+
+/** Three tries, then a person decides — the same limit the server keeps. */
+const CAPTION_TRIES = 3;
+/** Still on its way from the background writer: queued, reading, writing, or failed with a retry to come. */
+const captionOnItsWay = (r: { caption_status?: string | null; caption_attempts?: number | null }) =>
+  ["pending", "analysing", "writing"].includes(String(r.caption_status)) ||
+  (r.caption_status === "failed" && Number(r.caption_attempts || 0) < CAPTION_TRIES);
+
+/** Where one Automation row's caption stands, in a few words. */
+function CaptionStatus({ r, big = false }: { r: { caption?: string | null; caption_status?: string | null; caption_source?: string | null; caption_error?: string | null; caption_attempts?: number | null }; big?: boolean }) {
+  const st = String(r.caption_status || "");
+  const size = big ? "text-[13px] px-2.5 py-0.5" : "text-[9px] px-1.5 py-0.5";
+  const chip = `inline-flex items-center gap-1 rounded-full font-bold whitespace-nowrap ${size}`;
+  const spin = <Loader2 className={`${big ? "w-3.5 h-3.5" : "w-2.5 h-2.5"} animate-spin`} />;
+  if (st === "pending") return <span className={`${chip} bg-slate-900 border border-slate-800 text-slate-400`}>{spin}Caption queued</span>;
+  if (st === "analysing") return <span className={`${chip} bg-indigo-950/40 border border-indigo-900 text-indigo-300`}>{spin}Analysing content</span>;
+  if (st === "writing") return <span className={`${chip} bg-indigo-950/40 border border-indigo-900 text-indigo-300`}>{spin}Generating caption</span>;
+  if (st === "no_contact") {
+    return <span title={r.caption_error || ""} className={`${chip} bg-rose-950/40 border border-rose-900 text-rose-400 cursor-help`}>No address/phone on file — add it in Brand Brain</span>;
+  }
+  if (st === "failed") {
+    return Number(r.caption_attempts || 0) < CAPTION_TRIES
+      ? <span title={r.caption_error || ""} className={`${chip} bg-amber-950/40 border border-amber-900 text-amber-400 cursor-help`}>{spin}Retrying caption ({r.caption_attempts} of {CAPTION_TRIES})</span>
+      : <span title={r.caption_error || ""} className={`${chip} bg-rose-950/40 border border-rose-900 text-rose-400 cursor-help`}>Generation failed — press ✨ to retry</span>;
+  }
+  if (st === "done" && String(r.caption || "").trim()) {
+    return <span className={`${chip} bg-emerald-950/40 border border-emerald-900 text-emerald-400`}>{r.caption_source === "manual" ? "Caption edited" : "Caption ready"}</span>;
+  }
+  return null;
+}
 
 /**
  * A caption box that grows to fit what is in it.
@@ -21,10 +51,11 @@ interface CaptionResult { id: string; ok: boolean; caption?: string; error?: str
  * captions arrive from the writer long after the box first rendered.
  */
 function AutoTextarea({
-  value, onChange, rows = 3, className = "", placeholder, disabled,
+  value, onChange, onBlur, rows = 3, className = "", placeholder, disabled,
 }: {
   value: string;
   onChange: (next: string) => void;
+  onBlur?: () => void;
   rows?: number;
   className?: string;
   placeholder?: string;
@@ -52,6 +83,7 @@ function AutoTextarea({
       ref={ref}
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      onBlur={onBlur}
       rows={rows}
       placeholder={placeholder}
       disabled={disabled}
@@ -68,6 +100,8 @@ interface HubUpload {
   thumbnail_url?: string | null;
   thumbnail_status?: string | null; thumbnail_source?: string | null; thumbnail_attempts?: number | null;
   qc_status?: string; qc_detected_brand?: string | null; qc_note?: string | null;
+  /** The caption the background writer saved — dropped into the composer on pick. */
+  caption?: string | null; caption_status?: string | null;
   created_at: string; clients?: { name: string } | null;
   profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
 }
@@ -493,6 +527,10 @@ export default function SocialPublisherPage() {
     setMediaIsVideo(u.media_type === "video");
     setContentTypes([u.content_type]);
     setSelectedUpload({ id: u.id, name: u.file_name || "Content Hub file" });
+    // The caption was written the moment this was uploaded — it comes with it,
+    // unless someone has already started typing one here.
+    const saved = String(u.caption || "").trim();
+    if (saved && u.content_type !== "story") setCaption((c) => (c.trim() ? c : saved));
 
     // Auto-suggest the designer's cover whose number matches this reel.
     const n = numOf(u.file_name);
@@ -921,6 +959,10 @@ export default function SocialPublisherPage() {
     id: string; file_url: string; file_name: string | null;
     media_type: string; content_type: string;
     caption: string | null; caption_status: string;
+    /** Whose caption it is: written in the background ("ai") or by a person ("manual"). */
+    caption_source?: "ai" | "manual" | null;
+    caption_error?: string | null;
+    caption_attempts?: number | null;
     thumbnail_url: string | null; created_at: string;
     /** Risk mode only: QC refused this one, and why. */
     rejected?: boolean; rejected_reason?: string | null; qc_note?: string | null;
@@ -1020,6 +1062,46 @@ export default function SocialPublisherPage() {
    * The background writer this screen was built to wait on has never produced a
    * caption in production, so the team needs to be able to ask for them.
    */
+  /**
+   * A caption has been written for this row — by the background writer, or by
+   * a button here. It goes into the box unless a person has typed in it, and
+   * the row stops saying "Analysing…".
+   */
+  const captionArrived = (id: string, caption: string, source: "ai" | "manual", replace = false) => {
+    savedCaptions.current[id] = caption;
+    if (replace) touchedCaptions.current.delete(id);
+    if (replace || !touchedCaptions.current.has(id)) setAutoCaptions((c) => ({ ...c, [id]: caption }));
+    setAutoRows((rows) => rows.map((r) => (r.id === id ? { ...r, caption, caption_status: "done", caption_source: source, caption_error: null } : r)));
+  };
+
+  /** Leaving a caption box saves what was typed as the team's own caption — the background writer never touches it again. */
+  const saveCaptionEdit = async (id: string) => {
+    const value = autoCaptions[id] ?? "";
+    if (value === (savedCaptions.current[id] ?? "")) return;
+    try {
+      const res = await fetch("/api/content-hub/caption", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, caption: value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not save the caption");
+      savedCaptions.current[id] = value;
+      if (!data.unchanged) {
+        setAutoRows((rows) => rows.map((r) => (r.id === id ? { ...r, caption: value, caption_status: "done", caption_source: "manual", caption_error: null } : r)));
+      }
+    } catch (err: unknown) {
+      setCaptionErrors((e) => ({ ...e, [id]: `not saved — ${err instanceof Error ? err.message : "try again"}` }));
+    }
+  };
+
+  const copyCaption = async (id: string) => {
+    try {
+      await navigator.clipboard.writeText(autoCaptions[id] ?? "");
+      setCopiedCaption(id);
+      setTimeout(() => setCopiedCaption((c) => (c === id ? null : c)), 1500);
+    } catch { /* clipboard blocked — the text is still there to select */ }
+  };
+
   const writeAllCaptions = async (force = false) => {
     const todo = orderedRows
       .filter((r) => r.content_type !== "story" && (force || !(autoCaptions[r.id] ?? "").trim()))
@@ -1050,7 +1132,8 @@ export default function SocialPublisherPage() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not write the captions");
         for (const out of (data.results || []) as CaptionResult[]) {
-          if (out.ok && out.caption) setAutoCaptions((c) => ({ ...c, [out.id]: out.caption as string }));
+          if (out.ok && out.caption) captionArrived(out.id, out.caption, "ai");
+          else if (out.busy) continue; // the background writer has it — the box fills by itself
           else {
             failed++;
             setCaptionErrors((e) => ({ ...e, [out.id]: out.error || "could not be written" }));
@@ -1086,7 +1169,7 @@ export default function SocialPublisherPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not write the caption");
       const out = ((data.results || []) as CaptionResult[])[0];
-      if (out?.ok && out.caption) setAutoCaptions((c) => ({ ...c, [id]: out.caption as string }));
+      if (out?.ok && out.caption) captionArrived(id, out.caption, "ai", true);
       else setCaptionErrors((e) => ({ ...e, [id]: out?.error || "could not be written" }));
     } catch (err: unknown) {
       setCaptionErrors((e) => ({ ...e, [id]: err instanceof Error ? err.message : "could not be written" }));
@@ -1094,6 +1177,12 @@ export default function SocialPublisherPage() {
   };
 
   const [autoCaptions, setAutoCaptions] = useState<Record<string, string>>({});
+  // What the server holds for each caption box, so leaving a box unchanged is
+  // not saved as an edit, and which boxes a person has typed in — those are
+  // never replaced by a caption arriving from the background writer.
+  const savedCaptions = useRef<Record<string, string>>({});
+  const touchedCaptions = useRef<Set<string>>(new Set());
+  const [copiedCaption, setCopiedCaption] = useState<string | null>(null);
   const [autoSkip, setAutoSkip] = useState<Set<string>>(new Set());
 
   // A video living on Drive has to be copied out of Drive before it can be
@@ -1126,6 +1215,8 @@ export default function SocialPublisherPage() {
       setAutoRejected(data.rejected || 0);
       setAutoRejectedNames(data.rejectedNames || []);
       setAutoCaptions(Object.fromEntries(rows.map((r) => [r.id, r.caption || ""])));
+      savedCaptions.current = Object.fromEntries(rows.map((r) => [r.id, r.caption || ""]));
+      touchedCaptions.current = new Set();
       setAutoOrder(rows.map((r) => r.id));
       setAutoDates({});
       setAutoTimes({});
@@ -1152,6 +1243,39 @@ export default function SocialPublisherPage() {
   useEffect(() => { if (view === "automation" && autoClient) loadAutomation(autoClient, autoMode); }, [view, autoClient, autoMode, loadAutomation]);
   // Switching client drops you back to the safe list.
   useEffect(() => { setAutoMode("clear"); }, [autoClient]);
+
+  // Captions write themselves in the background. While any row's is still on
+  // its way, ask every 8 seconds where they stand — only those rows, so the
+  // dates, order and edits on screen are never thrown away by a reload.
+  const captionWaitIds = autoRows.filter((r) => r.content_type !== "story" && captionOnItsWay(r)).map((r) => r.id).join(",");
+  useEffect(() => {
+    if (!captionWaitIds) return;
+    let stop = false;
+    const startedAt = Date.now();
+    const tick = async () => {
+      if (stop || Date.now() - startedAt > 20 * 60_000) return;
+      try {
+        const res = await fetch(`/api/content-hub/caption?ids=${encodeURIComponent(captionWaitIds)}`, { cache: "no-store" });
+        const data = await res.json();
+        if (!res.ok || stop) return;
+        type Live = { id: string; caption: string | null; caption_status: string; caption_source: "ai" | "manual" | null; caption_error: string | null; caption_attempts: number | null };
+        for (const live of (data.captions || []) as Live[]) {
+          if (live.caption_status === "done" && String(live.caption || "").trim()) {
+            captionArrived(live.id, live.caption as string, live.caption_source === "manual" ? "manual" : "ai");
+          } else {
+            setAutoRows((rows) => rows.map((r) => (r.id === live.id
+              ? { ...r, caption_status: live.caption_status, caption_error: live.caption_error, caption_attempts: live.caption_attempts }
+              : r)));
+          }
+        }
+      } catch { /* the next tick tries again */ }
+    };
+    const timer = setInterval(tick, 8000);
+    void tick();
+    return () => { stop = true; clearInterval(timer); };
+    // captionArrived only touches state setters and refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [captionWaitIds]);
 
   // Where each waiting video's automatic frame stands. The Automation list does
   // not carry it, and re-reading the list would throw away every date, caption
@@ -2810,12 +2934,7 @@ export default function SocialPublisherPage() {
                             ▣ {autoSlideCount(r)} slides
                           </span>
                         )}
-                        {r.caption_status === "failed" && <span className="text-[9px] font-bold text-amber-400">caption failed — write one</span>}
-                        {r.caption_status === "no_contact" && (
-                          <span className="text-[9px] font-bold text-rose-400" title="Every caption must carry the address and phone">
-                            no address/phone on file — add it in Brand Brain
-                          </span>
-                        )}
+                        {r.content_type !== "story" && <CaptionStatus r={r} />}
                         {r.risk_accepted_at && (
                           <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-amber-950/40 border border-amber-900 text-amber-400">
                             posted against QC advice
@@ -2852,12 +2971,20 @@ export default function SocialPublisherPage() {
                           <div className={`flex items-start gap-1.5 ${as === "story" ? "opacity-40" : ""}`}>
                             <AutoTextarea
                               value={autoCaptions[r.id] ?? ""}
-                              onChange={(v) => setAutoCaptions((c) => ({ ...c, [r.id]: v }))}
+                              onChange={(v) => { touchedCaptions.current.add(r.id); setAutoCaptions((c) => ({ ...c, [r.id]: v })); }}
+                              onBlur={() => saveCaptionEdit(r.id)}
                               rows={3}
                               disabled={as === "story"}
-                              placeholder="Click ✨ or 'Write all captions' to generate…"
+                              placeholder={captionOnItsWay(r) ? "Writing itself in the background — it appears here when ready…" : "Click ✨ or 'Write all captions' to generate…"}
                               className="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500 leading-relaxed disabled:cursor-not-allowed"
                             />
+                            <button
+                              onClick={() => copyCaption(r.id)}
+                              disabled={!(autoCaptions[r.id] ?? "").trim()}
+                              title="Copy this caption"
+                              className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg border border-slate-800 bg-slate-950 text-slate-500 hover:text-white hover:border-slate-700 cursor-pointer disabled:opacity-40">
+                              {copiedCaption === r.id ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                            </button>
                             <button
                               onClick={() => regenerateCaption(r.id)}
                               disabled={regenId === r.id || writeAllBusy || as === "story"}
