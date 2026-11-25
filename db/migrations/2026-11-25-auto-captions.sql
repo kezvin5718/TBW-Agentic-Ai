@@ -79,12 +79,7 @@ update public.creative_uploads
    set caption_status = 'skipped'
  where (festival_id is not null or content_type in ('story', 'thumbnail'))
    and coalesce(caption_status, 'none') in ('none', 'failed', 'no_contact');
--- Backfill: everything not yet posted that has no caption, whatever its QC
--- status. Already-posted creatives are left alone — they are out.
-update public.creative_uploads
-   set caption_status = 'pending', caption_attempts = 0, caption_error = null
- where status in ('uploaded', 'rejected')
-   and festival_id is null
-   and coalesce(content_type, 'post') not in ('story', 'thumbnail')
-   and coalesce(btrim(caption), '') = ''
-   and coalesce(caption_status, 'none') in ('none', 'failed', 'no_contact');
+-- No backfill. The founder's call (25 Nov): only NEW uploads get an automatic
+-- caption; everything uploaded before this went live stays as it was. (A
+-- backfill ran for a few minutes and was reversed before any caption was
+-- written: those rows went back to caption_status 'none'.)
