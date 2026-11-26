@@ -116,6 +116,7 @@ interface PostRow {
   // still in RecurPost until someone deletes it there.
   duplicate_of?: string | null;
   duplicate_resolution_status?: "manual_removal_required" | "resolved" | "ignored" | null;
+  client_id?: string | null;
   created_at: string; clients?: { name: string } | null;
   profiles?: { name: string; avatar_url?: string | null; designation?: string | null } | null;
 }
@@ -480,17 +481,43 @@ export default function SocialPublisherPage() {
     }
   };
 
+  // The Library's client — a client's own posts are read for them alone, so
+  // nobody's are pushed off the list by other clients' busier weeks. Held in a
+  // ref too, because every send and edit reloads the history through this one
+  // loader and must reload the client being looked at.
+  const [libClient, setLibClientState] = useState<string>(() => {
+    try { return localStorage.getItem("tbw.library.client") || "all"; } catch { return "all"; }
+  });
+  const libClientRef = useRef(libClient);
+  const [libCounts, setLibCounts] = useState<{ total: number; published: number; scheduled: number; failed: number; queued: number; pendingQc: number } | null>(null);
+  const [libLoading, setLibLoading] = useState(false);
   const loadHistory = useCallback(async () => {
+    const forClient = libClientRef.current;
     try {
-      const res = await fetch("/api/social-publisher");
+      const res = await fetch(forClient !== "all" ? `/api/social-publisher?clientId=${encodeURIComponent(forClient)}` : "/api/social-publisher");
       if (!res.ok) return;
-      const fresh: PostRow[] = (await res.json()).posts || [];
+      const body = await res.json();
+      // A slow answer for a client someone has since moved away from is dropped.
+      if (libClientRef.current !== forClient) return;
+      const fresh: PostRow[] = body.posts || [];
       setPosts(fresh);
+      setLibCounts(body.counts || null);
       // The open detail panel is a snapshot — re-point it at the reloaded row so
       // an edit's consequences (the RecurPost cleanup warning) actually show.
       setLibSel((sel) => (sel ? fresh.find((p) => p.id === sel.id) || null : null));
-    } catch { /* ignore */ }
+    } catch { /* ignore */ } finally {
+      if (libClientRef.current === forClient) setLibLoading(false);
+    }
   }, []);
+  /** Pick the Library's client: remembered for next time, and read at once. */
+  const setLibClient = (id: string) => {
+    libClientRef.current = id;
+    setLibClientState(id);
+    setLibLoading(true);
+    setLibCounts(null);
+    try { localStorage.setItem("tbw.library.client", id); } catch { /* private mode */ }
+    void loadHistory();
+  };
 
   const loadHubUploads = useCallback(async () => {
     try {
@@ -1554,8 +1581,17 @@ export default function SocialPublisherPage() {
     } finally { setAutoSending(false); }
   };
   const [libFilter, setLibFilter] = useState<"all" | "scheduled" | "posted" | "failed">("all");
-  const [libClient, setLibClient] = useState("all");
   const [libSel, setLibSel] = useState<PostRow | null>(null);
+  // What is typed in the Library's client search; the client itself is libClient.
+  const [libClientQuery, setLibClientQuery] = useState("All clients");
+  useEffect(() => {
+    if (libClient === "all") { setLibClientQuery("All clients"); return; }
+    const name = clients.find((c) => c.id === libClient)?.name;
+    if (name) setLibClientQuery(name);
+    // A remembered client that no longer exists (archived) falls back to all.
+    else if (clients.length > 0) setLibClient("all");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [libClient, clients]);
   const [verifying, setVerifying] = useState(false);
   const [editing, setEditing] = useState<{
     id: string; title: string; caption: string; mediaUrl: string;
@@ -1584,7 +1620,7 @@ export default function SocialPublisherPage() {
 
   const isFuture = (p: PostRow) => !!p.scheduled_for && new Date(p.scheduled_for).getTime() > Date.now();
   const libRows = posts.filter((p) => {
-    if (libClient !== "all" && (p.clients?.name || "") !== libClient) return false;
+    if (libClient !== "all" && p.client_id !== libClient) return false;
     if (libFilter === "failed") return p.status === "failed";
     if (libFilter === "scheduled") return ["sent", "published"].includes(p.status) && isFuture(p);
     if (libFilter === "posted") return ["sent", "published"].includes(p.status) && !isFuture(p);
@@ -3538,11 +3574,53 @@ export default function SocialPublisherPage() {
                 {verifying ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
                 <span>{verifying ? "Checking…" : "Check what actually published"}</span>
               </button>
-              <select value={libClient} onChange={(e) => setLibClient(e.target.value)} className="text-[11px] max-w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 min-h-[40px] lg:min-h-0 text-white cursor-pointer focus:outline-none">
-                <option value="all">All clients</option>
-                {Array.from(new Set(posts.map((p) => p.clients?.name).filter(Boolean))).sort().map((n) => <option key={n} value={n as string}>{n}</option>)}
-              </select>
+              {/* Every client in the software, A–Z — read from the clients list
+                  itself, never from the posts on screen, so a client with
+                  nothing posted yet is still here and the status filters can
+                  never shrink the list. Type to search. */}
+              <input
+                list="library-clients"
+                value={libClientQuery}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setLibClientQuery(v);
+                  if (v.trim() === "" || v === "All clients") { if (libClient !== "all") setLibClient("all"); return; }
+                  const hit = clients.find((c) => c.name.toLowerCase() === v.trim().toLowerCase());
+                  if (hit && hit.id !== libClient) setLibClient(hit.id);
+                }}
+                onFocus={(e) => e.currentTarget.select()}
+                onBlur={() => setLibClientQuery(libClient === "all" ? "All clients" : clients.find((c) => c.id === libClient)?.name || "All clients")}
+                placeholder="Search clients…"
+                title="Every client — type to search"
+                className="text-[11px] w-56 max-w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 min-h-[40px] lg:min-h-0 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+              />
+              <datalist id="library-clients">
+                <option value="All clients" />
+                {[...clients].sort((a, b) => a.name.localeCompare(b.name)).map((c) => <option key={c.id} value={c.name} />)}
+              </datalist>
             </div>
+
+            {/* One client's numbers, counted in the database — zero where
+                there is nothing, never hidden. */}
+            {libClient !== "all" && (
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 border-t border-slate-900 pt-3">
+                {([
+                  { k: "total", label: "Total posts", cls: "text-white" },
+                  { k: "published", label: "Published", cls: "text-emerald-500" },
+                  { k: "scheduled", label: "Scheduled", cls: "text-blue-500" },
+                  { k: "queued", label: "Queued", cls: "text-slate-300", hint: "QC-approved in the Content Hub, not yet scheduled" },
+                  { k: "pendingQc", label: "Pending QC", cls: "text-slate-400", hint: "In the Content Hub, waiting for brand QC" },
+                  { k: "failed", label: "Failed", cls: "text-rose-500" },
+                ] as const).map((c) => (
+                  <div key={c.k} title={"hint" in c ? c.hint : undefined} className="rounded-xl border border-slate-900 bg-slate-950/60 px-3 py-2">
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{c.label}</p>
+                    <p className={`text-xl font-extrabold tabular-nums ${c.cls}`}>
+                      {libCounts ? libCounts[c.k] : <Loader2 className="w-4 h-4 animate-spin inline text-slate-600" />}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* View toggle + month navigation */}
             <div className="flex items-center gap-3 flex-wrap border-t border-slate-900 pt-3">
@@ -3716,8 +3794,21 @@ export default function SocialPublisherPage() {
                   </div>
                 </div>
               );
-            })() : libRows.length === 0 ? (
-              <p className="text-xs text-slate-600 py-10 text-center">Nothing here yet.</p>
+            })() : libLoading ? (
+              <p className="text-xs text-slate-500 py-10 text-center"><Loader2 className="w-4 h-4 animate-spin inline mr-2" />Loading this client&apos;s posts…</p>
+            ) : libRows.length === 0 ? (
+              libClient !== "all" && posts.length === 0 ? (
+                <div className="py-10 text-center space-y-3">
+                  <p className="text-sm text-slate-400">No content available for this client.</p>
+                  <div className="flex items-center justify-center gap-2 flex-wrap">
+                    <a href="/dashboard/content-hub" className="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white">Upload in Content Hub</a>
+                    <button onClick={() => { setClientId(libClient); setView("compose"); }}
+                      className="px-3.5 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-bold text-slate-300 hover:text-white cursor-pointer">Compose a post</button>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-600 py-10 text-center">Nothing here for this filter.</p>
+              )
             ) : (
               <div className="space-y-2">
                 {libRows.map((p) => {

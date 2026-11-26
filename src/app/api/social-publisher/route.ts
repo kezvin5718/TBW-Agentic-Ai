@@ -47,19 +47,57 @@ function pinterestTitle(title?: string | null, caption?: string | null): string 
   return (firstLine || "New pin").slice(0, 100);
 }
 
-// GET — post history (newest first).
-export async function GET() {
+// GET — post history (newest first). ?clientId= narrows it to one client and
+// adds that client's live counts — the Library's client view.
+export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const clientId = new URL(request.url).searchParams.get("clientId");
   const SELECT = "*, clients(name), profiles:created_by(name, avatar_url, designation)";
-  const { data, error } = await supabase
+  // All clients together: the newest 60 is a feed. One client: everything
+  // recent of theirs, so a client's posts are never pushed off the screen by
+  // forty other clients' busier weeks.
+  let q = supabase
     .from("social_posts")
     .select(SELECT)
     .order("created_at", { ascending: false })
-    .limit(60);
+    .limit(clientId ? 500 : 60);
+  if (clientId) q = q.eq("client_id", clientId);
+  const { data, error } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  if (clientId) {
+    // Live counts for the client's summary cards — counted in the database,
+    // not from the rows on screen, and zero when there is nothing.
+    const nowIso = new Date().toISOString();
+    const count = async (build: (b: ReturnType<typeof base>) => ReturnType<typeof base>) => {
+      const { count: n } = await build(base());
+      return n || 0;
+    };
+    const base = () => supabase.from("social_posts").select("id", { count: "exact", head: true }).eq("client_id", clientId).is("duplicate_of", null);
+    const hub = () => supabase.from("creative_uploads").select("id", { count: "exact", head: true }).eq("client_id", clientId).is("festival_id", null).neq("content_type", "thumbnail");
+    const [total, published, scheduled, failed, queued, pendingQc] = await Promise.all([
+      count((b) => b),
+      count((b) => b.in("status", ["sent", "published"]).or(`scheduled_for.is.null,scheduled_for.lte.${nowIso}`)),
+      count((b) => b.in("status", ["sent", "published"]).gt("scheduled_for", nowIso)),
+      count((b) => b.eq("status", "failed")),
+      // Waiting in the Content Hub, QC-approved, not yet scheduled — the next
+      // run of Automation.
+      hub().eq("status", "uploaded").eq("qc_status", "match").then((r) => r.count || 0),
+      hub().eq("status", "uploaded").eq("qc_status", "pending").then((r) => r.count || 0),
+    ]);
+    const { data: flaggedOne } = await supabase
+      .from("social_posts").select(SELECT).eq("client_id", clientId)
+      .eq("duplicate_resolution_status", "manual_removal_required").limit(200);
+    const seenOne = new Set((data || []).map((p) => p.id));
+    return NextResponse.json({
+      success: true,
+      posts: [...(data || []), ...(flaggedOne || []).filter((p) => !seenOne.has(p.id))],
+      counts: { total, published, scheduled, failed, queued, pendingQc },
+    });
+  }
 
   // Every duplicate still waiting to be removed in RecurPost, however old.
   // The Library only reads the newest 60, and a copy flagged last month is
