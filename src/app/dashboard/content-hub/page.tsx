@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import Avatar from "../Avatar";
 import { UploadCloud, Image as ImageIcon, Film, Smartphone, Loader2, CheckCircle2, AlertTriangle, Trash2, Sparkles, Layers } from "lucide-react";
 import { fmtIST } from "@/lib/time";
+import { parsePostName } from "@/lib/post-naming";
 
 interface ClientRow { id: string; name: string }
 interface UploadRow {
@@ -226,22 +227,28 @@ interface CarouselGroup {
   slides: PoolImage[];
   coverUrl: string;
   /** How it was grouped — the card says so, because "by sight" is a claim to check. */
-  source: "filename" | "markers" | "sight" | "hand";
+  source: "letters" | "filename" | "markers" | "sight" | "hand";
   /** Grouped by sight alone: saved as one carousel only on a person's explicit yes. */
   needsYes: boolean;
   yes: boolean;
   /** Someone moved a slide — the order on screen is theirs now. */
   arranged: boolean;
   note?: string;
+  /** "Post 3" — the post's number in the month, from the filenames. */
+  postNumber?: number | null;
+  /** Slides joining a carousel already in the hub ("Post 1E" after 1A–1D). */
+  appendTo?: { id: string; name: string | null; labels: string[] } | null;
 }
 interface DetectedGroup {
   post_type: "carousel" | "single";
   requires_review: boolean;
-  source: "filename" | "markers" | "sight" | null;
-  slides: Array<{ slide_number: number | null; filename: string; url: string }>;
+  source: "letters" | "filename" | "markers" | "sight" | null;
+  slides: Array<{ slide_number: number | null; filename: string; url: string; label?: string | null }>;
   missing_slides: number[];
   duplicate_slides: number[];
   note?: string;
+  post_number?: number | null;
+  append_to?: { id: string; name: string | null; labels: string[] } | null;
 }
 /** "N slides" — read from the slides when the list carried them, else from the name the row was saved with. */
 const slideCountOf = (u: UploadRow) =>
@@ -1066,8 +1073,10 @@ export default function ContentHubPage() {
     setCarIssues([]);
     setCarPicked([]);
     setCarSightDown(false);
-    // One survived the upload: nothing to group it with, so it is simply a post.
-    if (pool.length < 2) { setCarSingles(pool); setCarState("done"); return out(failedNames, true); }
+    // One survived the upload: nothing to group it with, so it is simply a post —
+    // unless it is a lettered slide ("Post 1E"), which may join a carousel
+    // already in the hub.
+    if (pool.length < 2 && !parsePostName(pool[0].name).slideLetter) { setCarSingles(pool); setCarState("done"); return out(failedNames, true); }
 
     setCarSingles([]);
     setCarState("detecting");
@@ -1088,11 +1097,14 @@ export default function ContentHubPage() {
       for (const g of data.groups as DetectedGroup[]) {
         const imgs = g.slides.map((s) => byUrl.get(s.url)).filter((x): x is PoolImage => !!x && !seen.has(x.url));
         imgs.forEach((i) => seen.add(i.url));
-        if (g.post_type === "carousel" && imgs.length >= 2) {
+        if (g.post_type === "carousel" && (imgs.length >= 2 || (g.append_to && imgs.length >= 1))) {
           groups.push({
             id: crypto.randomUUID(), slides: imgs, coverUrl: imgs[0].url,
             source: g.source || "sight", needsYes: !!g.requires_review, yes: false, arranged: false, note: g.note,
+            postNumber: g.post_number ?? null, appendTo: g.append_to ?? null,
           });
+          // A gap in the letters is saved in order, and said.
+          if (g.note && !g.requires_review) issues.push(g.note);
           continue;
         }
         singles.push(...imgs);
@@ -1105,12 +1117,24 @@ export default function ContentHubPage() {
       }
       // Anything the answer left out is a post, never dropped.
       singles.push(...pool.filter((p) => !seen.has(p.url)));
+      const sortedSingles = singles.sort((a, b) => pool.indexOf(a) - pool.indexOf(b));
       setCarGroups(groups);
-      setCarSingles(singles.sort((a, b) => pool.indexOf(a) - pool.indexOf(b)));
+      setCarSingles(sortedSingles);
       setCarIssues(issues);
       setCarSightDown(data.vision === "down");
       setCarState("done");
       const suggested = groups.filter((g) => g.needsYes).length;
+      // Nothing here needs a person: every carousel was proven by its filenames
+      // and no set was held back for a clash. It is saved now, with no panel to
+      // confirm — the founder's rule is upload and publish, nothing between.
+      // A grouping made by sight, or a set kept apart (a slide twice, a hole in
+      // the numbers), still waits on the panel for someone to decide.
+      const heldBack = (data.groups as DetectedGroup[]).some((g) => g.requires_review);
+      if (suggested === 0 && !heldBack && groups.length > 0) {
+        await saveCarousels({ groups, singles: sortedSingles, clientId, storyIds, warnings: issues });
+        // The save matched the drop's Stories itself — the caller must not again.
+        return out(failedNames, true);
+      }
       setSuccess(`Found ${groups.length} carousel${groups.length === 1 ? "" : "s"}${suggested ? ` (${suggested} grouped by sight — confirm ${suggested === 1 ? "it" : "each"})` : ""} and ${singles.length} individual post${singles.length === 1 ? "" : "s"}. Check them below — nothing is saved until you confirm.`);
     } catch {
       // Degrade, don't lose: the images are stored; every one is offered as a
@@ -1129,10 +1153,11 @@ export default function ContentHubPage() {
    * drop's leftovers use. Whatever fails stays in the panel to try again;
    * whatever succeeded leaves it, so a retry never makes anything twice.
    */
-  const saveCarousels = async () => {
-    if (undecided > 0 || carState !== "done") return;
-    const groups = carGroups;
-    const singles = carSingles;
+  const saveCarousels = async (direct?: { groups: CarouselGroup[]; singles: PoolImage[]; clientId: string; storyIds: string[]; warnings: string[] }) => {
+    if (!direct && (undecided > 0 || carState !== "done")) return;
+    const groups = direct ? direct.groups : carGroups;
+    const singles = direct ? direct.singles : carSingles;
+    const saveClient = direct ? direct.clientId : carClient;
     setCarSaving(true);
     setError(null);
     const problems: string[] = [];
@@ -1143,8 +1168,8 @@ export default function ContentHubPage() {
     // For the Story matcher, which runs once these posts exist. The client and
     // the drop's Stories are read now — closing the panel clears both.
     const madeIds: string[] = [];
-    const matchClient = carClient;
-    const dropStories = carStoryIds;
+    const matchClient = saveClient;
+    const dropStories = direct ? direct.storyIds : carStoryIds;
     try {
       if (groups.length > 0) {
         try {
@@ -1153,17 +1178,26 @@ export default function ContentHubPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               create: {
-                clientId: carClient,
+                clientId: saveClient,
                 groups: groups.map((g) => ({
                   slides: g.slides.map(({ url, name }) => ({ url, name })),
                   coverIndex: Math.max(0, g.slides.findIndex((s) => s.url === g.coverUrl)),
+                  postNumber: g.postNumber ?? null,
+                  appendTo: g.appendTo?.id ?? null,
+                  // A person's own order or cover on the panel is kept as they left it.
+                  arranged: g.arranged || g.coverUrl !== g.slides[0]?.url,
                 })),
               },
             }),
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Could not save the carousels");
-          carousels = (data.uploads || []).length;
+          const ups = (data.uploads || []) as Array<UploadRow & { appended?: number; replaced?: number }>;
+          // Slides that joined a carousel already in the hub are not a new carousel.
+          carousels = ups.filter((u) => u.appended === undefined).length;
+          for (const u of ups.filter((x) => x.appended !== undefined)) {
+            notes.push(`${u.appended ? `${u.appended} slide${u.appended === 1 ? "" : "s"} added` : ""}${u.appended && u.replaced ? ", " : ""}${u.replaced ? `${u.replaced} replaced` : ""} on ${u.file_name || "an existing carousel"}`);
+          }
           madeIds.push(...((data.uploads || []) as UploadRow[]).map((u) => u.id));
           const failed = (data.failed || []) as Array<{ index: number; error: string }>;
           for (const f of failed) problems.push(`${groups[f.index]?.slides[0]?.name || "a carousel"}: ${f.error}`);
@@ -1186,7 +1220,7 @@ export default function ContentHubPage() {
             headers: { "Content-Type": "application/json" },
             // Standing alone, as a mixed drop's leftovers do: no batch, so one
             // post failing QC never takes another down with it.
-            body: JSON.stringify({ adopt: { clientId: carClient, images: chunk } }),
+            body: JSON.stringify({ adopt: { clientId: saveClient, images: chunk } }),
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Could not make the posts");
@@ -1204,7 +1238,9 @@ export default function ContentHubPage() {
       const made = `${carousels} carousel${carousels === 1 ? "" : "s"} and ${posts} post${posts === 1 ? "" : "s"}`;
       if (problems.length === 0) {
         closeCarPanel();
-        setSuccess(`Done — ${made} saved${notes.length ? ` (${notes.join("; ")})` : ""}. Brand QC is checking them now…`);
+        setSuccess(`Done — ${made} saved${notes.length ? ` (${notes.join("; ")})` : ""}${direct ? ", grouped from the filenames" : ""}. Brand QC is checking them and the captions are writing themselves…`);
+        // Saved without a panel, so anything worth a second look is said here.
+        if (direct?.warnings.length) setError(`Check: ${direct.warnings.join(" · ")}`);
       } else {
         if (carousels || posts) setSuccess(`Saved ${made}.`);
         setError(`${problems.join(" · ")} — what is still waiting is below; save again to retry.`);
@@ -1322,15 +1358,29 @@ export default function ContentHubPage() {
       storyFailed = s.failed;
       failedNames.push(...s.failedNames);
     }
-    // Two or more images and nothing else: looked at for carousels first. One
-    // image, or any drop with a video in it, goes exactly as it always has.
-    const carouselPath = rest.length > 0 && isCarouselDrop(key, rest);
+    // Carousels. Two or more images and nothing else are looked at for
+    // carousels first. Lettered slides ("Post 1A", "Post 1B") are carousel
+    // slides wherever they arrive — in a drop with reels too, or one on its own
+    // joining a carousel already in the hub — so they always take this path,
+    // and everything else in the drop goes exactly as it always has.
+    const isLettered = (f: File) => !isVideoFile(f) && !!parsePostName(f.name).slideLetter;
+    const hasVideo = rest.some(isVideoFile);
+    const carFiles = key !== "mix" ? []
+      : isCarouselDrop(key, rest) || (!hasVideo && rest.some(isLettered)) ? rest
+      : rest.filter(isLettered);
+    const otherFiles = rest.filter((f) => !carFiles.includes(f));
+    const carouselPath = carFiles.length > 0;
     let drop: DropResult | undefined;
     if (rest.length > 0) {
-      drop = carouselPath
-        ? await doCarouselUpload(rest, storyIds)
-        : await doUpload(key === "mix" ? mixContentType(rest) : key, rest, storyIds);
-      failedNames.push(...(drop?.failed || []));
+      const plain = otherFiles.length > 0 ? await doUpload(key === "mix" ? mixContentType(otherFiles) : key, otherFiles, carouselPath ? [] : storyIds) : undefined;
+      const car = carouselPath ? await doCarouselUpload(carFiles, storyIds) : undefined;
+      drop = {
+        failed: [...(plain?.failed || []), ...(car?.failed || [])],
+        postIds: [...(plain?.postIds || []), ...(car?.postIds || [])],
+        storyIds: [...(plain?.storyIds || []), ...(car?.storyIds || [])],
+        panel: !!(plain?.panel || car?.panel),
+      };
+      failedNames.push(...drop.failed);
     } else if (storyIds.length > 0) {
       await fetchUploads();
       setSuccess(`Uploaded ${storyIds.length} ${storyIds.length === 1 ? "Story" : "Stories"}. Brand QC is checking ${storyIds.length === 1 ? "it" : "them"} now…`);
@@ -2187,7 +2237,7 @@ export default function ContentHubPage() {
                 <button
                   type="button"
                   disabled={carState !== "done" || carSaving || undecided > 0 || (carGroups.length === 0 && carSingles.length === 0)}
-                  onClick={saveCarousels}
+                  onClick={() => saveCarousels()}
                   title={undecided > 0 ? "Answer every “grouped by sight” card first — yes, one carousel, or no, keep separate" : ""}
                   className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[40px] lg:min-h-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >

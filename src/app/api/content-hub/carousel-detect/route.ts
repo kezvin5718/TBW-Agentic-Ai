@@ -5,6 +5,7 @@ import { safeJsonParse } from "@/lib/llm";
 import { MODEL_FAST } from "@/lib/llm-config";
 import { downloadDriveFileByUrl } from "@/lib/google-drive";
 import sharp from "sharp";
+import { parsePostName, letterIndex, letterOf } from "@/lib/post-naming";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -32,8 +33,8 @@ export const maxDuration = 120;
 
 interface PoolImage { url: string; name: string }
 type Confidence = "high" | "medium" | "low" | null;
-type Source = "filename" | "markers" | "sight" | null;
-interface Slide { slide_number: number | null; filename: string; url: string }
+type Source = "letters" | "filename" | "markers" | "sight" | null;
+interface Slide { slide_number: number | null; filename: string; url: string; label?: string | null }
 interface Group {
   post_type: "carousel" | "single";
   confidence: Confidence;
@@ -44,7 +45,18 @@ interface Group {
   missing_slides: number[];
   duplicate_slides: number[];
   note?: string;
+  /** The post's number in the month, read from "Post 3B" — kept so the list can run in order. */
+  post_number?: number | null;
+  /**
+   * An unposted carousel this set belongs to — "Post 1E" uploaded after
+   * "Post 1A–1D". Its slides are added to that carousel (or replace the slide
+   * with the same letter) instead of starting a new one.
+   */
+  append_to?: { id: string; name: string | null; labels: string[] } | null;
 }
+
+/** How long an unposted carousel stays open to slides arriving later. */
+const APPEND_WINDOW_DAYS = 14;
 
 /** Instagram's own ceiling on a carousel, and the most one detect call takes. */
 const MAX_SLIDES = 20;
@@ -97,6 +109,115 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return out;
+}
+
+// --- 0. Lettered names ---------------------------------------------------------
+//
+// The studio's own convention, and the surest evidence there is: "Post 1A",
+// "Post 1B", "Post 1C" are the slides of post 1, in that order, whatever order
+// they were dropped in. Read before anything else, and never guessed past:
+//   - two files with the same letter in one post → nothing is grouped; which
+//     of the two is the real slide B is a person's call
+//   - a gap (A, B, D) → grouped in letter order, with "slide C is missing" said
+//   - a lone "Post 1E" → added to post 1's carousel if one is still waiting,
+//     otherwise a post of its own
+
+interface LetterResult { groups: Group[]; unplaced: number[] }
+
+async function groupByLetters(images: PoolImage[], eligible: number[], clientId: string, admin: ReturnType<typeof createServiceRoleClient>): Promise<LetterResult> {
+  const buckets = new Map<string, Array<{ idx: number; letter: string; post: number }>>();
+  for (const idx of eligible) {
+    const n = parsePostName(images[idx].name);
+    if (n.postNumber === null || !n.slideLetter) continue;
+    const key = `${n.prefix}|${n.postNumber}`;
+    buckets.set(key, [...(buckets.get(key) || []), { idx, letter: n.slideLetter, post: n.postNumber }]);
+  }
+  if (buckets.size === 0) return { groups: [], unplaced: eligible };
+
+  // Carousels of these post numbers still waiting to be published, newest first.
+  const posts = [...new Set([...buckets.values()].map((b) => b[0].post))];
+  const since = new Date(Date.now() - APPEND_WINDOW_DAYS * 86400_000).toISOString();
+  const { data: open } = await admin
+    .from("creative_uploads")
+    .select("id, file_name, post_number, created_at")
+    .eq("client_id", clientId)
+    .eq("content_type", "carousel")
+    .eq("status", "uploaded")
+    .in("post_number", posts)
+    .gte("created_at", since)
+    .order("created_at", { ascending: false });
+  const openIds = (open || []).map((o) => o.id as string);
+  const { data: openSlides } = openIds.length
+    ? await admin.from("carousel_slides").select("upload_id, slide_label").in("upload_id", openIds)
+    : { data: [] as Array<{ upload_id: string; slide_label: string | null }> };
+  const labelsOf = (id: string) => (openSlides || []).filter((s) => s.upload_id === id && s.slide_label).map((s) => String(s.slide_label).toLowerCase());
+  const openFor = (post: number) => (open || []).find((o) => o.post_number === post);
+
+  const groups: Group[] = [];
+  const placed = new Set<number>();
+  for (const members of buckets.values()) {
+    const post = members[0].post;
+    members.forEach((m) => placed.add(m.idx));
+    const counts = new Map<string, number>();
+    for (const m of members) counts.set(m.letter, (counts.get(m.letter) || 0) + 1);
+    const dupes = [...counts].filter(([, c]) => c > 1).map(([l]) => l).sort();
+    const ordered = [...members].sort((a, b) => letterIndex(a.letter) - letterIndex(b.letter) || a.idx - b.idx);
+    const asSlides = (list: typeof ordered) =>
+      list.map((m) => ({ slide_number: letterIndex(m.letter), filename: images[m.idx].name, url: images[m.idx].url, label: m.letter.toUpperCase() }));
+
+    if (dupes.length) {
+      groups.push({
+        post_type: "single", confidence: "low", requires_review: true, source: "letters", post_number: post,
+        slides: asSlides(ordered), missing_slides: [], duplicate_slides: dupes.map(letterIndex),
+        note: `post ${post}: slide ${dupes.map((l) => l.toUpperCase()).join(", ")} appears more than once — kept as separate posts so the wrong one is not published. Remove the extra file and upload again.`,
+      });
+      continue;
+    }
+
+    const existing = openFor(post);
+    const existingLabels = existing ? labelsOf(existing.id as string) : [];
+    // Missing letters are counted across the carousel as it will stand.
+    const have = new Set([...existingLabels, ...members.map((m) => m.letter)]);
+    const top = Math.max(...[...have].map(letterIndex));
+    const missing: number[] = [];
+    for (let i = 1; i <= top; i++) if (!have.has(letterOf(i).toLowerCase())) missing.push(i);
+    const total = have.size;
+    const missingNote = missing.length ? `post ${post}: slide ${missing.map(letterOf).join(", ")} ${missing.length === 1 ? "is" : "are"} missing — saved in letter order; upload ${missing.length === 1 ? "it" : "them"} and ${missing.length === 1 ? "it joins" : "they join"} the carousel` : undefined;
+
+    if (total > MAX_SLIDES) {
+      groups.push({
+        post_type: "single", confidence: "low", requires_review: true, source: "letters", post_number: post,
+        slides: asSlides(ordered), missing_slides: [], duplicate_slides: [],
+        note: `post ${post} would have ${total} slides — a carousel takes at most ${MAX_SLIDES}. Kept as separate posts.`,
+      });
+      continue;
+    }
+
+    if (existing) {
+      groups.push({
+        post_type: "carousel", confidence: "high", requires_review: false, source: "letters", post_number: post,
+        slides: asSlides(ordered), missing_slides: missing, duplicate_slides: [],
+        append_to: { id: existing.id as string, name: (existing.file_name as string | null) ?? null, labels: existingLabels.map((l) => l.toUpperCase()) },
+        note: missingNote,
+      });
+      continue;
+    }
+    if (members.length === 1) {
+      // One lettered file and no carousel to join: a post of its own.
+      groups.push({
+        post_type: "single", confidence: null, requires_review: false, source: "letters", post_number: post,
+        slides: asSlides(ordered), missing_slides: [], duplicate_slides: [],
+        note: `${images[members[0].idx].name}: only one slide of post ${post} — saved as a single post`,
+      });
+      continue;
+    }
+    groups.push({
+      post_type: "carousel", confidence: "high", requires_review: false, source: "letters", post_number: post,
+      slides: asSlides(ordered), missing_slides: missing, duplicate_slides: [],
+      note: missingNote,
+    });
+  }
+  return { groups, unplaced: eligible.filter((i) => !placed.has(i)) };
 }
 
 // --- 1. Filenames ---------------------------------------------------------------
@@ -465,6 +586,83 @@ async function groupBySight(images: PoolImage[], idxs: number[]): Promise<SightR
   return { groups: out, state: "used" };
 }
 
+// --- Adding slides to a carousel already in the hub -------------------------------
+//
+// "Post 1E" arriving after "Post 1A–1D": it joins post 1, in letter order. A
+// letter the carousel already has is a revised slide — it replaces that one
+// slide and leaves every other slide exactly as it was. Only a carousel still
+// waiting to be published can change; one already scheduled is out.
+
+type SlideRow = { slide_no: number; file_url: string; file_name: string | null; slide_label: string | null };
+
+async function addSlides(
+  admin: ReturnType<typeof createServiceRoleClient>,
+  clientId: string,
+  uploadId: string,
+  incoming: PoolImage[],
+  labels: Array<string | null>
+): Promise<{ ok: true; slides: SlideRow[]; added: number; replaced: number } | { ok: false; error: string }> {
+  const { data: row } = await admin
+    .from("creative_uploads")
+    .select("id, client_id, content_type, status, file_url, caption_source, caption_status")
+    .eq("id", uploadId)
+    .maybeSingle();
+  if (!row || row.client_id !== clientId || row.content_type !== "carousel") return { ok: false, error: "That carousel is no longer in the hub" };
+  if (row.status !== "uploaded") return { ok: false, error: "That carousel has already been scheduled — its slides can no longer change" };
+  if (labels.some((l) => !l)) return { ok: false, error: "Only lettered slides (Post 1E) can join an existing carousel" };
+
+  const { data: current } = await admin
+    .from("carousel_slides")
+    .select("slide_no, file_url, file_name, slide_label")
+    .eq("upload_id", uploadId)
+    .order("slide_no", { ascending: true });
+  const before = (current || []) as SlideRow[];
+  const byLabel = new Map<string, SlideRow>();
+  const unlabelled: SlideRow[] = [];
+  for (const sl of before) {
+    if (sl.slide_label) byLabel.set(sl.slide_label.toUpperCase(), sl);
+    else unlabelled.push(sl);
+  }
+  let added = 0;
+  let replaced = 0;
+  incoming.forEach((img, k) => {
+    const label = labels[k]!.toUpperCase();
+    if (byLabel.has(label)) replaced++; else added++;
+    byLabel.set(label, { slide_no: 0, file_url: img.url, file_name: img.name, slide_label: label });
+  });
+  const merged = [
+    ...[...byLabel.values()].sort((a, b) => letterIndex(a.slide_label!) - letterIndex(b.slide_label!)),
+    ...unlabelled,
+  ].map((sl, k) => ({ ...sl, slide_no: k + 1 }));
+  if (merged.length > MAX_SLIDES) return { ok: false, error: `That would make ${merged.length} slides — a carousel takes at most ${MAX_SLIDES}` };
+
+  // Renumbered as a whole: the old rows go and the new order goes in. If the
+  // insert fails, the old slides are put back exactly as they were.
+  await admin.from("carousel_slides").delete().eq("upload_id", uploadId);
+  const { data: saved, error } = await admin
+    .from("carousel_slides")
+    .insert(merged.map((sl) => ({ upload_id: uploadId, slide_no: sl.slide_no, file_url: sl.file_url, file_name: sl.file_name, slide_label: sl.slide_label })))
+    .select("slide_no, file_url, file_name, slide_label");
+  if (error) {
+    if (before.length) await admin.from("carousel_slides").insert(before.map((sl) => ({ upload_id: uploadId, ...sl })));
+    return { ok: false, error: `slides could not be saved (${error.message}) — the carousel is unchanged` };
+  }
+
+  // Slide A is the cover. A new or revised cover changes the carousel's file,
+  // which re-queues its caption by itself; any other change to the slides is
+  // re-queued here — unless a person wrote the caption, which always stands.
+  const cover = merged[0];
+  const update: Record<string, unknown> = { file_name: `${merged.length} slides — ${cover.file_name || "carousel"}`.slice(0, 240) };
+  if (cover.file_url !== row.file_url) update.file_url = cover.file_url;
+  else if (row.caption_source !== "manual" && !["analysing", "writing"].includes(String(row.caption_status))) {
+    update.caption_status = "pending";
+    update.caption_attempts = 0;
+    update.caption_error = null;
+  }
+  await admin.from("creative_uploads").update(update).eq("id", uploadId);
+  return { ok: true, slides: (saved || []) as SlideRow[], added, replaced };
+}
+
 // --- Handler ------------------------------------------------------------------
 
 export async function POST(request: NextRequest) {
@@ -488,12 +686,16 @@ export async function POST(request: NextRequest) {
 
     // The whole request is checked before anything is written. One stranger
     // URL, one HEIC slide, one image in two carousels — and nothing is made.
-    const groups: Array<{ slides: PoolImage[]; cover: number }> = [];
+    type Incoming = { slides: PoolImage[]; cover: number; labels: Array<string | null>; postNumber: number | null; appendTo: string | null; arranged: boolean };
+    const groups: Incoming[] = [];
     const everyUrl = new Set<string>();
     for (const g of rawGroups) {
-      const o = (g && typeof g === "object" ? g : {}) as { slides?: unknown; coverIndex?: unknown };
+      const o = (g && typeof g === "object" ? g : {}) as { slides?: unknown; coverIndex?: unknown; postNumber?: unknown; appendTo?: unknown; arranged?: unknown };
       const raw = Array.isArray(o.slides) ? o.slides : [];
-      if (raw.length < 2) return NextResponse.json({ error: "A carousel needs at least 2 slides" }, { status: 400 });
+      const appendTo = typeof o.appendTo === "string" && o.appendTo ? o.appendTo : null;
+      // A slide or two added to a carousel already in the hub is a whole save
+      // on its own; a new carousel still needs at least two.
+      if (raw.length < (appendTo ? 1 : 2)) return NextResponse.json({ error: "A carousel needs at least 2 slides" }, { status: 400 });
       if (raw.length > MAX_SLIDES) return NextResponse.json({ error: `A carousel takes at most ${MAX_SLIDES} slides` }, { status: 400 });
       const slides: PoolImage[] = [];
       for (const v of raw) {
@@ -506,8 +708,21 @@ export async function POST(request: NextRequest) {
         everyUrl.add(img.url);
         slides.push(img);
       }
+      // A slide's letter is read from its own name here, never taken on trust
+      // from the request — the order a carousel publishes in follows from it.
+      const labels = slides.map((sl) => {
+        const n = parsePostName(sl.name);
+        return n.slideLetter ? n.slideLetter.toUpperCase() : null;
+      });
+      const pn = Number(o.postNumber);
       const ci = Number(o.coverIndex);
-      groups.push({ slides, cover: Number.isInteger(ci) && ci >= 0 && ci < slides.length ? ci : 0 });
+      groups.push({
+        slides, labels, appendTo,
+        // A person moved slides or picked a cover on the panel: their order stands.
+        arranged: o.arranged === true,
+        postNumber: Number.isInteger(pn) && pn > 0 && pn < 1000 ? pn : null,
+        cover: Number.isInteger(ci) && ci >= 0 && ci < slides.length ? ci : 0,
+      });
     }
 
     if (everyUrl.size > MAX_IMAGES) return NextResponse.json({ error: `Up to ${MAX_IMAGES} slides in one save` }, { status: 400 });
@@ -532,18 +747,37 @@ export async function POST(request: NextRequest) {
     const created: Record<string, unknown>[] = [];
     const failed: Array<{ index: number; error: string }> = [];
     const skipped: Array<{ index: number; reason: string }> = [];
+    const ROW_SELECT = "*, clients(name), profiles:uploaded_by(name, avatar_url, designation)";
     for (let gi = 0; gi < groups.length; gi++) {
       const g = groups[gi];
       const clash = g.slides.find((s) => taken.has(s.url));
       if (clash) { skipped.push({ index: gi, reason: `"${clash.name}" is already in the hub` }); continue; }
-      const cover = g.slides[g.cover];
+
+      // ---- Slides joining a carousel already in the hub ----------------------
+      if (g.appendTo) {
+        const res = await addSlides(admin, clientId, g.appendTo, g.slides, g.labels);
+        if (!res.ok) { failed.push({ index: gi, error: res.error }); continue; }
+        g.slides.forEach((sl) => taken.add(sl.url));
+        const { data: row } = await admin.from("creative_uploads").select(ROW_SELECT).eq("id", g.appendTo).maybeSingle();
+        if (row) created.push({ ...row, slides: res.slides, appended: res.added, replaced: res.replaced });
+        continue;
+      }
+
+      // ---- A new carousel ------------------------------------------------------
+      // Lettered slides publish in letter order, whatever order they were
+      // dropped in, and slide A is the cover.
+      const lettered = !g.arranged && g.labels.every((l) => !!l);
+      const order = g.slides.map((sl, k) => ({ sl, label: g.labels[k] }));
+      if (lettered) order.sort((a, b) => letterIndex(a.label!) - letterIndex(b.label!));
+      const coverAt = lettered ? 0 : g.cover;
+      const cover = order[coverAt].sl;
       const { data: row, error } = await admin
         .from("creative_uploads")
         .insert({
           client_id: clientId,
           uploaded_by: user.id,
           file_url: cover.url,
-          file_name: `${g.slides.length} slides — ${g.slides[0].name}`.slice(0, 240),
+          file_name: `${order.length} slides — ${order[0].sl.name}`.slice(0, 240),
           file_size: null,
           media_type: "image",
           content_type: "carousel",
@@ -554,21 +788,22 @@ export async function POST(request: NextRequest) {
           batch_id: null,
           status: "uploaded",
           qc_status: "pending",
+          post_number: g.postNumber,
         })
-        .select("*, clients(name), profiles:uploaded_by(name, avatar_url, designation)")
+        .select(ROW_SELECT)
         .single();
       if (error || !row) { failed.push({ index: gi, error: error?.message || "could not record the carousel" }); continue; }
       const { data: slideRows, error: slideErr } = await admin
         .from("carousel_slides")
-        .insert(g.slides.map((s, k) => ({ upload_id: row.id, slide_no: k + 1, file_url: s.url, file_name: s.name })))
-        .select("slide_no, file_url, file_name");
+        .insert(order.map((o, k) => ({ upload_id: row.id, slide_no: k + 1, file_url: o.sl.url, file_name: o.sl.name, slide_label: o.label })))
+        .select("slide_no, file_url, file_name, slide_label");
       if (slideErr) {
         // A carousel without its slides is a lie on the hub: the row goes too.
         await admin.from("creative_uploads").delete().eq("id", row.id);
         failed.push({ index: gi, error: `slides could not be saved (${slideErr.message}) — nothing kept` });
         continue;
       }
-      g.slides.forEach((s) => taken.add(s.url));
+      g.slides.forEach((sl) => taken.add(sl.url));
       created.push({ ...row, slides: (slideRows || []).sort((a, b) => (a.slide_no as number) - (b.slide_no as number)) });
     }
     // Each carousel is read slide by slide and captioned in the background.
@@ -604,14 +839,19 @@ export async function POST(request: NextRequest) {
     note: "only JPG, PNG or WEBP can be a carousel slide",
   }));
 
-  const byName = groupByFilename(images, eligible);
+  const byLetter = await groupByLetters(images, eligible, clientId, admin);
+  const byName = groupByFilename(images, byLetter.unplaced);
   const bySight = await groupBySight(images, byName.unplaced);
 
   // Carousels first, then the sets kept apart with their problem, then posts —
   // each in the order its first image arrived.
   const firstIdx = (g: Group) => Math.min(...g.slides.map((s) => images.findIndex((x) => x.url === s.url)));
   const rank = (g: Group) => (g.post_type === "carousel" ? 0 : g.slides.length > 1 ? 1 : 2);
-  const groups = [...byName.groups, ...bySight.groups, ...notSlides]
-    .sort((a, b) => rank(a) - rank(b) || firstIdx(a) - firstIdx(b));
+  // Within each kind, by post number when the names carry one — "Post 1",
+  // "Post 2", … — and otherwise in the order the images arrived.
+  const byPost = (a: Group, b: Group) =>
+    (a.post_number ?? Infinity) - (b.post_number ?? Infinity) || firstIdx(a) - firstIdx(b);
+  const groups = [...byLetter.groups, ...byName.groups, ...bySight.groups, ...notSlides]
+    .sort((a, b) => rank(a) - rank(b) || byPost(a, b));
   return NextResponse.json({ success: true, groups, vision: bySight.state });
 }

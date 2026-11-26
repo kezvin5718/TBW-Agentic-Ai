@@ -82,7 +82,7 @@ export async function GET(request: NextRequest) {
   const risk = request.nextUrl.searchParams.get("risk") === "1";
 
   const admin = createServiceRoleClient();
-  const COLUMNS = "id, file_url, file_name, media_type, content_type, caption, caption_status, caption_source, caption_error, caption_attempts, qc_status, qc_note, rejected_reason, risk_accepted_at, thumbnail_url, created_at, linked_story_id, story_link_source";
+  const COLUMNS = "id, file_url, file_name, media_type, content_type, post_number, caption, caption_status, caption_source, caption_error, caption_attempts, qc_status, qc_note, rejected_reason, risk_accepted_at, thumbnail_url, created_at, linked_story_id, story_link_source";
   const { data, error } = await admin
     .from("creative_uploads")
     .select(COLUMNS)
@@ -178,8 +178,18 @@ export async function GET(request: NextRequest) {
     .not("linked_story_id", "is", null);
   const travelling = new Set((holders || []).map((h) => h.linked_story_id as string));
 
+  // The month's running order. A delivery is numbered — Post 1 (a carousel),
+  // Post 2, Post 3 (a reel) — so within each day's upload the list runs by
+  // that number, and the dates Automation fills in follow it. Anything with no
+  // number keeps its upload order, after the numbered ones of its day.
+  const istDay = (iso: unknown) => new Date(String(iso)).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  const postOrder = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+    istDay(a.created_at).localeCompare(istDay(b.created_at)) ||
+    (Number(a.post_number ?? Infinity) - Number(b.post_number ?? Infinity)) ||
+    String(a.created_at || "").localeCompare(String(b.created_at || ""));
   const rows: Record<string, unknown>[] = [...(data || []).map((r) => ({ ...r, rejected: false })), ...refused]
-    .filter((r) => !(r.content_type === "story" && travelling.has(r.id as string)));
+    .filter((r) => !(r.content_type === "story" && travelling.has(r.id as string)))
+    .sort(postOrder);
 
   // Each post's Story, beside it: enough for the screen to show it, gate it
   // and count it. A Story already scheduled is not offered again.
