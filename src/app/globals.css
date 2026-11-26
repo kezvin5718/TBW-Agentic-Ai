@@ -123,3 +123,141 @@ html.light .tbw-grid-layer { background-image: linear-gradient(rgba(0,0,0,0.045)
    is more to the side. Used by Task Manager and Brand Brain tab bars. */
 .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* ============================ BETA THEME (2026-11) ============================
+   The founder's redesign: a premium light dashboard — soft off-white page,
+   white cards with grey hairlines, a black sidebar, and yellow only where it
+   matters (the selected page, the main action). Switched on per person by the
+   Beta button (class "beta" on <html>), so the team tries it before it becomes
+   the default. Like the day view, it works at the token level: every screen
+   already draws with the slate / indigo / status utilities, so redefining them
+   here restyles every page at once. Declared after html.light so Beta wins when
+   both are on. */
+html.beta {
+  --ink: #F8F9FA;
+  --panel: #FFFFFF;
+  --background: #F8F9FA;
+  --foreground: #111827;
+  --yellow: #FFD600;
+
+  /* Surfaces & hairlines */
+  --color-slate-950: #FFFFFF;
+  --color-slate-900: #E5E7EB;
+  --color-slate-850: #E5E7EB;
+  --color-slate-800: #D1D5DB;
+  --color-slate-700: #9CA3AF;
+
+  /* Text, dark on light */
+  --color-slate-100: #111827;
+  --color-slate-200: #1F2937;
+  --color-slate-300: #374151;
+  --color-slate-400: #4B5563;
+  --color-slate-500: #6B7280;
+  --color-slate-600: #6B7280;
+  --color-white: #111827;
+
+  /* Yellow fills stay bright; yellow *text* becomes a readable dark gold, and
+     the dark gold tints become pale yellow ones. */
+  --color-indigo-300: #854D0E;
+  --color-indigo-400: #A16207;
+  --color-indigo-500: #FFD600;
+  --color-indigo-600: #FFD600;
+  --color-indigo-650: #FFD600;
+  --color-indigo-700: #EAB308;
+  --color-indigo-800: #FDE68A;
+  --color-indigo-900: #FDE68A;
+  --color-indigo-950: #FEF9C3;
+  --color-violet-400: #A16207;
+  --color-violet-500: #FFD600;
+  --color-violet-900: #FDE68A;
+  --color-violet-950: #FEF9C3;
+  --color-purple-500: #FFD600;
+  --color-purple-600: #FFD600;
+  --color-purple-900: #FDE68A;
+  --color-purple-950: #FEF9C3;
+
+  /* Status colours — the founder's success / information / error, with pale
+     tints for chip backgrounds instead of the night view's dark ones. */
+  --color-emerald-300: #15803D; --color-emerald-400: #16A34A; --color-emerald-500: #16A34A;
+  --color-emerald-800: #BBF7D0; --color-emerald-900: #BBF7D0; --color-emerald-950: #DCFCE7;
+  --color-green-400: #16A34A;   --color-green-500: #16A34A;
+  --color-blue-300: #1D4ED8;    --color-blue-400: #2563EB;    --color-blue-500: #2563EB;
+  --color-blue-800: #BFDBFE;    --color-blue-900: #BFDBFE;    --color-blue-950: #DBEAFE;
+  --color-rose-300: #B91C1C;    --color-rose-400: #DC2626;    --color-rose-500: #DC2626;
+  --color-rose-800: #FECACA;    --color-rose-900: #FECACA;    --color-rose-950: #FEE2E2;
+  --color-red-300: #B91C1C;     --color-red-400: #DC2626;     --color-red-500: #DC2626;
+  --color-red-800: #FECACA;     --color-red-900: #FECACA;     --color-red-950: #FEE2E2;
+  --color-amber-300: #92400E;   --color-amber-400: #B45309;   --color-amber-500: #D97706;
+  --color-amber-800: #FDE68A;   --color-amber-900: #FDE68A;   --color-amber-950: #FEF3C7;
+
+  /* Corners 10–12px, not 16 */
+  --radius-2xl: 0.75rem;
+  --radius-xl: 0.625rem;
+
+  /* Supporting text 13px rather than 12 */
+  --text-xs: 0.8125rem;
+}
+html.beta body {
+  background: #F8F9FA;
+  color: #111827;
+  font-family: var(--font-inter), "Helvetica Neue", Inter, system-ui, sans-serif;
+}
+/* The ambient glows and grid belong to the night view. */
+html.beta main > .pointer-events-none.rounded-full,
+html.beta .tbw-grid-layer { display: none; }
+/* Cards: white, hairline border, the softest shadow. */
+html.beta .rounded-2xl.border { box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04); }
+/* No gradients on buttons — a flat yellow. */
+html.beta [class*="from-indigo"] { background-image: none !important; background-color: #FFD600 !important; }
+html.beta .signal { color: #2563EB; text-shadow: none; }
+html.beta .pv { --color-white: #ffffff; }
+/* The day/night switch has nothing to switch while Beta is on. */
+html.beta .tbw-theme-toggle { display: none !important; }
+
+/* Text that was too small to read: lifted one step, everywhere at once. */
+html.beta .text-\[8px\]  { font-size: 11px; }
+html.beta .text-\[9px\]  { font-size: 12px; }
+html.beta .text-\[10px\] { font-size: 12px; }
+html.beta .text-\[11px\] { font-size: 13px; }
+
+/* ---- The sidebar: premium black, white text, yellow for the open page ---- */
+html.beta .tbw-sidebar {
+  --color-slate-950: #101112;
+  --color-slate-900: #1F2023;
+  --color-slate-850: #1F2023;
+  --color-slate-800: #2A2B2F;
+  --color-slate-700: #3A3B40;
+  --color-slate-100: #F3F4F6;
+  --color-slate-200: #E5E7EB;
+  --color-slate-300: #D1D5DB;
+  --color-slate-400: #D1D5DB;
+  --color-slate-500: #9CA3AF;
+  --color-slate-600: #9CA3AF;
+  --color-white: #FFFFFF;
+  --color-indigo-300: #FFD600;
+  --color-indigo-400: #FFD600;
+  --color-indigo-800: #4D4000;
+  --color-indigo-900: #3A3000;
+  --color-indigo-950: #161200;
+  --color-emerald-400: #4ADE80; --color-emerald-800: #14532D; --color-emerald-950: #052E16;
+  --color-violet-400: #FFD600;  --color-violet-800: #4D4000;  --color-violet-950: #161200;
+  background: #101112 !important;
+  backdrop-filter: none !important;
+  border-color: #1F2023 !important;
+  color: #F3F4F6;
+}
+@media (min-width: 1024px) {
+  html.beta aside.tbw-sidebar { width: 248px; }
+}
+/* Section titles: calmer spacing so they fit the narrower panel. */
+html.beta .tbw-sidebar nav button { letter-spacing: 0.04em; font-size: 12px; }
+html.beta .tbw-sidebar .brand-logo-img { filter: invert(1) !important; }
+html.beta .tbw-sidebar a[aria-current="page"] {
+  background: #FFD600 !important;
+  border-color: #FFD600 !important;
+  color: #000 !important;
+  font-weight: 600;
+}
+html.beta .tbw-sidebar a[aria-current="page"] svg { color: #000 !important; }
+html.beta .tbw-sidebar a[aria-current="page"] > span[aria-hidden="true"] { display: none; }
+html.beta .tbw-sidebar a:not([aria-current="page"]):hover { background: #1F2023 !important; }

@@ -1,6 +1,7 @@
 "use client";
 
 import ThemeToggle from "./ThemeToggle";
+import BetaToggle from "./BetaToggle";
 
 /**
  * Day/night, kept where it can always be reached.
@@ -13,6 +14,7 @@ import ThemeToggle from "./ThemeToggle";
 export default function AccountControls() {
   return (
     <div className="flex items-center gap-1.5">
+      <BetaToggle />
       <ThemeToggle compact />
     </div>
   );

@@ -54,7 +54,11 @@ export async function GET(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const clientId = new URL(request.url).searchParams.get("clientId");
+  const params = new URL(request.url).searchParams;
+  const clientId = params.get("clientId");
+  // ?counts=1 — just the numbers (all clients, or ?clientId= for one), for
+  // the summary cards. No rows.
+  const countsOnly = params.get("counts") === "1";
   const SELECT = "*, clients(name), profiles:created_by(name, avatar_url, designation)";
   // All clients together: the newest 60 is a feed. One client: everything
   // recent of theirs, so a client's posts are never pushed off the screen by
@@ -68,7 +72,7 @@ export async function GET(request: NextRequest) {
   const { data, error } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  if (clientId) {
+  if (clientId || countsOnly) {
     // Live counts for the client's summary cards — counted in the database,
     // not from the rows on screen, and zero when there is nothing.
     const nowIso = new Date().toISOString();
@@ -76,8 +80,16 @@ export async function GET(request: NextRequest) {
       const { count: n } = await build(base());
       return n || 0;
     };
-    const base = () => supabase.from("social_posts").select("id", { count: "exact", head: true }).eq("client_id", clientId).is("duplicate_of", null);
-    const hub = () => supabase.from("creative_uploads").select("id", { count: "exact", head: true }).eq("client_id", clientId).is("festival_id", null).neq("content_type", "thumbnail");
+    // Every client, or the one asked for. An empty-string client id matches
+    // nothing, so it is never passed — "all" simply leaves the filter off.
+    const base = () => {
+      const q = supabase.from("social_posts").select("id", { count: "exact", head: true }).is("duplicate_of", null);
+      return clientId ? q.eq("client_id", clientId) : q;
+    };
+    const hub = () => {
+      const q = supabase.from("creative_uploads").select("id", { count: "exact", head: true }).is("festival_id", null).neq("content_type", "thumbnail");
+      return clientId ? q.eq("client_id", clientId) : q;
+    };
     const [total, published, scheduled, failed, queued, pendingQc] = await Promise.all([
       count((b) => b),
       count((b) => b.in("status", ["sent", "published"]).or(`scheduled_for.is.null,scheduled_for.lte.${nowIso}`)),
@@ -88,6 +100,8 @@ export async function GET(request: NextRequest) {
       hub().eq("status", "uploaded").eq("qc_status", "match").then((r) => r.count || 0),
       hub().eq("status", "uploaded").eq("qc_status", "pending").then((r) => r.count || 0),
     ]);
+    const counts = { total, published, scheduled, failed, queued, pendingQc };
+    if (countsOnly || !clientId) return NextResponse.json({ success: true, counts });
     const { data: flaggedOne } = await supabase
       .from("social_posts").select(SELECT).eq("client_id", clientId)
       .eq("duplicate_resolution_status", "manual_removal_required").limit(200);
@@ -95,7 +109,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       posts: [...(data || []), ...(flaggedOne || []).filter((p) => !seenOne.has(p.id))],
-      counts: { total, published, scheduled, failed, queued, pendingQc },
+      counts,
     });
   }
 

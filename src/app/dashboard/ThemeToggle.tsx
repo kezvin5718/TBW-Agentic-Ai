@@ -44,7 +44,7 @@ export default function ThemeToggle({ compact = false }: { compact?: boolean }) 
         onClick={toggle}
         title={light ? "Switch to night view" : "Switch to day view"}
         aria-label={light ? "Switch to night view" : "Switch to day view"}
-        className="w-11 h-11 lg:w-9 lg:h-9 flex items-center justify-center rounded-lg border border-slate-800 bg-slate-900/50 text-slate-400 hover:text-white cursor-pointer transition-colors"
+        className="tbw-theme-toggle w-11 h-11 lg:w-9 lg:h-9 flex items-center justify-center rounded-lg border border-slate-800 bg-slate-900/50 text-slate-400 hover:text-white cursor-pointer transition-colors"
       >
         {light ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4 text-[var(--yellow)]" />}
       </button>
@@ -55,7 +55,7 @@ export default function ThemeToggle({ compact = false }: { compact?: boolean }) 
     <button
       onClick={toggle}
       title={light ? "Switch to night view" : "Switch to day view"}
-      className="w-full mb-2 flex items-center justify-center gap-2 py-2 rounded-lg border border-slate-800 bg-slate-900/50 text-slate-400 hover:text-white text-xs font-bold cursor-pointer transition-colors"
+      className="tbw-theme-toggle w-full mb-2 flex items-center justify-center gap-2 py-2 rounded-lg border border-slate-800 bg-slate-900/50 text-slate-400 hover:text-white text-xs font-bold cursor-pointer transition-colors"
     >
       {light ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4 text-[var(--yellow)]" />}
       <span>{light ? "Night view" : "Day view"}</span>

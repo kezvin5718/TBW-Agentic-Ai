@@ -4,13 +4,24 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Avatar from "../Avatar";
 import { fmtIST, fmtISTDate, istToday, istWallClockToUtc, IST_TZ } from "@/lib/time";
-import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2, Pencil, X, FolderOpen, Film, Plus, Layers, Wand2, Copy, Table2 } from "lucide-react";
+import { Send, Loader2, UploadCloud, Sparkles, Image as ImageIcon, CheckCircle2, AlertTriangle, Settings, Clock, Heart, MessageCircle, Bookmark, MoreHorizontal, ThumbsUp, Play, Eye, RotateCcw, Trash2, Pencil, X, FolderOpen, Film, Plus, Layers, Wand2, Copy, Table2, Check, Info, CalendarDays, Users } from "lucide-react";
 import PlatformIcon, { postLabel, PLATFORM_LABEL } from "./PlatformIcon";
 import GridAds from "./GridAds";
+import ManageAccounts from "./ManageAccounts";
+import { useBeta } from "../BetaToggle";
 import { uploadDirect } from "@/lib/direct-upload";
 
 /** One creative's answer from the caption writer. */
 interface CaptionResult { id: string; ok: boolean; caption?: string; error?: string; busy?: boolean }
+
+/** Time zones the Beta schedule can be read in — fixed offsets only (minutes from UTC). */
+const AUTO_TIME_ZONES = [
+  { id: "ist", label: "IST (UTC+5:30)", short: "IST", offset: 330 },
+  { id: "gst", label: "Dubai (UTC+4)", short: "GST", offset: 240 },
+  { id: "sgt", label: "Singapore (UTC+8)", short: "SGT", offset: 480 },
+  { id: "jst", label: "Japan (UTC+9)", short: "JST", offset: 540 },
+  { id: "utc", label: "UTC", short: "UTC", offset: 0 },
+];
 
 /** Three tries, then a person decides — the same limit the server keeps. */
 const CAPTION_TRIES = 3;
@@ -145,17 +156,17 @@ const thumbState = (u: ThumbFacts): "working" | "none" | null => {
   return null;
 };
 /** The words beside a video's preview box while it has no picture of its own. */
-function ThumbNote({ u, className = "", wrap = false }: { u: ThumbFacts; className?: string; wrap?: boolean }) {
+function ThumbNote({ u, className = "", wrap = false, big = false }: { u: ThumbFacts; className?: string; wrap?: boolean; big?: boolean }) {
   const st = thumbState(u);
-  const ws = wrap ? "leading-tight" : "whitespace-nowrap";
+  const ws = `${wrap ? "leading-tight" : "whitespace-nowrap"} ${big ? "text-xs" : "text-[9px]"}`;
   if (st === "working") {
     return (
-      <span className={`flex items-center gap-1 text-[9px] text-slate-500 ${ws} ${className}`}>
+      <span className={`flex items-center gap-1 text-slate-500 ${ws} ${className}`}>
         <Loader2 className="w-2.5 h-2.5 animate-spin shrink-0" />making thumbnail…
       </span>
     );
   }
-  if (st === "none") return <span className={`block text-[9px] text-slate-600 ${ws} ${className}`}>no thumbnail</span>;
+  if (st === "none") return <span className={`block text-slate-600 ${ws} ${className}`}>no thumbnail</span>;
   return null;
 }
 /** Read the hub list again every 15s while it holds a video still waiting for its frame — and stop when none are, or five minutes after the last new one appeared. */
@@ -184,13 +195,13 @@ const libTypeLabel = (contentType: string) => (contentType === "carousel" ? "▣
 /** The Automation Clear/Risk switch. A component of its own because it must
     render in the empty state too — an empty Clear list is exactly the moment
     someone needs the Risk button, so it can never live inside the row list. */
-function AutoModeToggle({ mode, onChange }: { mode: "clear" | "risk"; onChange: (m: "clear" | "risk") => void }) {
+function AutoModeToggle({ mode, onChange, big = false }: { mode: "clear" | "risk"; onChange: (m: "clear" | "risk") => void; big?: boolean }) {
   return (
-    <div className="flex bg-slate-950 border border-slate-900 rounded-lg p-0.5 text-[10px] font-bold">
+    <div className={`flex bg-slate-950 border border-slate-900 rounded-lg p-0.5 font-bold ${big ? "text-sm" : "text-[10px]"}`}>
       {(["clear", "risk"] as const).map((m) => (
         <button key={m} onClick={() => onChange(m)}
           title={m === "risk" ? "Also show creatives QC rejected or could not vouch for, with the reason" : "Only creatives that passed QC"}
-          className={`px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-md cursor-pointer transition-colors ${
+          className={`${big ? "px-4 h-10" : "px-2.5 py-1 min-h-[40px] lg:min-h-0"} rounded-md cursor-pointer transition-colors ${
             mode === m
               ? m === "risk" ? "bg-amber-600 text-black" : "bg-indigo-600 text-white"
               : "text-slate-500 hover:text-white"
@@ -198,6 +209,23 @@ function AutoModeToggle({ mode, onChange }: { mode: "clear" | "risk"; onChange: 
           {m === "risk" ? "Risk" : "Clear"}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** "19:30" → "7:30 PM" — how the beta layout says a time. */
+const time12 = (hhmm: string) => {
+  const [h, m] = hhmm.split(":").map(Number);
+  if (Number.isNaN(h)) return hhmm;
+  return `${((h + 11) % 12) + 1}:${String(m || 0).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+};
+
+/** A numbered step heading in the beta layout. */
+function BetaStep({ n, title }: { n: number; title: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="w-8 h-8 shrink-0 rounded-full bg-slate-900 border border-slate-800 text-sm font-bold text-white flex items-center justify-center">{n}</span>
+      <h3 className="text-xl font-bold text-white">{title}</h3>
     </div>
   );
 }
@@ -282,6 +310,14 @@ export default function SocialPublisherPage() {
   const [rpBusy, setRpBusy] = useState(false);
   const [rpSearch, setRpSearch] = useState("");
   const [rpPlatFilter, setRpPlatFilter] = useState("all");
+  // The new layouts, for whoever switched Beta on (top-right, beside day/night).
+  const beta = useBeta();
+  // Manage accounts — connect several accounts per platform to a client.
+  const [accountsOpen, setAccountsOpen] = useState(false);
+  // The beta Schedule preview keeps pace with the page as it scrolls. CSS
+  // `sticky` cannot do it here: the dashboard shell wraps every page in an
+  // overflow box that never scrolls, and sticky measures against that box.
+  const previewRef = useRef<HTMLElement>(null);
 
   const loadRecurPost = useCallback(async () => {
     try {
@@ -491,6 +527,15 @@ export default function SocialPublisherPage() {
   const libClientRef = useRef(libClient);
   const [libCounts, setLibCounts] = useState<{ total: number; published: number; scheduled: number; failed: number; queued: number; pendingQc: number } | null>(null);
   const [libLoading, setLibLoading] = useState(false);
+  // Every client's numbers together — the Beta tabs and Automation's cards.
+  const [pubCounts, setPubCounts] = useState<{ scheduled: number; queued: number } | null>(null);
+  const loadPubCounts = useCallback(async (clientId?: string) => {
+    try {
+      const res = await fetch(`/api/social-publisher?counts=1${clientId ? `&clientId=${encodeURIComponent(clientId)}` : ""}`, { cache: "no-store" });
+      const data = await res.json();
+      if (res.ok && data.counts) setPubCounts({ scheduled: data.counts.scheduled, queued: data.counts.queued });
+    } catch { /* the cards say — rather than a wrong number */ }
+  }, []);
   const loadHistory = useCallback(async () => {
     const forClient = libClientRef.current;
     try {
@@ -986,6 +1031,8 @@ export default function SocialPublisherPage() {
     id: string; file_url: string; file_name: string | null;
     media_type: string; content_type: string;
     caption: string | null; caption_status: string;
+    /** "Post 3" — the month's running order, read from the filename. */
+    post_number?: number | null;
     /** Whose caption it is: written in the background ("ai") or by a person ("manual"). */
     caption_source?: "ai" | "manual" | null;
     caption_error?: string | null;
@@ -1004,7 +1051,7 @@ export default function SocialPublisherPage() {
       thumbnail_url: string | null; qc_status: string | null; qc_note?: string | null; status: string;
     } | null;
   }
-  type Cadence = "daily" | "alternate" | "manual";
+  type Cadence = "daily" | "alternate" | "manual" | "custom";
   /** "N slides" — read from the slides when the list carried them, else from the name the hub saved. */
   const autoSlideCount = (r: AutoRow) =>
     r.slides?.length || Number((r.file_name || "").match(/^(\d+) slides/)?.[1] || 0);
@@ -1022,6 +1069,15 @@ export default function SocialPublisherPage() {
   const [autoLoading, setAutoLoading] = useState(false);
   const [autoSending, setAutoSending] = useState(false);
   const [cadence, setCadence] = useState<Cadence>("daily");
+  // Custom rhythm: one post every N days.
+  const [customEvery, setCustomEvery] = useState(3);
+  // The zone the dates and times on screen are read in (Beta). IST unless
+  // someone scheduling from abroad picks their own.
+  const [autoTz, setAutoTz] = useState("ist");
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  // What is typed in the Beta client search; the client itself is autoClient.
+  const [autoClientQuery, setAutoClientQuery] = useState("");
   const [autoStart, setAutoStart] = useState(istToday());
   const [autoTime, setAutoTime] = useState("19:30");
   // Per-row overrides. A row keeps its own date once touched, even when the
@@ -1270,6 +1326,16 @@ export default function SocialPublisherPage() {
   useEffect(() => { if (view === "automation" && autoClient) loadAutomation(autoClient, autoMode); }, [view, autoClient, autoMode, loadAutomation]);
   // Switching client drops you back to the safe list.
   useEffect(() => { setAutoMode("clear"); }, [autoClient]);
+  // The Beta cards and tab counts: the chosen client's numbers on Automation,
+  // everyone's elsewhere. Read again after every send (posts changes then).
+  useEffect(() => {
+    if (!beta) return;
+    void loadPubCounts(view === "automation" && autoClient ? autoClient : undefined);
+  }, [beta, view, autoClient, posts.length, loadPubCounts]);
+  // The search box shows the chosen client's name.
+  useEffect(() => {
+    setAutoClientQuery(autoClient ? clients.find((c) => c.id === autoClient)?.name || "" : "");
+  }, [autoClient, clients]);
 
   // Captions write themselves in the background. While any row's is still on
   // its way, ask every 8 seconds where they stand — only those rows, so the
@@ -1385,7 +1451,7 @@ export default function SocialPublisherPage() {
   };
 
   /** Step in days between consecutive posts for the chosen cadence. */
-  const cadenceStep = cadence === "alternate" ? 2 : 1;
+  const cadenceStep = cadence === "alternate" ? 2 : cadence === "custom" ? customEvery : 1;
 
   const pad2 = (n: number) => String(n).padStart(2, "0");
   const ymd = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
@@ -1523,10 +1589,77 @@ export default function SocialPublisherPage() {
   // is worked out per pass rather than runs × every platform picked.
   const autoStoryPasses = autoReady.filter((r) => sendAsOf(r) !== "feed").length + autoReady.filter(storyGoes).length;
   const autoStoryPlatforms = autoPlatforms.filter((p) => p === "instagram" || p === "facebook").length;
-  const autoPosts = (autoOccurrences - autoStoryPasses) * autoPlatforms.length + autoStoryPasses * autoStoryPlatforms;
+  // A client with two Instagram profiles gets the post on both, so the count
+  // is per ACCOUNT. A platform with nothing in the map still counts once: the
+  // server makes one attempt there and records why it could not send.
+  // Counted the way the server sends: an id RecurPost no longer lists is left
+  // out while the client has a working account on that platform.
+  const autoAccountsOn = (p: string) => {
+    const ids = Object.keys(rpMapping).filter((id) => rpMapping[id]?.client_id === autoClient && rpMapping[id]?.platform === p);
+    const live = ids.filter((id) => rpAccounts.some((a) => a.id === id));
+    return Math.max(1, live.length || ids.length);
+  };
+  const autoFeedAccounts = autoPlatforms.reduce((n, p) => n + autoAccountsOn(p), 0);
+  const autoStoryAccounts = autoPlatforms.filter((p) => p === "instagram" || p === "facebook").reduce((n, p) => n + autoAccountsOn(p), 0);
+  const autoPosts = (autoOccurrences - autoStoryPasses) * autoFeedAccounts + autoStoryPasses * autoStoryAccounts;
+
+  useEffect(() => {
+    const el = previewRef.current;
+    if (!el || !(view === "automation" && beta)) return;
+    let frame = 0;
+    const place = () => {
+      frame = 0;
+      const column = el.parentElement;
+      // One column below xl — the preview sits under the list and stays put.
+      if (!column || window.innerWidth < 1280) { el.style.transform = ""; return; }
+      const room = Math.max(0, column.offsetHeight - el.offsetHeight);
+      const y = Math.min(room, Math.max(0, 24 - column.getBoundingClientRect().top));
+      el.style.transform = y > 0 ? `translateY(${Math.round(y)}px)` : "";
+    };
+    const queue = () => { if (!frame) frame = requestAnimationFrame(place); };
+    window.addEventListener("scroll", queue, { passive: true });
+    window.addEventListener("resize", queue);
+    place();
+    return () => {
+      window.removeEventListener("scroll", queue);
+      window.removeEventListener("resize", queue);
+      if (frame) cancelAnimationFrame(frame);
+      el.style.transform = "";
+    };
+  }, [view, beta, autoRows.length, autoLoading]);
+
+  /**
+   * An account was connected or disconnected in Manage accounts. The list on
+   * screen is NOT reloaded — that would throw away every date and caption the
+   * team has set — only which platforms this client can post to is redrawn.
+   */
+  const onAccountsChanged = (mapping: Record<string, { client_id: string; platform: string }>) => {
+    setRpMapping(mapping);
+    if (!autoClient) return;
+    const avail = Array.from(new Set(Object.values(mapping).filter((m) => m?.client_id === autoClient).map((m) => m.platform).filter(Boolean)));
+    setAutoPlatforms((prev) => [...prev.filter((x) => avail.includes(x)), ...avail.filter((x) => !autoAvailable.includes(x))]);
+    setAutoAvailable(avail);
+  };
+
+  /**
+   * The schedule on screen is read in the chosen time zone and sent as India
+   * time — RecurPost and every client run on IST. Only fixed-offset zones are
+   * offered (no daylight saving), so the conversion is exact.
+   */
+  const toIstWallClock = (date: string, time: string) => {
+    const tz = AUTO_TIME_ZONES.find((z) => z.id === autoTz) || AUTO_TIME_ZONES[0];
+    if (tz.offset === 330) return `${date}T${time}`;
+    const [y, mo, d] = date.split("-").map(Number);
+    const [h, mi] = time.split(":").map(Number);
+    const ms = Date.UTC(y, mo - 1, d, h, mi) - tz.offset * 60_000 + 330 * 60_000;
+    const t = new Date(ms);
+    const p2 = (n: number) => String(n).padStart(2, "0");
+    return `${t.getUTCFullYear()}-${p2(t.getUTCMonth() + 1)}-${p2(t.getUTCDate())}T${p2(t.getUTCHours())}:${p2(t.getUTCMinutes())}`;
+  };
 
   const sendAutomation = async () => {
     setAutoSending(true);
+    setReviewOpen(false);
     setNotice(null);
     try {
       // The per-row time matters here, not the base one: two posts sharing a day
@@ -1544,7 +1677,7 @@ export default function SocialPublisherPage() {
           return {
             uploadId: r.id,
             caption: autoCaptions[r.id] ?? r.caption ?? "",
-            scheduledFor: `${schedule[r.id].date}T${schedule[r.id].time}`,
+            scheduledFor: toIstWallClock(schedule[r.id].date, schedule[r.id].time),
             ...(rep ? { repeat: { mode: rep.mode, times: clampTimes(rep.times) } } : {}),
             ...(as !== "feed" ? { sendAs: as } : {}),
             // Only "leave it behind" is said; the server takes the linked
@@ -2015,15 +2148,65 @@ export default function SocialPublisherPage() {
   };
 
   return (
-    <div className={`${view === "library" ? "max-w-7xl" : view === "stories" || view === "automation" ? "max-w-5xl" : "max-w-[1700px]"} mx-auto space-y-6`}>
+    <div className={`${view === "library" ? "max-w-7xl" : view === "automation" && beta ? "max-w-[1500px]" : view === "stories" || view === "automation" ? "max-w-5xl" : "max-w-[1700px]"} mx-auto space-y-6`}>
+      {beta ? (
+        /* The Beta header: title and one line under it, the account status and
+           Manage accounts in the top-right corner, and the tabs as a plain row
+           underlined in black — each with a live count where one means something. */
+        <div className="space-y-5">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="min-w-0">
+              <h1 className="text-[30px] leading-tight font-bold text-white tracking-tight">Social Publisher</h1>
+              <p className="text-[15px] text-slate-500 mt-1">Plan, review and schedule your content.</p>
+            </div>
+            {rpConfigured && (
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="inline-flex items-center gap-2 text-sm font-semibold text-emerald-500">
+                  <CheckCircle2 className="w-5 h-5" />Accounts connected
+                </span>
+                <span className="w-px h-6 bg-slate-900" aria-hidden="true" />
+                <button onClick={() => setAccountsOpen(true)}
+                  title="See every account, and connect more than one per platform to a client"
+                  className="text-sm font-semibold text-white underline underline-offset-4 decoration-slate-700 hover:decoration-white cursor-pointer">
+                  Manage accounts
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="flex items-end gap-1 sm:gap-6 border-b border-slate-900 overflow-x-auto no-scrollbar">
+            {([
+              { v: "compose" as const, label: "Compose", icon: Pencil, count: null as number | null },
+              { v: "stories" as const, label: "Stories", icon: Layers, count: null },
+              { v: "automation" as const, label: "Automation", icon: CalendarDays, count: pubCounts?.queued ?? null, hint: "QC-approved creatives waiting to be scheduled" },
+              { v: "library" as const, label: "Library", icon: FolderOpen, count: pubCounts?.scheduled ?? null, hint: "Posts scheduled and still to go out" },
+              { v: "grids" as const, label: "Grids & Ads", icon: Table2, count: null },
+            ]).map((t) => {
+              const Icon = t.icon;
+              const on = view === t.v;
+              return (
+                <button key={t.v} onClick={() => setView(t.v)} title={"hint" in t ? t.hint : undefined}
+                  className={`shrink-0 inline-flex items-center gap-2 px-3 sm:px-1 pb-3 pt-1 border-b-[3px] -mb-px text-[15px] cursor-pointer transition-colors ${
+                    on ? "border-white font-bold text-white" : "border-transparent font-medium text-slate-500 hover:text-white"
+                  }`}>
+                  <Icon className="w-[18px] h-[18px]" />
+                  <span>{t.label}</span>
+                  {t.count !== null && t.count > 0 && (
+                    <span className={`text-xs font-bold rounded-full px-2 py-0.5 tabular-nums ${on ? "bg-slate-900 text-white" : "bg-slate-900 text-slate-500"}`}>{t.count}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight flex items-center space-x-2">
-            <Send className="w-6 h-6 text-[var(--yellow)]" /><span>Social Publisher</span>
+          <h1 className={`font-bold text-white tracking-tight flex items-center space-x-2 ${beta ? "text-3xl" : "text-2xl"}`}>
+            <Send className={`text-[var(--yellow)] ${beta ? "w-7 h-7" : "w-6 h-6"}`} /><span>Social Publisher</span>
           </h1>
-          <p className="text-sm text-slate-500 mt-1">Pick the client, upload the creative, generate an on-brand caption, set the time — it posts through RecurPost to your connected accounts.</p>
+          <p className={`mt-1 ${beta ? "text-base text-slate-400" : "text-sm text-slate-500"}`}>Pick the client, upload the creative, generate an on-brand caption, set the time — it posts through RecurPost to your connected accounts.</p>
         </div>
-        <div className="flex flex-wrap bg-slate-950 border border-slate-900 rounded-xl p-1 text-[10px] font-bold uppercase tracking-wider">
+        <div className={`flex flex-wrap bg-slate-950 border border-slate-900 rounded-xl p-1 ${beta ? "text-[15px] font-semibold [&>button]:px-5 [&>button]:py-2.5 [&_svg]:w-[18px] [&_svg]:h-[18px]" : "text-[10px] font-bold uppercase tracking-wider"}`}>
           <button onClick={() => setView("compose")} className={`px-4 py-2 min-h-[40px] lg:min-h-0 rounded-lg cursor-pointer transition-all ${view === "compose" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>Compose</button>
           <button onClick={() => setView("stories")} className={`px-4 py-2 min-h-[40px] lg:min-h-0 rounded-lg cursor-pointer transition-all flex items-center gap-1.5 ${view === "stories" ? "bg-indigo-500 text-black" : "text-slate-400 hover:text-white"}`}>
             <Layers className="w-3.5 h-3.5" /><span>Multi-Story</span>
@@ -2039,6 +2222,7 @@ export default function SocialPublisherPage() {
           </button>
         </div>
       </div>
+      )}
 
       {notice && (
         <div className={`rounded-xl p-3 text-sm flex items-center space-x-2 border ${notice.ok ? "bg-emerald-950/30 border-emerald-900/60 text-emerald-300" : "bg-rose-950/30 border-rose-900/60 text-rose-300"}`}>
@@ -2047,16 +2231,31 @@ export default function SocialPublisherPage() {
         </div>
       )}
 
-      {/* Posting connection status */}
-      {rpConfigured && (
-        <div className="bg-emerald-950/20 border border-emerald-900/50 rounded-xl p-3 text-xs text-emerald-300 flex items-center space-x-2">
-          <CheckCircle2 className="w-4 h-4 shrink-0" />
-          <span>Posting via <b>RecurPost</b> — direct to your connected social accounts.</span>
+      {/* Posting connection status — and the way in to connect more accounts.
+          With Beta on, the header carries this in its top-right corner. */}
+      {rpConfigured && !beta && (
+        <div className={`rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap ${beta ? "bg-slate-950/40 border border-slate-900 text-slate-300 text-[15px] px-4" : "bg-emerald-950/20 border border-emerald-900/50 text-emerald-300 text-xs"}`}>
+          <span className="flex items-center gap-2 min-w-0">
+            <CheckCircle2 className={`shrink-0 ${beta ? "w-5 h-5 text-emerald-500" : "w-4 h-4"}`} />
+            <span>Posting via <b>RecurPost</b> — direct to your connected social accounts.</span>
+          </span>
+          <button onClick={() => setAccountsOpen(true)}
+            title="See every account, and connect more than one per platform to a client"
+            className={`shrink-0 flex items-center gap-2 rounded-lg border font-bold cursor-pointer ${beta ? "h-10 px-4 text-sm border-slate-800 bg-slate-900 text-white hover:border-indigo-500" : "px-3 py-1.5 min-h-[40px] lg:min-h-0 text-[11px] border-emerald-800 bg-emerald-950/40 text-emerald-200 hover:text-white hover:border-emerald-600"}`}>
+            <Users className="w-4 h-4" /><span>Manage accounts</span>
+          </button>
         </div>
       )}
+      <ManageAccounts
+        open={accountsOpen}
+        onClose={() => { setAccountsOpen(false); void loadRecurPost(); }}
+        clients={clients}
+        initialClientId={view === "automation" ? autoClient : view === "stories" ? storyClientId : clientId}
+        onChanged={onAccountsChanged}
+      />
 
       {/* Founder: RecurPost account → client mapping */}
-      {myRole === "founder" && rpConfigured && (
+      {myRole === "founder" && rpConfigured && !beta && (
         <details className="bg-slate-950/40 border border-slate-900 rounded-2xl">
           <summary className="p-4 cursor-pointer text-xs font-bold text-slate-400 flex items-center space-x-2 list-none">
             <Settings className="w-4 h-4" /><span>RecurPost Accounts — map each social account to a client ({Object.keys(rpMapping).length} mapped)</span>
@@ -2687,7 +2886,7 @@ export default function SocialPublisherPage() {
       )}
 
       {/* ------------------------------ AUTOMATION ----------------------------- */}
-      {view === "automation" && (
+      {view === "automation" && !beta && (
         <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-5">
           <div>
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -3223,6 +3422,702 @@ export default function SocialPublisherPage() {
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ------------------------- AUTOMATION — BETA LAYOUT ------------------------ */}
+      {/* The same Automation, redrawn: big type, three numbered steps and a
+          preview of what will go out. Every control of the layout above is
+          here and drives the SAME state and the same send — nothing about what
+          is scheduled differs, only how the screen reads. Shown to whoever has
+          Beta switched on; when the team settles on it, the block above goes. */}
+      {view === "automation" && beta && (
+        <div className="space-y-6">
+        {/* Live numbers, counted in the database — for the chosen client, or
+            every client before one is chosen. */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {([
+            { k: "scheduled" as const, label: "Scheduled", sub: "Posts set and ready to publish", icon: CheckCircle2, tone: "text-emerald-500 bg-emerald-950" },
+            { k: "queued" as const, label: "Queued posts", sub: "Approved in the Content Hub, waiting to be scheduled", icon: Clock, tone: "text-blue-500 bg-blue-950" },
+          ]).map((c) => {
+            const Icon = c.icon;
+            return (
+              <div key={c.k} className="flex items-center gap-4 bg-slate-950 border border-slate-900 rounded-2xl px-5 py-4">
+                <span className={`w-12 h-12 shrink-0 rounded-xl flex items-center justify-center ${c.tone}`}><Icon className="w-6 h-6" /></span>
+                <div className="min-w-0">
+                  <p className="text-xl font-bold text-white tabular-nums">
+                    {pubCounts ? pubCounts[c.k] : <Loader2 className="w-4 h-4 animate-spin inline text-slate-500" />} <span className="font-semibold">{c.label}</span>
+                  </p>
+                  <p className="text-sm text-slate-500 truncate">{c.sub}{autoClient ? ` · ${clients.find((x) => x.id === autoClient)?.name || ""}` : " · all clients"}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,65fr)_minmax(340px,35fr)] gap-6 items-start">
+          <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 sm:p-7 space-y-9">
+            <div>
+              <h2 className="text-2xl font-bold text-white">Set up your schedule</h2>
+              <p className="text-base text-slate-400 mt-1">
+                Choose a client, pick the channels and set the timing. Everything approved for them is listed with its caption — check it, then schedule the lot in one press.
+              </p>
+            </div>
+
+            {/* ---- 1 · Client & channels ---- */}
+            <section className="space-y-4">
+              <BetaStep n={1} title="Client & channels" />
+              <div className="space-y-5">
+                <div className="max-w-md">
+                  <label className="text-sm font-semibold text-slate-300 block mb-2">Client</label>
+                  {/* Type to search; every client, A–Z. */}
+                  <input
+                    list="automation-clients"
+                    value={autoClientQuery}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setAutoClientQuery(v);
+                      const hit = clients.find((c) => c.name.toLowerCase() === v.trim().toLowerCase());
+                      if (hit && hit.id !== autoClient) setAutoClient(hit.id);
+                    }}
+                    onFocus={(e) => e.currentTarget.select()}
+                    onBlur={() => setAutoClientQuery(autoClient ? clients.find((c) => c.id === autoClient)?.name || "" : "")}
+                    placeholder="Search clients…"
+                    className="w-full h-12 bg-slate-950 border border-slate-800 rounded-xl px-3.5 text-base font-semibold text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                  <datalist id="automation-clients">
+                    {[...clients].sort((x, y) => x.name.localeCompare(y.name)).map((c) => <option key={c.id} value={c.name} />)}
+                  </datalist>
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-slate-300 block mb-2">Channels <span className="font-normal text-slate-500">(select one or more)</span></label>
+                  <div className="flex flex-wrap gap-2.5">
+                    {autoAvailable.length === 0 ? (
+                      <span className="text-[15px] text-slate-500 h-12 flex items-center">{autoClient ? "No account connected for this client yet." : "Select a client first."}</span>
+                    ) : autoAvailable.map((p) => {
+                      const on = autoPlatforms.includes(p);
+                      const n = autoAccountsOn(p);
+                      return (
+                        <button key={p} onClick={() => setAutoPlatforms((prev) => prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p])}
+                          aria-pressed={on}
+                          title={n > 1 ? `${n} ${PLATFORM_LABEL[p] || p} accounts connected — the post goes to each` : undefined}
+                          className={`h-12 px-4 flex items-center gap-2.5 rounded-xl border text-[15px] font-semibold cursor-pointer transition-all ${
+                            on ? "border-indigo-500 bg-[var(--yellow)]/10 text-white" : "border-slate-800 bg-slate-950 text-slate-500 hover:text-white"
+                          }`}>
+                          <span className={`w-5 h-5 rounded-md border flex items-center justify-center ${on ? "bg-emerald-500 border-emerald-500 text-black" : "border-slate-700"}`}>
+                            {on && <Check className="w-3.5 h-3.5" strokeWidth={3} />}
+                          </span>
+                          <PlatformIcon platform={p} size={18} />
+                          <span>{PLATFORM_LABEL[p] || p}</span>
+                          {n > 1 && <span className="text-xs font-bold rounded-full px-2 py-0.5 bg-emerald-500/15 text-emerald-500">{n} accounts</span>}
+                        </button>
+                      );
+                    })}
+                    {autoClient && (
+                      <button onClick={() => setAccountsOpen(true)}
+                        className="h-12 px-4 flex items-center gap-2 rounded-xl border border-dashed border-slate-700 text-[15px] font-semibold text-slate-400 hover:text-white hover:border-indigo-500 cursor-pointer">
+                        <Plus className="w-4 h-4" /><span>Connect account</span>
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-sm text-slate-500 mt-2.5 flex items-center gap-1.5">
+                    <Info className="w-4 h-4 shrink-0" /><span>Stories and carousels publish to Instagram and Facebook only. YouTube takes videos only.</span>
+                  </p>
+                </div>
+              </div>
+
+              {autoRejected > 0 && (
+                <div className="bg-rose-950/20 border border-rose-900/50 rounded-xl p-3.5 text-[15px] text-rose-300 flex items-start gap-2.5">
+                  <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+                  <span className="min-w-0">
+                    <b>{autoRejected}</b> creative(s) uploaded in the last week were rejected at QC and are not shown here. Fix them in Content Hub and upload the set again.
+                    {autoRejectedNames.length > 0 && (
+                      <span className="block mt-1 text-sm text-rose-400/80 truncate">
+                        {autoRejectedNames.join(" · ")}{autoRejected > autoRejectedNames.length ? ` … and ${autoRejected - autoRejectedNames.length} more` : ""}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              )}
+            </section>
+
+            {/* ---- 2 · Posting schedule ---- */}
+            <section className="space-y-4 pt-8 border-t border-slate-900">
+              <BetaStep n={2} title="Posting schedule" />
+              <div>
+                <label className="text-sm font-semibold text-slate-300 block mb-2">Posting rhythm</label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 max-w-2xl border border-slate-800 rounded-xl overflow-hidden">
+                  {([
+                    { k: "daily" as const, label: "Every day" },
+                    { k: "alternate" as const, label: "Alternate days" },
+                    { k: "manual" as const, label: "Same day" },
+                    { k: "custom" as const, label: "Custom" },
+                  ]).map((m) => (
+                    <button key={m.k} onClick={() => setCadence(m.k)} aria-pressed={cadence === m.k}
+                      className={`h-12 px-3 text-[15px] font-semibold cursor-pointer transition-all border-r border-slate-800 last:border-r-0 ${cadence === m.k ? "bg-indigo-500 text-black" : "bg-slate-950 text-slate-400 hover:text-white"}`}>
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+                {cadence === "custom" && (
+                  <div className="flex items-center gap-2 flex-wrap mt-3">
+                    <span className="text-sm font-semibold text-slate-400">One post every</span>
+                    {[3, 4, 5, 7, 14].map((n) => (
+                      <button key={n} onClick={() => setCustomEvery(n)} aria-pressed={customEvery === n}
+                        className={`h-10 px-3.5 rounded-lg border text-sm font-semibold cursor-pointer ${customEvery === n ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
+                        {n === 7 ? "week" : n === 14 ? "2 weeks" : `${n} days`}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-end gap-5 flex-wrap">
+                <div>
+                  <label className="text-sm font-semibold text-slate-300 block mb-2">{cadence === "manual" ? "All posts on" : "Start date"}</label>
+                  <input type="date" value={autoStart} min={istToday()} onClick={openPicker} onChange={(e) => setAutoStart(e.target.value)}
+                    className="h-12 bg-slate-950 border border-slate-800 rounded-xl px-3.5 text-base text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-slate-300 block mb-2">{gapMins === null ? "Post all at" : "First post at"}</label>
+                  <input type="time" value={autoTime} onClick={openPicker} onChange={(e) => setAutoTime(e.target.value)}
+                    className="h-12 bg-slate-950 border border-slate-800 rounded-xl px-3.5 text-base text-white cursor-pointer [color-scheme:dark] focus:outline-none focus:border-indigo-500" />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-slate-300 block mb-2">Time zone</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {AUTO_TIME_ZONES.map((z) => (
+                      <button key={z.id} onClick={() => setAutoTz(z.id)} aria-pressed={autoTz === z.id}
+                        title={z.id === "ist" ? "India time — what every client posts in" : `Dates and times are read in ${z.label}, and sent as India time`}
+                        className={`h-12 px-3.5 rounded-xl border text-sm font-semibold cursor-pointer ${autoTz === z.id ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`}>
+                        {z.id === "ist" ? z.label : z.short}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Advanced timing — folded away; every gap is one click once open. */}
+              <div className="rounded-xl border border-slate-900">
+                <button onClick={() => setAdvancedOpen((o) => !o)} aria-expanded={advancedOpen}
+                  className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left cursor-pointer">
+                  <span className="text-[15px] font-semibold text-white">Advanced timing <span className="font-normal text-slate-500">· gap between posts on the same day: {gapMins === null ? "manual" : gapLabel}</span></span>
+                  <span className={`text-slate-500 transition-transform ${advancedOpen ? "rotate-180" : ""}`}>⌄</span>
+                </button>
+                {advancedOpen && (
+              <div className="px-4 pb-4">
+                <label className="text-sm font-semibold text-slate-300 block mb-2">Gap between posts on the same day</label>
+                <div className="flex flex-wrap gap-2">
+                  {([
+                    { v: 1, label: "1 min" },
+                    { v: 5, label: "5 min" },
+                    { v: 10, label: "10 min" },
+                    { v: 30, label: "30 min" },
+                    { v: 60, label: "1 hour" },
+                    { v: 120, label: "2 hours" },
+                    { v: 180, label: "3 hours" },
+                    { v: null, label: "Manual" },
+                  ] as Array<{ v: number | null; label: string }>).map((g) => (
+                    <button key={g.label} onClick={() => setGapMins(g.v)} aria-pressed={gapMins === g.v}
+                      title={g.v === null ? "No automatic spacing — set each post's time yourself" : undefined}
+                      className={`h-11 px-4 rounded-xl border text-[15px] font-semibold cursor-pointer transition-all ${gapMins === g.v ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700"}`}>
+                      {g.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+                )}
+              </div>
+
+              <div className="flex items-start gap-3 flex-wrap">
+                <p className="flex-1 min-w-[260px] text-sm text-slate-500 leading-relaxed">
+                  {cadence === "manual"
+                    ? `Every post goes out on the chosen date, spaced ${gapMins === null ? "only by the times you set" : gapLabel + " apart"} from the start time. Any row can still be given its own date or time.`
+                    : `Dates run ${cadence === "alternate" ? "every other day" : cadence === "custom" ? `one every ${customEvery} days` : "one per day"}. Change any row and everything below it re-flows from there — move post 2 to the 17th and post 3 becomes the 18th.`}
+                </p>
+                {(Object.keys(autoDates).length > 0 || Object.keys(autoTimes).length > 0 || Object.keys(autoRepeat).length > 0 || Object.keys(autoAs).length > 0) && (
+                  <button onClick={() => { setAutoDates({}); setAutoTimes({}); setAutoRepeat({}); setAutoAs({}); }}
+                    className="h-10 px-4 rounded-lg bg-slate-900 border border-slate-800 text-sm font-semibold text-slate-300 hover:text-white cursor-pointer">
+                    Reset {Object.keys(autoDates).length + Object.keys(autoTimes).length + Object.keys(autoRepeat).length + Object.keys(autoAs).length} change(s)
+                  </button>
+                )}
+              </div>
+
+              {(autoSameDay > 0 || autoOutOfOrder > 0 || autoCollisions > 0) && (
+                <div className="flex flex-col gap-1.5 text-sm font-semibold">
+                  {autoSameDay > 0 && (
+                    <span className="text-amber-500">
+                      {autoSameDay} post(s) share a day — {gapMins === null ? "spacing off, set each time yourself" : `spaced ${gapLabel} apart unless you set the time yourself`}
+                    </span>
+                  )}
+                  {autoCollisions > 0 && <span className="text-rose-400">{autoCollisions} post(s) would fire at the same moment — give them a time or pick a gap</span>}
+                  {autoOutOfOrder > 0 && <span className="text-amber-400">{autoOutOfOrder} post(s) publish before the row above them</span>}
+                </div>
+              )}
+
+              {driveDown && (
+                <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-3.5 text-[15px] text-amber-300 flex items-start gap-2.5">
+                  <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+                  <span className="min-w-0">Google Drive is disconnected — video posts will fail until it is reconnected (Integrations → Google Drive).</span>
+                </div>
+              )}
+            </section>
+
+            {/* ---- 3 · Content to schedule ---- */}
+            <section className="space-y-4 pt-8 border-t border-slate-900">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <BetaStep n={3} title="Content to schedule" />
+                {autoClient && <AutoModeToggle mode={autoMode} onChange={setAutoMode} big />}
+              </div>
+              {autoMode === "risk" && autoClient && (
+                <p className="text-sm font-semibold text-amber-400">Risk: QC-rejected and QC-unsure creatives are shown — sending them overrides QC on the record.</p>
+              )}
+
+              {autoLoading ? (
+                <p className="text-[15px] text-slate-400 py-10 text-center"><Loader2 className="w-5 h-5 animate-spin inline mr-2" />Loading approved creatives…</p>
+              ) : !autoClient ? (
+                <p className="text-[15px] text-slate-500 py-10 text-center">Select a client to see what&apos;s waiting.</p>
+              ) : autoRows.length === 0 ? (
+                <p className="text-[15px] text-slate-500 py-10 text-center">
+                  {autoMode === "risk"
+                    ? "Nothing waiting even in Risk — this client has no approved, QC-rejected, or QC-unsure creatives."
+                    : "Nothing approved and waiting for this client. If QC held creatives back, switch to Risk to see them."}
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <p className="text-[15px] font-semibold text-white flex items-center gap-2">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                      <span>Ready ({autoReady.length} of {autoRows.length} selected)</span>
+                    </p>
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      {!writeAllBusy && orderedRows.some((r) => r.content_type !== "story" && (autoCaptions[r.id] ?? "").trim()) && (
+                        <button onClick={() => writeAllCaptions(true)}
+                          title="Analyse every creative again and rewrite every caption box"
+                          className="h-11 px-4 inline-flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950 text-sm font-semibold text-slate-300 hover:text-white hover:border-indigo-600 cursor-pointer">
+                          <Sparkles className="w-4 h-4" /><span>Regenerate all</span>
+                        </button>
+                      )}
+                      <button onClick={() => writeAllCaptions(false)} disabled={writeAllBusy}
+                        className="h-11 px-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-sm font-bold text-white cursor-pointer disabled:opacity-50">
+                        {writeAllBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                        <span>{writeAllBusy ? `Writing ${writeAllDone} of ${writeAllTotal}…` : "Write all captions"}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-semibold text-slate-300 block mb-2">How should the captions be written? <span className="font-normal text-slate-500">(optional)</span></label>
+                    <textarea
+                      value={autoCaptionBrief}
+                      onChange={(e) => setAutoCaptionBrief(e.target.value.slice(0, 500))}
+                      rows={2}
+                      disabled={writeAllBusy}
+                      placeholder="e.g. festive Diwali tone, mention 0% making charges, keep it short, focus on bridal sets…"
+                      className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3.5 py-3 text-[15px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-600 resize-y disabled:opacity-50"
+                    />
+                    <p className="text-sm text-slate-500 mt-1">
+                      {autoCaptionBrief.trim()
+                        ? "Used by Write all captions, Regenerate all and every Rewrite below. Each video is still analysed on its own."
+                        : "Leave empty and captions are written from the video alone."}
+                    </p>
+                  </div>
+
+                  <p className="text-sm text-slate-500">Drag a card by its number to reorder — the dates follow the sequence.</p>
+
+                  {orderedRows.map((r, i) => {
+                    const slot = schedule[r.id];
+                    const date = slot?.date || autoDates[r.id] || "";
+                    const skipped = autoSkip.has(r.id);
+                    const rep = repeatOf(r);
+                    const repTimes = rep ? clampTimes(rep.times) : 1;
+                    const repStep = rep?.mode === "alternate" ? 2 : 1;
+                    const as = sendAsOf(r);
+                    const chip = (on: boolean) => `h-10 px-3.5 rounded-lg border text-sm font-semibold cursor-pointer transition-all whitespace-nowrap ${on ? "bg-indigo-500 border-indigo-500 text-black" : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"}`;
+                    return (
+                      <div
+                        key={r.id}
+                        draggable={dragArm === r.id}
+                        onDragStart={(e) => { setDragId(r.id); e.dataTransfer.effectAllowed = "move"; }}
+                        onDragEnd={() => { setDragId(null); setOverId(null); setDragArm(null); }}
+                        onDragOver={(e) => { e.preventDefault(); if (dragId && dragId !== r.id) setOverId(r.id); }}
+                        onDragLeave={() => setOverId((o) => (o === r.id ? null : o))}
+                        onDrop={(e) => { e.preventDefault(); if (dragId) reorder(dragId, r.id); setDragId(null); setOverId(null); }}
+                        className={`rounded-2xl border p-4 transition-all ${
+                          overId === r.id ? "border-[var(--yellow)] bg-[var(--yellow)]/5"
+                          : dragId === r.id ? "border-indigo-600 opacity-40"
+                          : skipped ? "border-slate-900 bg-slate-950/30 opacity-60"
+                          : "border-slate-900 bg-slate-950/70"
+                        }`}
+                      >
+                        <div className="flex flex-wrap sm:flex-nowrap items-start gap-4">
+                          <div className="flex flex-col items-center gap-2.5 shrink-0">
+                            {/* Ticked means it goes; unticked is the old "skip". */}
+                            <input type="checkbox" checked={!skipped}
+                              onChange={() => setAutoSkip((s) => { const n = new Set(s); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; })}
+                              title={skipped ? "Include this creative" : "Leave this creative out"}
+                              className="w-5 h-5 accent-[#FFD400] cursor-pointer" />
+                            <span onMouseDown={() => setDragArm(r.id)} onMouseUp={() => setDragArm(null)}
+                              title="Drag to reorder — the dates follow the order"
+                              className="w-8 h-8 rounded-full bg-[var(--yellow)] text-black text-sm font-black flex items-center justify-center cursor-grab active:cursor-grabbing select-none">{i + 1}</span>
+                          </div>
+
+                          <div className="w-20 shrink-0">
+                            <div className={`relative w-20 rounded-xl overflow-hidden border border-slate-800 bg-slate-900 ${["reel", "story"].includes(r.content_type) ? "aspect-[9/16]" : "aspect-square"}`}>
+                              {r.media_type === "video" && r.content_type !== "carousel"
+                                ? (r.thumbnail_url
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  ? <img src={r.thumbnail_url} alt="" className="w-full h-full object-cover" />
+                                  : <div className="w-full h-full flex items-center justify-center text-slate-500 text-lg">▶</div>)
+                                // eslint-disable-next-line @next/next/no-img-element
+                                : <img src={r.file_url} alt="" className="w-full h-full object-cover" />}
+                              {r.content_type === "carousel" && (
+                                <span className="absolute bottom-0 right-0 px-1.5 py-0.5 rounded-tl bg-black/75 text-[11px] font-black text-white">▣ {autoSlideCount(r)}</span>
+                              )}
+                            </div>
+                            <ThumbNote u={autoThumbOf(r)} className="mt-1" wrap big />
+                            {r.linked_story && (
+                              <div className={`mt-2 flex items-center gap-1.5 ${storyGoes(r) ? "" : "opacity-40"}`} title={`Story: ${r.linked_story.file_name || ""}`}>
+                                <div className="relative w-8 aspect-[9/16] rounded-md overflow-hidden border border-slate-700 bg-slate-900 shrink-0">
+                                  {(r.linked_story.media_type === "video" ? r.linked_story.thumbnail_url : r.linked_story.file_url)
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    ? <img src={(r.linked_story.media_type === "video" ? r.linked_story.thumbnail_url : r.linked_story.file_url) as string} alt="" className="w-full h-full object-cover" />
+                                    : <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs">▶</div>}
+                                </div>
+                                <span className="text-xs font-bold text-slate-400 leading-tight">+ its Story</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="min-w-0 flex-1 basis-full sm:basis-0 space-y-2.5">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {r.post_number != null && (
+                                <span className="text-[13px] font-bold px-2 py-0.5 rounded-md bg-slate-900 text-white tabular-nums">Post {r.post_number}</span>
+                              )}
+                              <span className="text-base font-semibold text-white truncate max-w-full sm:max-w-[360px]">{r.file_name || "creative"}</span>
+                              <span className="text-xs uppercase font-bold tracking-wide px-2 py-0.5 rounded-md bg-slate-900 border border-slate-800 text-slate-400">{r.content_type}</span>
+                              {r.content_type === "carousel" && (
+                                <span className="px-2.5 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-slate-300 text-[13px] font-bold"
+                                  title="Sent as one post with every slide, in order — Instagram and Facebook only">
+                                  ▣ {autoSlideCount(r)} slides
+                                </span>
+                              )}
+                              {r.rejected ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-500 text-[13px] font-bold">
+                                  <AlertTriangle className="w-3.5 h-3.5" />Held back
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500 text-[13px] font-bold">
+                                  <CheckCircle2 className="w-3.5 h-3.5" />Approved
+                                </span>
+                              )}
+                              {r.content_type !== "story" && <CaptionStatus r={r} big />}
+                              {r.risk_accepted_at && (
+                                <span className="text-[13px] font-black px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500">posted against QC advice</span>
+                              )}
+                              {r.content_type !== "story" && (
+                                <button onClick={() => copyCaption(r.id)} disabled={!(autoCaptions[r.id] ?? "").trim()}
+                                  title="Copy this caption"
+                                  className="ml-auto shrink-0 h-10 px-3.5 inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 text-sm font-semibold text-slate-300 hover:text-white hover:border-slate-700 cursor-pointer disabled:opacity-40">
+                                  {copiedCaption === r.id ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                                  <span>{copiedCaption === r.id ? "Copied" : "Copy"}</span>
+                                </button>
+                              )}
+                              {r.content_type !== "story" && (
+                                <button onClick={() => regenerateCaption(r.id)} disabled={regenId === r.id || writeAllBusy || as === "story"}
+                                  title="Write this caption again"
+                                  className="shrink-0 h-10 px-3.5 inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 text-sm font-semibold text-slate-300 hover:text-white hover:border-indigo-600 cursor-pointer disabled:opacity-40">
+                                  {regenId === r.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                                  <span>Rewrite</span>
+                                </button>
+                              )}
+                            </div>
+
+                            {r.rejected && (
+                              <div className="flex items-start gap-2.5">
+                                <p className="flex-1 min-w-0 text-sm text-amber-400 leading-snug">
+                                  Held back — {r.rejected_reason || r.qc_note || "no reason recorded"}
+                                </p>
+                                <button onClick={() => deleteAutoRow(r)} disabled={autoDeleting === r.id}
+                                  title="Delete this creative from the hub"
+                                  className="shrink-0 w-10 h-10 flex items-center justify-center rounded-lg border border-slate-800 bg-slate-950 text-slate-400 hover:text-rose-400 hover:border-rose-700 cursor-pointer disabled:opacity-40">
+                                  {autoDeleting === r.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                                </button>
+                              </div>
+                            )}
+
+                            {r.content_type === "story" ? (
+                              <p className="text-sm text-slate-500">Stories carry no caption — both platforms drop the text.</p>
+                            ) : (
+                              <div className="space-y-1.5">
+                                <div className={as === "story" ? "opacity-40" : ""}>
+                                  <AutoTextarea
+                                    value={autoCaptions[r.id] ?? ""}
+                                    onChange={(v) => { touchedCaptions.current.add(r.id); setAutoCaptions((c) => ({ ...c, [r.id]: v })); }}
+                                    onBlur={() => saveCaptionEdit(r.id)}
+                                    rows={3}
+                                    disabled={as === "story"}
+                                    placeholder={captionOnItsWay(r) ? "Writing itself in the background — it appears here when ready…" : "Click Rewrite or 'Write all captions' to generate…"}
+                                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-3 text-[15px] text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 leading-relaxed disabled:cursor-not-allowed"
+                                  />
+                                </div>
+                                {as === "story" && <p className="text-sm text-slate-500">Stories carry no caption — the creative is the whole message.</p>}
+                                {as === "both" && <p className="text-sm text-slate-500">This caption goes to the feed post only — the Story carries none.</p>}
+                                {writingIds.has(r.id) && (
+                                  <p className="text-sm text-indigo-300 inline-flex items-center gap-1.5">
+                                    <Loader2 className="w-4 h-4 animate-spin" /> Analyzing the video and writing…
+                                  </p>
+                                )}
+                                {captionErrors[r.id] && !writingIds.has(r.id) && (
+                                  <p className="text-sm text-amber-400 flex items-center gap-2 flex-wrap">
+                                    <span>Failed: {captionErrors[r.id]}</span>
+                                    <button onClick={() => regenerateCaption(r.id)} disabled={regenId === r.id || writeAllBusy}
+                                      className="font-bold text-rose-300 hover:text-white underline underline-offset-2 cursor-pointer disabled:opacity-50">
+                                      Retry
+                                    </button>
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* When, and how it goes — one row of plain controls under the caption. */}
+                        <div className="mt-4 pt-4 border-t border-slate-900 flex items-center gap-x-5 gap-y-3 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <CalendarDays className="w-4 h-4 text-slate-500" />
+                            <input type="date" value={date} onClick={openPicker}
+                              onChange={(e) => setAutoDates((d) => ({ ...d, [r.id]: e.target.value }))}
+                              className={`h-10 bg-slate-950 border rounded-lg px-3 text-[15px] text-white cursor-pointer [color-scheme:dark] focus:outline-none ${
+                                slot?.outOfOrder ? "border-amber-600" : autoDates[r.id] ? "border-indigo-600" : "border-slate-800"
+                              }`} />
+                            {slot && (
+                              <>
+                                <input type="time" value={slot.time} onClick={openPicker}
+                                  onChange={(e) => setAutoTimes((t) => ({ ...t, [r.id]: e.target.value }))}
+                                  title="Set this post's own time"
+                                  className={`h-10 bg-slate-950 border rounded-lg px-3 text-[15px] cursor-pointer [color-scheme:dark] focus:outline-none ${
+                                    slot.manualTime ? "border-indigo-600 text-white"
+                                    : slot.nthOfDay > 0 ? "border-slate-800 text-amber-500"
+                                    : "border-slate-800 text-slate-300"
+                                  }`} />
+                                {slot.nthOfDay > 0 && !slot.manualTime && gapMins !== null && (
+                                  <span className="text-[13px] font-bold text-amber-500" title="Spaced so two posts don't fire at once">+{slot.nthOfDay * gapMins >= 60 ? `${((slot.nthOfDay * gapMins) / 60).toFixed(1).replace(/\.0$/, "")}h` : `${slot.nthOfDay * gapMins}m`}</span>
+                                )}
+                              </>
+                            )}
+                          </div>
+
+                          {/* One story, many days — every choice a button, no menu. */}
+                          {r.content_type === "story" && (
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-semibold text-slate-400">Repeat</span>
+                              {([
+                                { v: "manual", label: "Once" },
+                                { v: "everyday", label: "Every day" },
+                                { v: "alternate", label: "Alternate days" },
+                              ] as const).map((o) => (
+                                <button key={o.v} aria-pressed={(rep?.mode ?? "manual") === o.v}
+                                  title="Post this same story on more days, at the same time"
+                                  onClick={() => setAutoRepeat((p) => {
+                                    const n = { ...p };
+                                    if (o.v === "manual") delete n[r.id]; else n[r.id] = { mode: o.v, times: p[r.id]?.times ?? 7 };
+                                    return n;
+                                  })}
+                                  className={chip((rep?.mode ?? "manual") === o.v)}>
+                                  {o.label}
+                                </button>
+                              ))}
+                              {rep && (
+                                <label className="flex items-center gap-1.5 text-sm font-semibold text-slate-400" title="How many days in all, 2–30">
+                                  <span>×</span>
+                                  <input type="number" min={2} max={30} step={1} value={rep.times || ""}
+                                    onChange={(e) => {
+                                      const n = parseInt(e.target.value, 10);
+                                      setAutoRepeat((p) => ({ ...p, [r.id]: { ...rep, times: Number.isNaN(n) ? 0 : n } }));
+                                    }}
+                                    onBlur={() => setAutoRepeat((p) => (p[r.id] ? { ...p, [r.id]: { ...p[r.id], times: clampTimes(p[r.id].times) } } : p))}
+                                    className="w-[68px] h-10 bg-slate-950 border border-indigo-600 rounded-lg px-2.5 text-[15px] text-white focus:outline-none" />
+                                  <span>days</span>
+                                </label>
+                              )}
+                            </div>
+                          )}
+
+                          {r.linked_story && (
+                            <div className="flex items-center gap-3 flex-wrap">
+                              <label className="flex items-center gap-2 text-sm font-semibold text-slate-200 cursor-pointer h-10"
+                                title="Sent as a Story at this row's time — Instagram and Facebook only, no caption">
+                                <input type="checkbox" checked={storyRides(r)}
+                                  onChange={() => setAutoNoStory((p) => { const n = new Set(p); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n; })}
+                                  className="w-5 h-5 accent-[#FFD400] cursor-pointer" />
+                                <span>Include Story</span>
+                              </label>
+                              {storyRides(r) && autoMode === "clear" && !storyCleared(r) && (
+                                <span className="text-[13px] font-bold text-amber-400" title={r.linked_story.qc_note || ""}>
+                                  Story not QC-approved — the post goes, the Story is skipped
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          {(r.content_type === "post" || r.content_type === "reel") && !r.linked_story && (
+                            <div className="flex items-center gap-2 flex-wrap" title="Stories go to Instagram and Facebook only, with no caption">
+                              <span className="text-sm font-semibold text-slate-400">Send as</span>
+                              {([
+                                { v: "feed" as const, label: "Feed" },
+                                { v: "story" as const, label: "Story" },
+                                { v: "both" as const, label: "Feed + Story" },
+                              ]).map((o) => (
+                                <button key={o.v} aria-pressed={as === o.v}
+                                  onClick={() => setAutoAs((a) => {
+                                    const n = { ...a };
+                                    if (o.v === "feed") delete n[r.id]; else n[r.id] = o.v;
+                                    return n;
+                                  })}
+                                  className={chip(as === o.v)}>
+                                  {o.label}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+
+                          {(autoDates[r.id] || autoTimes[r.id] || autoRepeat[r.id] || autoAs[r.id] || autoNoStory.has(r.id)) && (
+                            <button
+                              onClick={() => {
+                                setAutoDates((d) => { const n = { ...d }; delete n[r.id]; return n; });
+                                setAutoTimes((t) => { const n = { ...t }; delete n[r.id]; return n; });
+                                setAutoRepeat((p) => { const n = { ...p }; delete n[r.id]; return n; });
+                                setAutoAs((a) => { const n = { ...a }; delete n[r.id]; return n; });
+                                setAutoNoStory((p) => { const n = new Set(p); n.delete(r.id); return n; });
+                              }}
+                              className="h-10 px-3 rounded-lg text-sm font-semibold text-slate-400 hover:text-white hover:bg-slate-900 cursor-pointer">Reset</button>
+                          )}
+                        </div>
+
+                        {(rep && slot) || slot?.outOfOrder || slot?.clamped || slot?.collides ? (
+                          <div className="mt-2.5 flex items-center gap-x-4 gap-y-1 flex-wrap text-[13px] font-semibold">
+                            {rep && slot && (
+                              <span className="text-slate-400 font-normal">
+                                Runs {repTimes} times · {dayLabel(slot.date)} → {dayLabel(shiftYmd(slot.date, (repTimes - 1) * repStep))} · {repStep === 1 ? "same time daily" : "every 2nd day"}
+                              </span>
+                            )}
+                            {slot?.outOfOrder && <span className="text-amber-400" title="This posts before the one above it">⚠ out of order</span>}
+                            {slot?.clamped && <span className="text-rose-400" title="The spacing would have crossed midnight">⚠ time capped</span>}
+                            {slot?.collides && <span className="text-rose-400" title="Same instant as the post above — set a time or pick a gap">⚠ same time</span>}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
+
+          {/* ---- Schedule preview: what one press will put out ---- */}
+          <aside ref={previewRef} className="bg-slate-950/40 border border-slate-900 rounded-2xl p-5 space-y-4 will-change-transform">
+            <div>
+              <h3 className="text-xl font-bold text-white">Schedule preview</h3>
+              <p className="text-[15px] text-slate-400 mt-0.5">
+                {autoReady.length} creative{autoReady.length === 1 ? "" : "s"} • {autoPosts} post{autoPosts === 1 ? "" : "s"}
+              </p>
+            </div>
+
+            {autoReady.length === 0 ? (
+              <p className="text-[15px] text-slate-500 py-8 text-center border border-dashed border-slate-800 rounded-xl">
+                {!autoClient ? "Pick a client to see the schedule." : autoRows.length === 0 ? "Nothing waiting for this client." : "Nothing selected — every creative is unticked or has no date."}
+              </p>
+            ) : (
+              <div className="space-y-2.5 max-h-[50vh] overflow-y-auto pr-1">
+                {autoReady.map((r) => {
+                  const slot = schedule[r.id];
+                  const rep = repeatOf(r);
+                  const as = sendAsOf(r);
+                  const storyOnly = r.content_type === "story" || as === "story";
+                  const goesTo = autoPlatforms.filter((p) => {
+                    if ((storyOnly || r.content_type === "carousel") && p !== "instagram" && p !== "facebook") return false;
+                    if (p === "youtube" && (r.media_type !== "video" || r.content_type === "carousel")) return false;
+                    return true;
+                  });
+                  const thumb = r.media_type === "video" && r.content_type !== "carousel" ? r.thumbnail_url : r.file_url;
+                  const extras = [
+                    as === "story" ? "as Story" : as === "both" ? "+ Story" : "",
+                    storyGoes(r) ? "+ Story" : "",
+                    rep ? `× ${clampTimes(rep.times)} days` : "",
+                  ].filter(Boolean).join(" · ");
+                  return (
+                    <div key={r.id} className="flex items-center gap-3 rounded-xl border border-slate-900 bg-slate-950/60 p-3">
+                      <div className="w-[74px] shrink-0">
+                        <p className="text-base font-bold text-white leading-tight">{dayLabel(slot.date)}</p>
+                        <p className="text-sm text-slate-400">{time12(slot.time)}{autoTz !== "ist" ? ` ${AUTO_TIME_ZONES.find((z) => z.id === autoTz)?.short}` : ""}</p>
+                      </div>
+                      <div className="w-12 h-12 shrink-0 rounded-lg overflow-hidden border border-slate-800 bg-slate-900 flex items-center justify-center">
+                        {thumb
+                          // eslint-disable-next-line @next/next/no-img-element
+                          ? <img src={thumb} alt="" className="w-full h-full object-cover" />
+                          : <span className="text-slate-500">▶</span>}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[15px] font-semibold text-white truncate" title={r.file_name || ""}>
+                          {r.post_number != null && <span className="text-slate-500 font-bold mr-1.5">#{r.post_number}</span>}{r.file_name || "creative"}
+                        </p>
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          {goesTo.map((p) => (
+                            <span key={p} className="inline-flex items-center gap-0.5" title={PLATFORM_LABEL[p] || p}>
+                              <PlatformIcon platform={p} size={17} />
+                              {autoAccountsOn(p) > 1 && <span className="text-[11px] font-bold text-slate-400">×{autoAccountsOn(p)}</span>}
+                            </span>
+                          ))}
+                          <span className="text-[13px] text-slate-500 capitalize">{r.content_type}{r.content_type === "carousel" ? ` · ${autoSlideCount(r)} slides` : ""}{extras ? ` · ${extras}` : ""}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {autoRows.length > 0 && (
+              <div className="rounded-xl border border-blue-900 bg-blue-950 p-3.5 flex items-start gap-2.5">
+                <Info className="w-5 h-5 text-blue-500 shrink-0 mt-0.5" />
+                <p className="text-sm text-slate-300 leading-relaxed">
+                  {autoReady.length === 0
+                    ? "Nothing selected — every row is unticked or has no date."
+                    : <>Will schedule <b className="text-white">{autoPosts}</b> post(s) — {autoReady.length} creative(s){autoOccurrences > autoReady.length ? ` (${autoOccurrences} runs with ${[autoReady.some((r) => repeatOf(r)) ? "story repeats" : "", autoReady.some((r) => sendAsOf(r) === "both") ? "Story passes" : "", autoReady.some(storyGoes) ? "linked Stories" : ""].filter(Boolean).join(" and ")})` : ""} on {autoFeedAccounts} account(s){autoSameDay > 0 ? `, with ${autoSameDay} spaced out on a shared day` : `, all at ${time12(autoTime)}`}{autoStoryPasses > 0 && autoStoryPlatforms < autoPlatforms.length ? `; ${autoStoryPasses} Story pass(es) go to Instagram/Facebook only` : ""}{autoSpan ? (autoSpan.first === autoSpan.last ? ` · on ${dayLabel(autoSpan.first)}` : ` · running ${dayLabel(autoSpan.first)} → ${dayLabel(autoSpan.last)}`) : ""}. Check captions and dates before scheduling.</>}
+                </p>
+              </div>
+            )}
+
+            <button onClick={() => setReviewOpen(true)} disabled={autoSending || autoReady.length === 0 || autoPlatforms.length === 0}
+              className={`w-full h-14 rounded-xl text-base font-bold flex items-center justify-center gap-2.5 transition-all ${!autoSending && autoReady.length > 0 && autoPlatforms.length > 0 ? "bg-indigo-500 hover:bg-indigo-400 text-black cursor-pointer" : "bg-slate-950 border border-slate-900 text-slate-500 cursor-not-allowed"}`}>
+              {autoSending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+              <span>{autoSending ? "Scheduling — this can take a minute…" : "Review & Schedule"}</span>
+            </button>
+
+            {/* One look before anything is sent — the whole run in a few lines. */}
+            {reviewOpen && (
+              <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => setReviewOpen(false)}>
+                <div role="dialog" aria-modal="true" aria-label="Review the schedule"
+                  className="w-full max-w-md bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+                  <h3 className="text-xl font-bold text-white">Schedule {autoPosts} post{autoPosts === 1 ? "" : "s"}?</h3>
+                  <ul className="text-[15px] text-slate-300 space-y-1.5">
+                    <li><b className="text-white">{clients.find((c) => c.id === autoClient)?.name}</b> · {autoReady.length} creative{autoReady.length === 1 ? "" : "s"}</li>
+                    <li>{autoPlatforms.map((p) => PLATFORM_LABEL[p] || p).join(", ")} · {autoFeedAccounts} account{autoFeedAccounts === 1 ? "" : "s"}</li>
+                    {autoSpan && <li>{autoSpan.first === autoSpan.last ? `On ${dayLabel(autoSpan.first)}` : `${dayLabel(autoSpan.first)} → ${dayLabel(autoSpan.last)}`}{autoTz !== "ist" ? ` (${AUTO_TIME_ZONES.find((z) => z.id === autoTz)?.label}, sent as India time)` : " (IST)"}</li>}
+                    {autoMode === "risk" && <li className="text-amber-500 font-semibold">Risk: this overrides QC on the record.</li>}
+                  </ul>
+                  <div className="flex items-center justify-end gap-2 pt-2">
+                    <button onClick={() => setReviewOpen(false)} className="h-11 px-4 rounded-xl border border-slate-800 text-sm font-semibold text-slate-300 hover:text-white cursor-pointer">Back</button>
+                    <button onClick={sendAutomation} className="h-11 px-5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-sm font-bold text-black cursor-pointer inline-flex items-center gap-2">
+                      <Send className="w-4 h-4" />Schedule now
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            <p className="text-[13px] text-slate-500 text-center">Posts go out through RecurPost at the times shown.</p>
+          </aside>
+        </div>
         </div>
       )}
 

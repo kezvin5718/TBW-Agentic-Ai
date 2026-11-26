@@ -313,7 +313,7 @@ export default function SidebarNav({ sections, name, email, designation, avatarU
   return (
     <>
       {/* Below lg — the bar that replaces the full-page menu */}
-      <div className="lg:hidden flex items-center justify-between h-14 px-4 bg-slate-950/60 backdrop-blur-md border-b border-slate-900 shrink-0">
+      <div className="tbw-sidebar lg:hidden flex items-center justify-between h-14 px-4 bg-slate-950/60 backdrop-blur-md border-b border-slate-900 shrink-0">
         <Link href="/dashboard" className="flex items-center group min-w-0">
           <BrandLogo />
         </Link>
@@ -334,14 +334,14 @@ export default function SidebarNav({ sections, name, email, designation, avatarU
       {open && (
         <div className="lg:hidden fixed inset-0 z-50 flex">
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setOpen(false)} />
-          <aside className="relative w-72 max-w-[85vw] h-full bg-slate-950 border-r border-slate-900 flex flex-col">
+          <aside className="tbw-sidebar relative w-72 max-w-[85vw] h-full bg-slate-950 border-r border-slate-900 flex flex-col">
             {panel}
           </aside>
         </div>
       )}
 
       {/* lg and up — today's sidebar, unchanged */}
-      <aside className="hidden lg:flex lg:w-72 bg-slate-950/60 backdrop-blur-md lg:border-r border-slate-900 flex-col shrink-0">
+      <aside className="tbw-sidebar hidden lg:flex lg:w-72 bg-slate-950/60 backdrop-blur-md lg:border-r border-slate-900 flex-col shrink-0">
         {panel}
       </aside>
     </>
