@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
     .select("platform, media_url, scheduled_for, social_account_id")
     .eq("client_id", clientId)
     .eq("content_type", "story")
-    .not("recurpost_post_id", "is", null)
+    .or("recurpost_post_id.not.is.null,recurpost_ref.not.is.null")
     .gte("created_at", sinceIso);
   const alreadyKey = new Set(
     // Per account; a row with none on record went to the first account.

@@ -122,6 +122,8 @@ interface PostRow {
   webhook_response?: string | null;
   media_is_video?: boolean | null;
   recurpost_post_id?: number | null;
+  /** RecurPost v2's id — with it, Bron can change or remove the queued post itself. */
+  recurpost_ref?: string | null;
   needs_recurpost_cleanup?: boolean | null;
   // Set by the duplicate safety net: this row is a second copy of duplicate_of,
   // still in RecurPost until someone deletes it there.
@@ -1842,16 +1844,43 @@ export default function SocialPublisherPage() {
 
   /** The amber duplicate chip, with the RecurPost id the Queue needs. */
   const dupChip = (p: PostRow) => isFlaggedDup(p) ? (
-    <span title="A second copy of an earlier post — delete it in RecurPost → Queue" className="text-[9px] font-black px-1.5 py-0.5 rounded border bg-amber-950/40 border-amber-900 text-amber-400">
-      Duplicate — remove in RecurPost{p.recurpost_post_id ? <> · <span className="font-mono">#{p.recurpost_post_id}</span></> : null}
+    <span title="A second copy of an earlier post, still in RecurPost's queue" className="text-[9px] font-black px-1.5 py-0.5 rounded border bg-amber-950/40 border-amber-900 text-amber-400">
+      Duplicate{p.recurpost_ref ? " — remove it below" : <> — remove in RecurPost{p.recurpost_post_id ? <> · <span className="font-mono">#{p.recurpost_post_id}</span></> : null}</>}
     </span>
   ) : null;
 
-  /** "Mark removed" and "Not a duplicate", for a flagged row. */
+  /**
+   * Take a post out of RecurPost's queue from here (RecurPost v2). The row
+   * stays in the Library, marked removed; a flagged duplicate is closed too.
+   */
+  const unqueue = async (p: PostRow) => {
+    if (!window.confirm("Remove this post from RecurPost's queue? It will not be published. This cannot be undone.")) return;
+    setLibBusy(p.id);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/social-publisher", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: p.id, action: "unqueue" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not remove it");
+      setNotice({ ok: true, text: data.message });
+      await loadHistory();
+    } catch (err: unknown) {
+      setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not remove it" });
+    } finally { setLibBusy(null); }
+  };
+
+  /** "Remove this copy" (or "Mark removed" for an old one), and "Not a duplicate", for a flagged row. */
   const dupButtons = (p: PostRow) => isFlaggedDup(p) ? (
     <>
+      {p.recurpost_ref ? (
+        <button disabled={libBusy === p.id} onClick={() => unqueue(p)} title="Take this copy out of RecurPost's queue — the original stays"
+          className="px-2 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-[9px] font-bold text-white cursor-pointer disabled:opacity-50">Remove this copy</button>
+      ) : (
       <button disabled={libBusy === p.id} onClick={() => resolveDuplicate(p, "resolved")} title="I deleted this copy in RecurPost"
         className="px-2 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-[9px] font-bold text-slate-300 cursor-pointer disabled:opacity-50">Mark removed</button>
+      )}
       <button disabled={libBusy === p.id} onClick={() => resolveDuplicate(p, "ignored")} title="This is not a duplicate — clear the flag"
         className="px-2 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 hover:border-indigo-600 text-[9px] font-bold text-slate-400 cursor-pointer disabled:opacity-50">Not a duplicate</button>
     </>
@@ -1901,8 +1930,8 @@ export default function SocialPublisherPage() {
       if (!res.ok) throw new Error(data.error || "Could not save");
       setNotice({ ok: true, text: data.message });
       await loadHistory();
-      // Stay open when RecurPost still holds the original — the next step
-      // (delete there, then re-send) happens right here.
+      // Stay open only when RecurPost still holds the original — with v2 the
+      // edit is applied there too and this closes like any save.
       if (!data.stillQueuedThere) setEditing(null);
     } catch (err: unknown) {
       setNotice({ ok: false, text: err instanceof Error ? err.message : "Could not save" });
@@ -1926,7 +1955,10 @@ export default function SocialPublisherPage() {
   };
 
   const deletePost = async (p: PostRow) => {
-    if (!window.confirm("Remove this post from your library?")) return;
+    const queued = !!p.recurpost_ref && isFuture(p) && ["sent", "uncertain"].includes(p.status);
+    if (!window.confirm(queued
+      ? "Remove this post? It is also taken out of RecurPost's queue, so it will not be published."
+      : "Remove this post from your library?")) return;
     setLibBusy(p.id);
     try {
       let res = await fetch("/api/social-publisher", {
@@ -4798,10 +4830,21 @@ export default function SocialPublisherPage() {
                       <Pencil className="w-3 h-3" /><span>Edit</span>
                     </button>
                   )}
+                  {/* RecurPost v2: stop a queued post without leaving Bron. */}
+                  {libSel.recurpost_ref && libSel.status === "sent" && isFuture(libSel) && !isFlaggedDup(libSel) && (
+                    <button disabled={libBusy === libSel.id} onClick={() => unqueue(libSel)} title="Take it out of RecurPost's queue so it is not published — the record stays here"
+                      className="px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-rose-400 hover:border-rose-800 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1">
+                      <X className="w-3 h-3" /><span>Cancel in RecurPost</span>
+                    </button>
+                  )}
                   <button disabled={libBusy === libSel.id} onClick={() => deletePost(libSel)} className="px-2.5 py-1 min-h-[40px] lg:min-h-0 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 text-[10px] font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1">
                     <Trash2 className="w-3 h-3" /><span>Remove</span>
                   </button>
                 </div>
+
+                {libSel.status === "removed" && (
+                  <p className="text-[10px] font-bold text-slate-500">Removed from RecurPost&apos;s queue — it will not be published.</p>
+                )}
 
                 {libSel.status === "sent" && !isFuture(libSel) && (
                   <p className="text-[10px] text-slate-600">
@@ -4830,8 +4873,9 @@ export default function SocialPublisherPage() {
                   <div className="bg-amber-950/25 border border-amber-900/60 rounded-xl p-3 space-y-2">
                     <div className="flex items-center gap-1.5 flex-wrap">{dupChip(libSel)}</div>
                     <p className="text-[10px] text-amber-200/80 leading-relaxed">
-                      Open RecurPost → Queue and delete post{" "}
-                      <b className="font-mono">{libSel.recurpost_post_id ?? "(id not recorded)"}</b>. The original is untouched — only this copy goes.
+                      {libSel.recurpost_ref
+                        ? <>Press <b>Remove this copy</b> — it is taken out of RecurPost&apos;s queue from here. The original is untouched.</>
+                        : <>Open RecurPost → Queue and delete post <b className="font-mono">{libSel.recurpost_post_id ?? "(id not recorded)"}</b>. The original is untouched — only this copy goes.</>}
                     </p>
                     <div className="flex items-center gap-1.5 flex-wrap">{dupButtons(libSel)}</div>
                   </div>
@@ -4844,21 +4888,21 @@ export default function SocialPublisherPage() {
                       <AlertTriangle className="w-3.5 h-3.5" /> RecurPost still holds the old version
                     </p>
                     <p className="text-[10px] text-amber-200/80 leading-relaxed">
-                      Your correction is saved here, but RecurPost gives us no way to change or cancel a queued post.
-                      Open RecurPost → Queue, delete post{" "}
-                      <b className="font-mono">{libSel.recurpost_post_id ?? "(id not recorded)"}</b>, then press Re-send —
-                      otherwise both versions publish.
+                      {libSel.recurpost_ref
+                        ? <>Your correction is saved here, but RecurPost did not take it. Press below — the old version is removed from RecurPost&apos;s queue and the corrected one is sent in its place.</>
+                        : <>Your correction is saved here. This post was sent before RecurPost&apos;s update, so open RecurPost → Queue, delete post <b className="font-mono">{libSel.recurpost_post_id ?? "(id not recorded)"}</b>, then press Re-send — otherwise both versions publish.</>}
                     </p>
                     <button
                       disabled={libBusy === libSel.id}
                       onClick={() => {
+                        if (libSel.recurpost_ref) { retryPost(libSel); return; }
                         if (!window.confirm(`Have you deleted post ${libSel.recurpost_post_id ?? ""} in RecurPost's Queue?\n\nIf it is still there, this will publish twice.`)) return;
                         retryPost(libSel, true);
                       }}
                       className="px-2.5 py-1.5 min-h-[40px] lg:min-h-0 rounded-lg bg-amber-600 hover:bg-amber-500 text-[10px] font-bold text-white cursor-pointer disabled:opacity-50 flex items-center gap-1"
                     >
                       {libBusy === libSel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                      <span>I&apos;ve deleted it — re-send corrected</span>
+                      <span>{libSel.recurpost_ref ? "Remove old version & re-send" : "I've deleted it — re-send corrected"}</span>
                     </button>
                   </div>
                 )}
@@ -4871,9 +4915,9 @@ export default function SocialPublisherPage() {
 
                     {isFuture(libSel) && libSel.status === "sent" && !libSel.needs_recurpost_cleanup && (
                       <p className="text-[10px] text-amber-300/90 bg-amber-950/20 border border-amber-900/40 rounded-lg p-2 leading-relaxed">
-                        This one is already queued at RecurPost. Saving corrects our copy, but you will still need to
-                        delete post <b className="font-mono">{libSel.recurpost_post_id ?? "(id not recorded)"}</b> in
-                        RecurPost and re-send — their API has no way to edit a queued post.
+                        {libSel.recurpost_ref
+                          ? <>This one is queued at RecurPost. Saving changes it there too — caption, time and media.</>
+                          : <>This one was queued before RecurPost&apos;s update. Saving corrects our copy, but you will still need to delete post <b className="font-mono">{libSel.recurpost_post_id ?? "(id not recorded)"}</b> in RecurPost and re-send.</>}
                       </p>
                     )}
 

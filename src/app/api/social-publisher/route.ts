@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
-import { isRecurPostConfigured } from "@/lib/recurpost";
+import { isRecurPostConfigured, unqueuePost, updateQueuedPost } from "@/lib/recurpost";
 import { istWallClockToUtc, utcToIstWallClock } from "@/lib/time";
 import { toPublishableVideoUrl, toPublishableThumbUrl } from "@/lib/publishable-media";
 import { reserve, reclaim, settle, sendToRecurPost, IN_FLIGHT } from "@/lib/post-dedupe";
@@ -178,7 +178,23 @@ export async function POST(request: NextRequest) {
     // cancel. That is the duplicate: not two clicks of Send, but a retry on a
     // post RecurPost had already taken. (Confirming an uncertain row is the
     // same promise — "I looked, it is not there" — so it answers this too.)
-    if (post.recurpost_post_id && !body.confirmedRemoved && !confirmedUncertain) {
+    // Since RecurPost's v2 a queued post can be removed through their API, so
+    // the old copy is taken out here and the retry replaces it — no trip to
+    // RecurPost's Queue. Only a copy already published stops the retry: that
+    // one is out, and a second send would post it twice.
+    if (post.recurpost_ref && !confirmedUncertain) {
+      try {
+        const out = await unqueuePost(post.recurpost_ref as string, (post.social_account_id as string | null) ?? null);
+        if (out.published > 0) {
+          return NextResponse.json({ error: "RecurPost has already published this one — retrying would post it twice." }, { status: 409 });
+        }
+        await admin.from("social_posts").update({ webhook_response: `[retry] removed the earlier copy from RecurPost's queue (${out.removed} item${out.removed === 1 ? "" : "s"})` }).eq("id", post.id);
+      } catch (err: unknown) {
+        return NextResponse.json({ error: `Could not remove the earlier copy from RecurPost's queue (${err instanceof Error ? err.message : "no answer"}) — nothing was resent.` }, { status: 502 });
+      }
+    } else if (post.recurpost_post_id && !body.confirmedRemoved && !confirmedUncertain) {
+      // Sent before RecurPost's v2: its old numeric id cannot be removed
+      // through the API, so this one still needs a person in RecurPost.
       return NextResponse.json(
         {
           error: `RecurPost already has this queued as post ${post.recurpost_post_id}. Retrying adds a second copy — their API cannot replace one. Delete post ${post.recurpost_post_id} in RecurPost → Queue first, then retry.`,
@@ -364,7 +380,7 @@ export async function POST(request: NextRequest) {
     .select("platform, content_type, scheduled_for, social_account_id")
     .eq("client_id", clientId)
     .eq("media_url", publishUrl)
-    .not("recurpost_post_id", "is", null)
+    .or("recurpost_post_id.not.is.null,recurpost_ref.not.is.null")
     .gte("created_at", sinceIso);
   const scheduledIso = scheduledFor ? istWallClockToUtc(scheduledFor).toISOString() : null;
   // A time already gone gets refused HERE, in words, before RecurPost's
@@ -578,6 +594,38 @@ export async function PATCH(request: NextRequest) {
   const { data: post } = await admin.from("social_posts").select("*").eq("id", body.id).maybeSingle();
   if (!post) return NextResponse.json({ error: "Post not found" }, { status: 404 });
 
+  // "Remove from RecurPost" — take this post out of their queue so it is
+  // never published. The Library row stays, marked removed, so the record of
+  // what was planned and what was pulled is never lost. A flagged duplicate
+  // is closed by the same press.
+  if (body.action === "unqueue") {
+    if (!post.recurpost_ref) {
+      return NextResponse.json({
+        error: post.recurpost_post_id
+          ? `This was sent before RecurPost's update, and its old id (${post.recurpost_post_id}) can only be deleted in RecurPost → Queue.`
+          : "RecurPost never gave an id for this post, so there is nothing to remove from here.",
+      }, { status: 409 });
+    }
+    try {
+      const out = await unqueuePost(post.recurpost_ref as string, (post.social_account_id as string | null) ?? null);
+      if (out.published > 0 && out.removed === 0) {
+        return NextResponse.json({ error: "RecurPost has already published this one — it can only be taken down on the platform itself." }, { status: 409 });
+      }
+      await admin.from("social_posts").update({
+        status: "removed",
+        needs_recurpost_cleanup: false,
+        ...(post.duplicate_resolution_status === "manual_removal_required" ? { duplicate_resolution_status: "resolved" } : {}),
+        webhook_response: `[removed] taken out of RecurPost's queue from Bron (${out.removed} item${out.removed === 1 ? "" : "s"}${out.gone ? `, ${out.gone} already gone` : ""})`,
+      }).eq("id", post.id);
+      return NextResponse.json({
+        success: true,
+        message: out.removed > 0 ? "Removed from RecurPost's queue — it will not be published." : "It was no longer in RecurPost's queue — marked removed.",
+      });
+    } catch (err: unknown) {
+      return NextResponse.json({ error: `RecurPost did not remove it (${err instanceof Error ? err.message : "no answer"}). Nothing was changed.` }, { status: 502 });
+    }
+  }
+
   const scheduledMs = post.scheduled_for ? new Date(post.scheduled_for as string).getTime() : 0;
   const alreadyPublished = post.status === "sent" && (!post.scheduled_for || scheduledMs <= Date.now());
   if (alreadyPublished) {
@@ -602,36 +650,70 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Nothing to change" }, { status: 400 });
   }
 
-  // Queued at RecurPost — our copy and theirs are now deliberately out of step.
+  // Queued at RecurPost. Since their v2 the queued post itself can be
+  // changed, so the edit is made there too — text, time, media — and the two
+  // copies never drift. A post sent before v2 (an old numeric id), or a change
+  // RecurPost refuses, falls back to the old way: flagged, and re-sent from here.
   const stillQueuedThere = post.status === "sent" && scheduledMs > Date.now();
-  if (stillQueuedThere) patch.needs_recurpost_cleanup = true;
+  let appliedThere = false;
+  let applyError = "";
+  if (stillQueuedThere && post.recurpost_ref) {
+    try {
+      const fields: { message?: string; schedule_date_time?: string; image_url?: string[]; video_url?: string } = {};
+      if (body.caption !== undefined && post.content_type !== "story") fields.message = String(body.caption || post.title || "");
+      if (body.scheduledFor) fields.schedule_date_time = `${utcToIstWallClock(istWallClockToUtc(body.scheduledFor)).replace(" ", "T")}+05:30`;
+      if (body.mediaUrl) {
+        if (body.mediaIsVideo) {
+          const staged = await toPublishableVideoUrl(body.mediaUrl);
+          if (!staged.url) throw new Error(staged.error || "the new video could not be prepared");
+          fields.video_url = staged.url;
+          patch.media_url = staged.url;
+        } else {
+          fields.image_url = [body.mediaUrl];
+        }
+      }
+      if (Object.keys(fields).length > 0) {
+        const out = await updateQueuedPost(post.recurpost_ref as string, (post.social_account_id as string | null) ?? null, fields);
+        appliedThere = out.updated > 0;
+        if (!appliedThere) applyError = out.published > 0 ? "it has already been published" : "it was no longer in the queue";
+      } else {
+        appliedThere = true; // a title or cover change RecurPost has no field for stays ours alone
+      }
+    } catch (err: unknown) {
+      applyError = err instanceof Error ? err.message : "RecurPost did not answer";
+    }
+  }
+  if (stillQueuedThere && !appliedThere) patch.needs_recurpost_cleanup = true;
+  if (appliedThere) patch.needs_recurpost_cleanup = false;
 
   const { error } = await admin.from("social_posts").update(patch).eq("id", body.id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   return NextResponse.json({
     success: true,
-    stillQueuedThere,
-    recurpostPostId: post.recurpost_post_id ?? null,
-    message: stillQueuedThere
-      ? `Saved here — but RecurPost still holds the original and their API gives us no way to change or cancel it. Open RecurPost → Queue, delete post ${post.recurpost_post_id ?? "(id not recorded)"}, then press Re-send.`
-      : "Saved. Nothing is queued anywhere yet, so press Send when you're ready.",
+    stillQueuedThere: stillQueuedThere && !appliedThere,
+    appliedThere,
+    recurpostPostId: post.recurpost_post_id ?? post.recurpost_ref ?? null,
+    message: appliedThere
+      ? "Saved — and changed in RecurPost's queue too, so the corrected version is what publishes."
+      : stillQueuedThere
+        ? post.recurpost_ref
+          ? `Saved here, but RecurPost did not take the change (${applyError}). Press "Remove old version & re-send" to replace it.`
+          : `Saved here — this was sent before RecurPost's update, so its old copy (post ${post.recurpost_post_id ?? "id not recorded"}) must be deleted in RecurPost → Queue, then press Re-send.`
+        : "Saved. Nothing is queued anywhere yet, so press Send when you're ready.",
   });
 }
 
 /**
  * DELETE — remove a post from the Library.
  *
- * RecurPost's API can create a post but not cancel one (verified against their
- * published API, which documents login, posting, libraries and history only).
- * So deleting a future-scheduled row here does NOT stop it publishing — and
- * removing the row is worse than keeping it, because it also removes the post
- * id, which is the only handle for deleting it inside RecurPost's Queue.
+ * Since RecurPost's v2 (Nov 2026) a queued post can be removed through their
+ * API, so a post still waiting there is taken out of the queue first and then
+ * the row goes — deleting it here really does stop it publishing.
  *
- * A row still queued there is therefore refused until the caller confirms the
- * RecurPost side is done, and the refusal carries the ids to type in. That is
- * what turned "deleted from the library but it posted anyway" from a surprise
- * into a step.
+ * Posts sent before v2 carry only the old numeric id, which v2 cannot act on.
+ * Those are still refused until the caller confirms they were deleted in
+ * RecurPost's Queue by hand, and the refusal carries the ids to look for.
  */
 export async function DELETE(request: NextRequest) {
   const supabase = await createClient();
@@ -646,14 +728,32 @@ export async function DELETE(request: NextRequest) {
 
   const admin = createServiceRoleClient();
 
+  // A post still waiting in RecurPost's queue under a v2 id is taken out of
+  // it first — deleting the Library row then really does stop it publishing.
+  const { data: queuedRows } = await admin
+    .from("social_posts")
+    .select("id, recurpost_ref, social_account_id, scheduled_for, status")
+    .in("id", ids)
+    .not("recurpost_ref", "is", null);
+  for (const p of queuedRows || []) {
+    if (!p.scheduled_for || new Date(p.scheduled_for as string).getTime() <= Date.now() || p.status === "removed") continue;
+    try {
+      await unqueuePost(p.recurpost_ref as string, (p.social_account_id as string | null) ?? null);
+    } catch (err: unknown) {
+      return NextResponse.json({ error: `Could not remove a post from RecurPost's queue (${err instanceof Error ? err.message : "no answer"}) — nothing was deleted.` }, { status: 502 });
+    }
+  }
+
   if (!body.confirmedRemoved) {
     const { data: rows } = await admin
       .from("social_posts")
-      .select("id, platform, content_type, scheduled_for, recurpost_post_id, status")
+      .select("id, platform, content_type, scheduled_for, recurpost_post_id, recurpost_ref, status")
       .in("id", ids);
+    // Only posts sent before RecurPost's v2 still need deleting by hand.
     const stillQueued = (rows || []).filter(
       (p) =>
         p.recurpost_post_id &&
+        !p.recurpost_ref &&
         p.scheduled_for &&
         new Date(p.scheduled_for as string).getTime() > Date.now()
     );

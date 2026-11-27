@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
-import { getHistory, isRecurPostConfigured } from "@/lib/recurpost";
+import { getHistory, isRecurPostConfigured, postStatus } from "@/lib/recurpost";
 import { accountsFor, loadAccountMap } from "@/lib/recurpost-accounts";
 
 export const dynamic = "force-dynamic";
@@ -38,8 +38,8 @@ export async function POST(request: NextRequest) {
   // Only posts whose scheduled moment has passed can have an outcome yet.
   let q = admin
     .from("social_posts")
-    .select("id, client_id, platform, content_type, status, recurpost_post_id, scheduled_for, created_at, social_account_id")
-    .not("recurpost_post_id", "is", null)
+    .select("id, client_id, platform, content_type, status, recurpost_post_id, recurpost_ref, scheduled_for, created_at, social_account_id")
+    .or("recurpost_post_id.not.is.null,recurpost_ref.not.is.null")
     .in("status", ["sent", "failed"])
     .order("created_at", { ascending: false })
     .limit(200);
@@ -54,9 +54,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, checked: 0, message: "Nothing has come due yet — every post here is still scheduled for the future." });
   }
 
+  // Posts sent since RecurPost's v2 carry a reference RecurPost can be asked
+  // about directly: post_status says, per account, whether it published.
+  const byRef = new Map<string, { status: string; note: string }>();
+  for (const p of due.filter((x) => x.recurpost_ref).slice(0, 80)) {
+    try {
+      const accounts = await postStatus(p.recurpost_ref as string);
+      const mine = accounts.find((a) => a.id === p.social_account_id) || accounts[0];
+      if (mine) byRef.set(p.recurpost_ref as string, { status: mine.status, note: mine.post_link ? `live: ${mine.post_link}` : "" });
+    } catch { /* that post stays "no outcome yet" */ }
+  }
+
   // One history call per RecurPost account rather than per post.
   const accountsNeeded = new Set<string>();
-  for (const p of due) {
+  for (const p of due.filter((x) => !x.recurpost_ref)) {
     // The account the post actually went to; older rows (none on record) went
     // to the first one mapped.
     const mapped = accountsFor(map, p.client_id as string, p.platform as string);
@@ -86,8 +97,9 @@ export async function POST(request: NextRequest) {
   const failures: Array<{ platform: string; contentType: string; reason: string }> = [];
 
   for (const p of due) {
-    const found = byPostId.get(Number(p.recurpost_post_id));
-    if (!found) {
+    const found = p.recurpost_ref ? byRef.get(p.recurpost_ref as string) : byPostId.get(Number(p.recurpost_post_id));
+    // Still waiting in the queue is not an outcome yet.
+    if (!found || /^(scheduled|queued|pending)$/i.test(found.status)) {
       unknown++;
       continue;
     }

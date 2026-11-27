@@ -74,3 +74,108 @@ export async function postContent(params: Record<string, unknown>): Promise<Reco
  * the real outcome.
  */
 export const getHistory = (accountId: string) => rpCall("/api/history_data", { id: accountId });
+
+// --- RecurPost API v2 (Nov 2026): the queue can be read, changed and emptied ---
+//
+// Until RecurPost's v2 a queued post could only be created — never changed or
+// cancelled — so every correction, retry and duplicate ended with someone
+// deleting the old copy by hand in RecurPost's Queue. v2 adds post_status (where
+// a post stands on each account, with its queue item id), queue_post_update
+// and queue_post_delete. They sign in differently: one user_login with the API
+// key returns a Bearer token good for an hour, sent on every call after.
+
+const V2_HEADERS = { "Content-Type": "application/json", Accept: "application/json" };
+let v2Token: { token: string; expiresAt: number } | null = null;
+
+async function v2Login(): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/user_login`, {
+    method: "POST",
+    headers: V2_HEADERS,
+    body: JSON.stringify({ emailid: process.env.RECURPOST_EMAIL, api_key: process.env.RECURPOST_API_KEY }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { token?: string; expires_in?: number; error?: string };
+  if (!res.ok || !body.token) throw new Error(`RecurPost sign-in failed (${res.status}): ${body.error || "no token"}`);
+  // A minute's margin, so a token is never sent in its last seconds.
+  v2Token = { token: body.token, expiresAt: Date.now() + Math.max(120, Number(body.expires_in) || 3600) * 1000 - 60_000 };
+  return body.token;
+}
+
+/** One v2 call. Signs in when needed, and once more if RecurPost says the token went stale. */
+export async function rpV2<T = Record<string, unknown>>(endpoint: string, params: Record<string, unknown> = {}): Promise<T> {
+  if (!isRecurPostConfigured()) throw new Error("RecurPost is not configured — set RECURPOST_EMAIL and RECURPOST_API_KEY in .env");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = v2Token && Date.now() < v2Token.expiresAt ? v2Token.token : await v2Login();
+    const res = await fetch(`${API_BASE}/api/${endpoint}`, {
+      method: "POST",
+      headers: { ...V2_HEADERS, Authorization: `Bearer ${token}` },
+      body: JSON.stringify(params),
+    });
+    const text = await res.text();
+    let body: Record<string, unknown> = {};
+    try { body = JSON.parse(text); } catch { body = { error: text.slice(0, 300) }; }
+    const code = String(body.code || "");
+    if (res.status === 401 && (code === "token_expired" || code === "token_invalid") && attempt === 0) {
+      v2Token = null;
+      continue;
+    }
+    // An error can also come back as HTTP 200 with the real status in the body.
+    const bodyStatus = typeof body.status === "number" ? body.status : 200;
+    if (!res.ok || (bodyStatus >= 400 && "error" in body)) {
+      throw new Error(`RecurPost ${endpoint} failed (${res.ok ? bodyStatus : res.status}): ${String(body.error || text).slice(0, 300)}`);
+    }
+    return body as T;
+  }
+  throw new Error(`RecurPost ${endpoint}: could not sign in`);
+}
+
+/** Where a post stands on each account it went to — and the queue item id that changes or removes it there. */
+export interface PostOnAccount { id: string; queue_item_id: string | null; name: string; network: string; status: string; post_date: string; post_link?: string }
+export async function postStatus(ref: string): Promise<PostOnAccount[]> {
+  const res = await rpV2<{ accounts?: PostOnAccount[] }>("post_status", { id: ref });
+  return Array.isArray(res.accounts) ? res.accounts : [];
+}
+
+export interface Unqueued {
+  /** Queue items RecurPost removed just now. */
+  removed: number;
+  /** Already published on that account — nothing a delete can undo. */
+  published: number;
+  /** Not in the queue any more (deleted earlier, or never there). */
+  gone: number;
+}
+
+/**
+ * Take a post out of RecurPost's queue so it is never published.
+ *
+ * `ref` is RecurPost's post id (post_data.id from the send). With `accountId`
+ * only that account's copy goes — Bron sends one post per account, so this is
+ * normally the only one anyway. Only items still scheduled are deleted; one
+ * already published is reported, never touched.
+ */
+export async function unqueuePost(ref: string, accountId?: string | null): Promise<Unqueued> {
+  const accounts = (await postStatus(ref)).filter((a) => !accountId || a.id === accountId);
+  const live = accounts.filter((a) => a.queue_item_id && /^(scheduled|queued|pending)$/i.test(a.status));
+  const published = accounts.filter((a) => /^(published|posted|sent|success)/i.test(a.status)).length;
+  if (live.length > 0) {
+    await rpV2("queue_post_delete", { id: live.map((a) => a.queue_item_id) });
+  }
+  return { removed: live.length, published, gone: accounts.length - live.length - published };
+}
+
+/**
+ * Change a post still waiting in RecurPost's queue, in place: its time, its
+ * text, its media. The corrected version replaces the queued one — nothing to
+ * delete, nothing to send twice.
+ */
+export async function updateQueuedPost(
+  ref: string,
+  accountId: string | null | undefined,
+  fields: { message?: string; schedule_date_time?: string; image_url?: string[]; video_url?: string }
+): Promise<{ updated: number; published: number }> {
+  const accounts = (await postStatus(ref)).filter((a) => !accountId || a.id === accountId);
+  const live = accounts.filter((a) => a.queue_item_id && /^(scheduled|queued|pending)$/i.test(a.status));
+  for (const a of live) {
+    await rpV2("queue_post_update", { id: a.queue_item_id, ...fields });
+  }
+  return { updated: live.length, published: accounts.filter((a) => /^(published|posted|sent|success)/i.test(a.status)).length };
+}

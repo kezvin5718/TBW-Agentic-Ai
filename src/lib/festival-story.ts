@@ -102,7 +102,7 @@ export async function scheduleFestivalStory(uploadId: string): Promise<FestivalS
     .eq("media_url", publishUrl)
     .eq("content_type", "story")
     .eq("scheduled_for", scheduledIso)
-    .not("recurpost_post_id", "is", null);
+    .or("recurpost_post_id.not.is.null,recurpost_ref.not.is.null");
   // Per account; a row with none on record went to the first account.
   const done = new Set((already || []).map((p) => `${p.platform}|${p.social_account_id || accountsOn(p.platform)[0] || ""}`));
 

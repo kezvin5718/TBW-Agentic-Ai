@@ -94,6 +94,8 @@ export interface LiveRow {
   id: string;
   status: string;
   recurpost_post_id: number | null;
+  /** RecurPost v2's encrypted post id — what changes or removes the queued post. */
+  recurpost_ref?: string | null;
   created_at: string;
 }
 
@@ -105,14 +107,15 @@ export type Reservation =
 /** The words a skipped send reports, chosen by where the other copy stands. */
 export function duplicateOf(existing: LiveRow | null): Extract<Reservation, { kind: "duplicate" }> {
   const alreadyOut = !!existing && (existing.status === "sent" || existing.status === "published");
-  const id = existing?.recurpost_post_id ? ` (RecurPost post ${existing.recurpost_post_id})` : "";
+  const rp = existing?.recurpost_post_id ?? existing?.recurpost_ref;
+  const id = rp ? ` (RecurPost post ${rp})` : "";
   return { kind: "duplicate", existing, alreadyOut, message: `${alreadyOut ? ALREADY_OUT : IN_FLIGHT}${id}` };
 }
 
 async function liveHolder(admin: Admin, key: string): Promise<LiveRow | null> {
   const { data } = await admin
     .from("social_posts")
-    .select("id, status, recurpost_post_id, created_at")
+    .select("id, status, recurpost_post_id, recurpost_ref, created_at")
     .eq("dedupe_key", key)
     .in("status", LIVE_STATUSES as unknown as string[])
     .limit(1)
@@ -130,7 +133,7 @@ async function recentNowSend(admin: Admin, i: DedupeInput, excludeId?: string): 
   const prefix = keyPrefix(i);
   let q = admin
     .from("social_posts")
-    .select("id, status, recurpost_post_id, created_at")
+    .select("id, status, recurpost_post_id, recurpost_ref, created_at")
     .in("dedupe_key", [`${prefix}|now:${b}`, `${prefix}|now:${b - 1}`])
     .in("status", LIVE_STATUSES as unknown as string[])
     .gte("created_at", new Date(Date.now() - NOW_WINDOW_MS).toISOString())
@@ -168,7 +171,7 @@ async function sameSlotAnyAccount(admin: Admin, input: DedupeInput): Promise<Liv
   );
   const { data } = await admin
     .from("social_posts")
-    .select("id, status, recurpost_post_id, created_at, media_url, social_account_id")
+    .select("id, status, recurpost_post_id, recurpost_ref, created_at, media_url, social_account_id")
     .eq("client_id", input.clientId)
     .eq("platform", input.platform)
     .eq("content_type", input.contentType)
@@ -180,7 +183,7 @@ async function sameSlotAnyAccount(admin: Admin, input: DedupeInput): Promise<Liv
   const hit = (data || []).find(
     (r) => mediaIdentity(r.media_url as string) === want && !(r.social_account_id && siblings.has(r.social_account_id as string))
   );
-  return hit ? { id: hit.id as string, status: hit.status as string, recurpost_post_id: (hit.recurpost_post_id as number | null) ?? null, created_at: hit.created_at as string } : null;
+  return hit ? { id: hit.id as string, status: hit.status as string, recurpost_post_id: (hit.recurpost_post_id as number | null) ?? null, recurpost_ref: (hit.recurpost_ref as string | null) ?? null, created_at: hit.created_at as string } : null;
 }
 
 export async function reserve(admin: Admin, row: Record<string, unknown>, input: DedupeInput): Promise<Reservation> {
@@ -252,7 +255,7 @@ export async function reclaim(
   // Nothing matched: another retry got there first and the row is no longer
   // in the status we read.
   if (!data || data.length === 0) {
-    const { data: now } = await admin.from("social_posts").select("id, status, recurpost_post_id, created_at").eq("id", id).maybeSingle();
+    const { data: now } = await admin.from("social_posts").select("id, status, recurpost_post_id, recurpost_ref, created_at").eq("id", id).maybeSingle();
     return duplicateOf((now as LiveRow | null) ?? null);
   }
   return { kind: "ours", id, key: key || "" };
@@ -261,17 +264,31 @@ export async function reclaim(
 export interface SendOutcome {
   status: "sent" | "failed" | "uncertain";
   detail: string;
-  rpId: number | null;
+  /**
+   * RecurPost's id for the queued post, exactly as it came back: a number
+   * before their v2 (22224059), an encrypted string since 19 Nov 2026
+   * ("cIU3yokavAxQG2cfPv1fRg=="). Null when nothing was queued.
+   */
+  rpId: string | null;
 }
 
 /**
  * RecurPost answers a successful schedule with { post_data: { id } }. That id
- * is the only handle on a queued post.
+ * is the only handle on a queued post — the one post_status, queue_post_update
+ * and queue_post_delete take. Reading it as a number only is how 1,238 posts
+ * went unrecorded after RecurPost switched to encrypted ids.
  */
-export function recurPostIdOf(res: unknown): number | null {
+export function recurPostIdOf(res: unknown): string | null {
   const id = (res as { post_data?: { id?: unknown } })?.post_data?.id;
-  const n = typeof id === "string" ? Number(id) : typeof id === "number" ? id : NaN;
-  return Number.isFinite(n) ? n : null;
+  if (typeof id === "number" && Number.isFinite(id)) return String(id);
+  if (typeof id === "string" && id.trim()) return id.trim();
+  return null;
+}
+
+/** The two columns an id is kept in: the old numeric one, or the v2 reference. */
+export function rpColumns(rpId: string | null): Record<string, unknown> {
+  if (!rpId) return {};
+  return /^\d+$/.test(rpId) ? { recurpost_post_id: Number(rpId) } : { recurpost_ref: rpId };
 }
 
 /**
@@ -316,7 +333,7 @@ export async function settle(
       status: outcome.status,
       // Recorded whenever RecurPost gave one, even on a failure — it is the
       // handle for deleting the copy they are holding.
-      ...(outcome.rpId !== null ? { recurpost_post_id: outcome.rpId } : {}),
+      ...rpColumns(outcome.rpId),
       webhook_response: webhookResponse,
       ...extra,
     })
